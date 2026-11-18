@@ -159,12 +159,44 @@ pub struct Processed {
     pub thumbnail_jpeg: Vec<u8>,
 }
 
+/// ถอดรหัส JPEG แบบย่อระหว่างถอด (DCT scaling): ได้ภาพที่ด้านยาว ≥ `min_edge` โดยไม่ต้องถอดทุกพิกเซล
+/// คืน (ภาพที่ย่อแล้ว, ขนาดเต็มก่อนหมุน); คืน None เมื่อไฟล์ไม่ใช่ JPEG แบบที่ทางลัดนี้รองรับ ให้ผู้เรียกใช้ทางปกติ
+fn decode_jpeg_scaled(bytes: &[u8], min_edge: u32) -> Option<(DynamicImage, (u32, u32))> {
+    if !bytes.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let mut decoder = jpeg_decoder::Decoder::new(Cursor::new(bytes));
+    decoder.read_info().ok()?;
+    let full = decoder.info()?;
+    if (full.width as u64) * (full.height as u64) > MAX_PIXELS {
+        return None;
+    }
+    // ขอขนาดที่ด้านสั้นไม่เล็กกว่า min_edge ตัวถอดรหัสจะเลือกสเกล 1/1, 1/2, 1/4 หรือ 1/8 ที่ยังใหญ่พอ
+    let want = min_edge.min(u16::MAX as u32) as u16;
+    decoder.scale(want.min(full.width), want.min(full.height)).ok()?;
+    let pixels = decoder.decode().ok()?;
+    let info = decoder.info()?;
+    let (w, h) = (info.width as u32, info.height as u32);
+    let img = match info.pixel_format {
+        jpeg_decoder::PixelFormat::RGB24 => DynamicImage::ImageRgb8(image::RgbImage::from_raw(w, h, pixels)?),
+        jpeg_decoder::PixelFormat::L8 => DynamicImage::ImageLuma8(image::GrayImage::from_raw(w, h, pixels)?),
+        _ => return None,
+    };
+    Some((img, (full.width as u32, full.height as u32)))
+}
+
 /// ขั้น "เตรียมข้อมูลรูป": hash เนื้อหา, EXIF, ขนาด และภาพย่อที่หมุนถูกทิศ
 pub fn process(bytes: &[u8]) -> Result<Processed> {
     let sha256 = crate::util::hex(&Sha256::digest(bytes));
     let exif = read_exif(bytes);
-    let img = decode(bytes)?;
-    let (raw_w, raw_h) = (img.width(), img.height());
+    let (img, (raw_w, raw_h)) = match decode_jpeg_scaled(bytes, THUMB_EDGE) {
+        Some(scaled) => scaled,
+        None => {
+            let img = decode(bytes)?;
+            let dims = (img.width(), img.height());
+            (img, dims)
+        }
+    };
     let (width, height) = if exif.orientation >= 5 { (raw_h, raw_w) } else { (raw_w, raw_h) };
     // ย่อก่อนแล้วค่อยหมุน: ถูกกว่าการหมุนภาพเต็มหลายสิบล้านพิกเซล
     let mut thumb = img.thumbnail(THUMB_EDGE, THUMB_EDGE);
