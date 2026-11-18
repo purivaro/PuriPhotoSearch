@@ -63,7 +63,7 @@ PersonQuickView (S05/S08): **ทำแล้ว ทดสอบแล้ว** �
 | W07 Advanced search | บางส่วน — AND/OR, ปรากฏร่วม→AND, ภาษาไทย; ไม่มีค้นด้วยใบหน้าตัวอย่าง |
 | W08 Sources + recovery | บางส่วน — ออฟไลน์/ต่อกลับ; ไม่มี relink, archive, watcher |
 | W09 Export + backups | บางส่วน — คัดลอกแบบ flat; ไม่มี CSV, manifest ไฟล์, สำรอง/กู้คืน |
-| W10 Migration + release | บางส่วน — นำรายชื่อ/กลุ่ม/ใบหน้าตัวอย่างจากฐานจริงเข้าได้; ยังไม่นำรูป/กรอบ/คำปฏิเสธเข้า; workflow `Release` สร้างตัวติดตั้ง Windows (NSIS, ไม่ได้เซ็น, ยังไม่เคยติดตั้งบนเครื่องจริงและยังไม่เคยเผยแพร่) คู่กับของ macOS; เผยแพร่ตัวติดตั้ง macOS ที่เซ็น + notarize แล้วเป็น pre-release `v2.0.0-alpha.2` (สร้างโดย workflow `Release` เมื่อ push tag; ยังไม่ได้ลองบนเครื่องอื่น) |
+| W10 Migration + release | บางส่วน — นำรายชื่อ/กลุ่ม/ใบหน้าตัวอย่างจากฐานจริงเข้าได้; ยังไม่นำรูป/กรอบ/คำปฏิเสธเข้า; เผยแพร่เป็น pre-release `v2.0.0-alpha.3`: ตัวติดตั้ง macOS ที่เซ็น + notarize และตัวติดตั้ง Windows (NSIS, ไม่ได้เซ็น, ยังไม่เคยติดตั้งบนเครื่องจริง) (สร้างโดย workflow `Release` เมื่อ push tag; ยังไม่ได้ลองบนเครื่องอื่น) |
 
 ## Acceptance matrix T01–T37
 
