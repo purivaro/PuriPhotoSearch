@@ -320,6 +320,11 @@ debug build ฉีดสคริปต์เข้า WKWebView ของหน
 | ตัวติดตั้ง macOS รอบซ้อมจาก workflow (`workflow_dispatch`) | `stapler validate` ผ่าน; `spctl` รับทั้ง DMG และแอป (`Notarized Developer ID`); `codesign --verify --deep --strict` ผ่าน; `x86_64 arm64`, รุ่น 2.0.0-alpha.3, ขั้นต่ำ macOS 13.4; เปิดด้วย `HOME` ชั่วคราวแล้วแอปทำงานและสร้างคลังในโฟลเดอร์ชั่วคราว (ครั้งนี้เก็บภาพหน้าต่างไม่ได้ จึงไม่ได้ดูหน้าจอของ build นี้ด้วยตา) |
 | ตัวติดตั้ง Windows รอบซ้อมจาก workflow | `PuriPhotoSearch-windows-setup.exe` 9.19 MB เป็น NSIS installer ตามที่ `file` รายงาน — **ไม่ได้รันและไม่ได้แกะดูเนื้อใน** (ไม่มีเครื่อง Windows) |
 
+หลังเผยแพร่ `v2.0.0-alpha.3` (workflow รอบจริงจาก tag ผ่านทั้ง macOS, Windows และขั้นเผยแพร่): ดาวน์โหลดทั้งสามไฟล์จากลิงก์สาธารณะแบบไม่ล็อกอินด้วย `curl`
+→ SHA-256 ของ `PuriPhotoSearch-mac.dmg` และ `PuriPhotoSearch-windows-setup.exe` ตรงกับ `SHA256SUMS.txt`; ฝั่ง macOS `stapler validate` ผ่าน,
+`spctl` รับทั้ง DMG และแอป (`Notarized Developer ID`), แอปเป็น `x86_64 arm64` รุ่น 2.0.0-alpha.3 ขั้นต่ำ macOS 13.4 และเปิดด้วย `HOME` ชั่วคราวได้
+(คลังจริงของเครื่องไม่ถูกสร้าง; เก็บภาพหน้าต่างไม่ได้อีกครั้ง) ฝั่ง Windows ตรวจได้เพียงว่าเป็น NSIS installer ขนาด 9.19 MB — **ยังไม่มีใครรันไฟล์นี้**
+
 ## Windows (runner ของ GitHub เท่านั้น — 18 พ.ย. 2569)
 
 ไม่มีเครื่อง Windows สำหรับทดสอบด้วยมือ ทุกรายการข้างล่างมาจาก job `windows` ของ `ci.yml` และ `release.yml`
