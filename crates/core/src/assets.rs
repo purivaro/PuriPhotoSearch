@@ -29,6 +29,14 @@ pub fn resolve(app: &App, request_path: &str) -> Result<Asset> {
             Ok(Asset { bytes: std::fs::read(&path)?, mime: media::mime_for(&path) })
         }
         ("face", None) => face(app, id),
+        ("sample", None) => {
+            let bytes: Vec<u8> = app
+                .db()
+                .query_row("SELECT thumbnail FROM person_reference_samples WHERE id = ?1", [id], |r| r.get(0))
+                .optional()?
+                .ok_or_else(|| AppError::not_found("ใบหน้าตัวอย่าง"))?;
+            Ok(jpeg(bytes))
+        }
         ("draft", Some(draft_id)) => {
             let session = app
                 .previews

@@ -51,7 +51,7 @@ fn main() -> puri_faces::Result<()> {
     let sample: Vec<&(i64, String)> = existing.iter().step_by(step).take(limit).copied().collect();
     println!("รูปที่มีใบหน้าในฐานเดิม {} · ไฟล์ยังอยู่ {} · ใช้ทดสอบ {}", all.len(), existing.len(), sample.len());
 
-    let mut engine = FaceEngine::load(&model_dir, 4)?;
+    let mut engine = FaceEngine::load(&model_dir, "det_500m.onnx", "w600k_mbf.onnx", 4)?;
     let mut faces_stmt =
         conn.prepare("SELECT bbox_x1, bbox_y1, bbox_x2, bbox_y2, embedding FROM faces WHERE photo_id = ?1")?;
 

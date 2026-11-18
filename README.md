@@ -6,7 +6,8 @@
 เขียนใหม่ด้วย Rust + Tauri 2 + React แทนรุ่น Python (PuriPhotoSearch 1.9.3)
 
 > **สถานะ: รุ่นทดลอง (2.0.0-alpha.1) ยังไม่พร้อมใช้กับงานจริง**
-> รุ่นนี้ยัง **ไม่มีการวิเคราะห์ใบหน้าอัตโนมัติ** — ตั้งชื่อคนได้ด้วยการลากกรอบใบหน้าเองในตัวดูภาพ
+> วิเคราะห์ใบหน้าอัตโนมัติใช้ได้บน Mac ชิป Apple (กดดาวน์โหลดตัววิเคราะห์ครั้งเดียว ~290 MB) ทุกข้อเสนอของ AI ต้องให้ผู้ใช้ยืนยัน
+> รุ่นที่เผยแพร่ล่าสุด (2.0.0-alpha.1) ยังไม่มีส่วนนี้
 > สิ่งที่ทำแล้ว ทดสอบแล้ว และยังไม่ได้ทำ ดูที่ [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)
 
 ## ติดตั้ง (macOS)
@@ -15,7 +16,8 @@
 2. เปิดไฟล์ แล้วลาก **Puri Photo Search** ไปไว้ใน Applications
 3. เปิดแอปได้ตามปกติ — ตัวติดตั้งเซ็นด้วย Developer ID และผ่านการ notarize ของ Apple แล้ว จึงไม่ต้องปลดล็อกใน System Settings
 
-ต้องการ macOS 12 ขึ้นไป ไฟล์เป็น universal (Apple Silicon + Intel) **ทดสอบจริงเฉพาะ macOS 26.7 บน Apple Silicon**
+รุ่น 2.0.0-alpha.1 ต้องการ macOS 12 ขึ้นไป; รุ่นถัดไปต้องการ macOS 13.4 ขึ้นไป (ข้อกำหนดของตัววิเคราะห์ใบหน้า)
+ไฟล์เป็น universal (Apple Silicon + Intel — บน Intel ไม่มีการวิเคราะห์ใบหน้าอัตโนมัติ) **ทดสอบจริงเฉพาะ macOS 26.7 บน Apple Silicon**
 ไม่ต้องติดตั้ง Python, Node หรือ Rust ตรวจไฟล์ที่ดาวน์โหลดได้ด้วย `shasum -a 256 PuriPhotoSearch-mac.dmg` เทียบกับ `SHA256SUMS.txt`
 
 รุ่นนี้เป็นคนละแอปกับ PuriPhotoSearch 1.x (Python): ติดตั้งคู่กันได้ และไม่แตะข้อมูลของรุ่นเดิม
@@ -78,6 +80,10 @@ APPLE_SIGNING_IDENTITY="Developer ID Application: …" PURI_NOTARY_PROFILE=<โ�
 ได้ `target/release-download/PuriPhotoSearch-mac.dmg` (universal, เซ็น + notarize + staple) และ `SHA256SUMS.txt`
 ใบรับรองและรหัสอยู่ใน keychain ของเครื่องที่ build สคริปต์ไม่อ่านหรือเขียนความลับ
 
+ให้ GitHub Actions ทำแทน: เจ้าของใบรับรองรัน `scripts/setup-release-secrets.sh` หนึ่งครั้ง (ส่งใบรับรองและรหัส notarize ขึ้นเป็น secret ของ repo)
+จากนั้น push tag `v*` แล้ว workflow `Release` จะ build + เซ็น + notarize และแนบตัวติดตั้งกับ release ให้ ถ้ายังไม่มี secret
+workflow จะได้แอปที่เซ็นแบบ ad-hoc เท่านั้น ซึ่งเครื่องอื่นเปิดตามปกติไม่ได้
+
 ## ข้อมูลอยู่ที่ไหน
 
 | อะไร | ตำแหน่ง |
@@ -94,7 +100,7 @@ APPLE_SIGNING_IDENTITY="Developer ID Application: …" PURI_NOTARY_PROFILE=<โ�
 ```
 crates/core      กติกาข้อมูลทั้งหมด (ไม่ขึ้นกับ Tauri) + เทสต์กับไฟล์จริง
 crates/devbridge เครื่องมือพัฒนา: คำสั่งชุดเดียวกันผ่าน HTTP ในเครื่อง
-crates/faces     งานทดลอง: ตรวจใบหน้าด้วย ONNX Runtime (ยังไม่อยู่ในแอป)
+crates/faces     ตัววิเคราะห์ใบหน้า (ONNX Runtime + โมเดล buffalo_l ที่แอปดาวน์โหลดเอง)
 src-tauri        เปลือก Tauri: ลงทะเบียนคำสั่ง, protocol puri://, native picker
 src              React UI
 e2e              ทดสอบแอปจริงด้วยสคริปต์ที่ฉีดเข้า debug build

@@ -906,6 +906,8 @@ fn library_open_rules() {
             sink: std::sync::Arc::new(puri_core::NoopSink),
             folder_picker: "native",
             start_worker: false,
+            face_engine: None,
+            face_engine_unavailable: "",
         })
     };
     assert_eq!(open(tmp.path()).err().unwrap().code, "DATABASE_CORRUPT");
@@ -917,7 +919,7 @@ fn library_open_rules() {
     // คลังเดียวกันเปิดซ้อนไม่ได้
     assert_eq!(open(&dir).err().unwrap().code, "LIBRARY_LOCKED");
     lib.app.shutdown();
-    let Lib { tmp: keep, app } = lib;
+    let Lib { tmp: keep, app, .. } = lib;
     drop(app);
     rusqlite::Connection::open(dir.join("data/library.sqlite"))
         .unwrap()
@@ -953,7 +955,8 @@ fn ipc_contract_matches_typescript_command_table() {
     assert_eq!(unknown.code, "INVALID_INPUT", "ไม่มีคำสั่ง SQL/shell อิสระ");
     let caps = lib.call("get_capabilities", json!({}));
     assert_eq!(caps["imageFormats"], json!(["jpg", "jpeg", "png"]));
-    assert_eq!(caps["faceAnalysis"]["available"], false, "ยังไม่มี AI ต้องบอกตามจริง");
+    assert_eq!(caps["faceAnalysis"]["available"], false, "build ที่ไม่มีตัววิเคราะห์ต้องบอกตามจริง");
+    assert_eq!(caps["faceAnalysis"]["state"], "unsupported");
     // asset รับเฉพาะ ID ทึบ: path traversal ไม่ถูกตีความเป็นตำแหน่งไฟล์
     assert!(puri_core::api::asset(&lib.app, "photo/../../etc/passwd").is_err());
     assert!(puri_core::api::asset(&lib.app, "photo//etc/passwd").is_err());

@@ -54,6 +54,8 @@ export interface LibrarySummary {
   photoCount: number;
   /** บุคคลที่ยังไม่ถูกเก็บ (archive) */
   personCount: number;
+  /** ใบหน้าที่ตรวจพบแล้วแต่ยังไม่มีชื่อที่ยืนยัน (รอตรวจสอบ) */
+  unnamedFaceCount: number;
   /** เพิ่มขึ้นทุกครั้งที่ข้อมูลในคลังเปลี่ยน ใช้ตรวจว่า cache ฝั่ง UI ยังสดหรือไม่ */
   dataRevision: number;
 }
@@ -64,11 +66,7 @@ export interface Capabilities {
   platform: string;
   /** นามสกุลไฟล์ที่ build นี้ถอดรหัสได้จริง เช่น ["jpg","jpeg","png"] */
   imageFormats: string[];
-  faceAnalysis: {
-    /** false ในชุดงานนี้: ยังไม่มีตัววิเคราะห์ใบหน้าอัตโนมัติ ใช้การระบุใบหน้าเอง */
-    available: boolean;
-    reason: string;
-  };
+  faceAnalysis: FaceAnalysisStatus;
   /** ติดตามรูปใหม่ในโฟลเดอร์ที่เชื่อมแล้วโดยอัตโนมัติ — false ในชุดงานนี้: ต้องกด "ตรวจรูปใหม่" เอง */
   folderWatch: {
     available: boolean;
@@ -78,6 +76,30 @@ export interface Capabilities {
   folderPicker: 'native' | 'dev_path_input';
   libraryPath: string;
   cachePath: string;
+}
+
+/** สถานะตัววิเคราะห์ใบหน้า (S21) — ทุกค่ามาจากสิ่งที่ตรวจพบจริงในเครื่อง */
+export interface FaceAnalysisStatus {
+  /** พร้อมวิเคราะห์: มีไฟล์โมเดลที่ตรวจแล้วและ build นี้รันได้ */
+  available: boolean;
+  /**
+   * ready = พร้อมใช้ · not_installed = ยังไม่ได้ดาวน์โหลดโมเดล (กด install_face_model ครั้งเดียว) ·
+   * installing = กำลังดาวน์โหลด (ดู installJobId) · unsupported = build/เครื่องนี้รันตัววิเคราะห์ไม่ได้
+   */
+  state: 'ready' | 'not_installed' | 'installing' | 'unsupported';
+  /** ข้อความภาษาไทยอธิบายสถานะ พร้อมแสดงผู้ใช้ */
+  reason: string;
+  /** ชื่อชุดโมเดล เช่น "InsightFace buffalo_l" */
+  modelName: string;
+  /** ขนาดที่ต้องดาวน์โหลด (MB) */
+  downloadSizeMb: number;
+  /** ที่มาของไฟล์ (โดเมน/โครงการ) สำหรับแสดงก่อนดาวน์โหลด */
+  downloadSource: string;
+  /** เงื่อนไขการใช้ของโมเดล ต้องแสดงใกล้ปุ่มดาวน์โหลด */
+  licenseNote: string;
+  installJobId: Id | null;
+  /** โฟลเดอร์ที่เก็บไฟล์โมเดลในเครื่อง */
+  modelPath: string;
 }
 
 // ───────────────────────── เพิ่มโฟลเดอร์ (S02–S03) ─────────────────────────
@@ -160,6 +182,8 @@ export interface EventSummary {
   thumbReadyCount: number;
   /** จำนวนรูปที่เตรียมข้อมูลไม่สำเร็จ */
   failedCount: number;
+  /** จำนวนรูปที่วิเคราะห์ใบหน้าเสร็จแล้ว (รวมรูปที่วิเคราะห์แล้วไม่พบใบหน้า) */
+  faceAnalyzedCount: number;
   coverPhotoId: Id | null;
   /** โฟลเดอร์ต้นทางเข้าถึงได้ ณ เวลาที่ถาม */
   sourceAvailable: boolean;
@@ -217,6 +241,11 @@ export interface PersonRef {
   id: Id;
   displayName: string;
   coverFaceId: Id | null;
+  /**
+   * ภาพตัวแทนสำหรับ `<img>`: path ของ asset เช่น "face/{id}" หรือ "sample/{id}" (ใบหน้าตัวอย่างที่นำเข้าจากรุ่นเดิม)
+   * ใช้กับ `assetPath()` ใน client.ts; null = ยังไม่มีภาพ ให้แสดงตัวอักษรย่อ
+   */
+  coverAsset: string | null;
 }
 
 export interface PhotoResult {
@@ -245,6 +274,10 @@ export interface Coverage {
   thumbnailsFailed: number;
   /** รูปที่มีใบหน้ายืนยันแล้วอย่างน้อยหนึ่งใบ */
   withConfirmedPeople: number;
+  /** รูปที่วิเคราะห์ใบหน้าเสร็จแล้ว (รวม "วิเคราะห์แล้ว ไม่พบใบหน้า") */
+  facesAnalyzed: number;
+  /** รูปที่ยังไม่ได้วิเคราะห์ใบหน้า — ผลค้นตามคนอาจยังไม่ครบ */
+  facesPending: number;
 }
 
 export interface PhotoPage {
@@ -260,7 +293,13 @@ export interface FaceBox {
   /** พิกัดสัดส่วน [0,1] บนภาพที่หมุนตาม EXIF แล้ว (มุมซ้ายบน + กว้าง/สูง) */
   bbox: { x: number; y: number; w: number; h: number };
   origin: 'manual' | 'detector' | 'legacy';
+  /** บุคคลที่ผู้ใช้ยืนยันแล้ว */
   person: PersonRef | null;
+  /**
+   * ข้อเสนอของ AI เมื่อยังไม่มีคนที่ยืนยัน: "อาจเป็น …" — ไม่นับเป็นยืนยันแล้ว และไม่แสดงเป็นเปอร์เซ็นต์
+   * level: close = ใกล้เคียงมาก, check = ควรตรวจสอบ
+   */
+  suggestion: { person: PersonRef; level: 'close' | 'check' } | null;
   recordVersion: number;
 }
 
@@ -374,6 +413,67 @@ export interface FaceMutationResult {
   dataRevision: number;
 }
 
+// ───────────────────────── ตรวจสอบใบหน้า (S16) ─────────────────────────
+
+/** ใบหน้าหนึ่งใบในคิวตรวจ: ครอปดูได้จาก asset `face/{faceId}` และเปิดภาพบริบทได้จาก photoId */
+export interface ReviewFace {
+  faceId: Id;
+  photoId: Id;
+  filename: string;
+  eventId: Id;
+  eventTitle: string;
+  /** มีเฉพาะในกลุ่ม "AI เสนอชื่อ" */
+  level: 'close' | 'check' | null;
+}
+
+/** กลุ่มใบหน้าที่ AI เสนอว่าอาจเป็นบุคคลที่มีอยู่ */
+export interface SuggestedGroup {
+  person: PersonSummary;
+  faceCount: number;
+  /** ใบหน้าตัวอย่างของกลุ่ม (สูงสุด 8) */
+  sampleFaceIds: Id[];
+}
+
+/** กลุ่มใบหน้าที่ยังไม่ทราบชื่อ — เป็นกลุ่มชั่วคราวเพื่อช่วยตรวจ ไม่ใช่บุคคล */
+export interface UnknownCluster {
+  /** ใช้ได้ภายใน reviewRevision เดียวกันเท่านั้น */
+  clusterId: Id;
+  faceCount: number;
+  sampleFaceIds: Id[];
+}
+
+export interface ReviewOverview {
+  /** เปลี่ยนเมื่อคำยืนยัน/ใบหน้าเปลี่ยน; clusterId ของ revision เก่าใช้ไม่ได้ (ได้ PREVIEW_STALE) */
+  reviewRevision: number;
+  /** ใบหน้าที่ยังไม่มีชื่อทั้งหมดในขอบเขต */
+  unnamedFaceCount: number;
+  suggested: SuggestedGroup[];
+  /** กลุ่มที่มีอย่างน้อยสองใบหน้า เรียงใหญ่ไปเล็ก (สูงสุด 200 กลุ่ม) */
+  clusters: UnknownCluster[];
+  /** ใบหน้าที่ยังไม่เข้ากลุ่มใด (ตั้งชื่อได้จากตัวดูภาพ) */
+  singleFaceCount: number;
+  /** รูปในขอบเขตที่ยังไม่ได้วิเคราะห์ใบหน้า — คิวนี้อาจมีเพิ่มภายหลัง */
+  photosPendingAnalysis: number;
+}
+
+export interface ReviewGroupFaces {
+  reviewRevision: number;
+  faces: ReviewFace[];
+  /** จำนวนทั้งหมดของกลุ่ม (faces ถูกจำกัดที่ 500) */
+  total: number;
+}
+
+export interface LegacyImportResult {
+  personsCreated: number;
+  /** มีอยู่แล้วจากการนำเข้าครั้งก่อน (ไม่สร้างซ้ำ) */
+  personsSkipped: number;
+  groupsCreated: number;
+  samplesImported: number;
+  /** ใบหน้าตัวอย่างที่ยังรอสร้างเวกเตอร์ด้วยโมเดลปัจจุบัน (ทำเองเมื่อโมเดลพร้อม) */
+  samplesPendingEmbedding: number;
+  notes: string[];
+}
+
 // ───────────────────────── งานเบื้องหลัง (S04, S19) ─────────────────────────
 
 export type JobState =
@@ -390,9 +490,10 @@ export type JobState =
 
 export interface JobSnapshot {
   id: Id;
-  kind: 'catalog' | 'export';
+  /** model = ดาวน์โหลดตัววิเคราะห์ใบหน้า (counts เป็น MB) */
+  kind: 'catalog' | 'export' | 'model';
   state: JobState;
-  /** catalog: discovery | thumbnail | done; export: copy | done */
+  /** catalog: discovery | thumbnail | done; export: copy | done; model: download | verify | done */
   stage: string;
   title: string;
   eventId: Id | null;
@@ -547,6 +648,18 @@ export interface Commands {
   reveal_export_destination: [{ jobId: Id }, null];
 
   preview_legacy_import: [{ path?: string }, LegacyReport];
+  /** นำรายชื่อบุคคล กลุ่ม และใบหน้าตัวอย่างจากรุ่น Python เข้าคลัง (อ่านฐานเดิมอย่างเดียว รันซ้ำไม่สร้างคนซ้ำ) */
+  import_legacy_people: [{ path?: string; requestId: Id }, LegacyImportResult];
+
+  /** ดาวน์โหลดและติดตั้งตัววิเคราะห์ใบหน้า (ครั้งเดียว) แล้ววิเคราะห์รูปที่มีในคลังต่อให้เอง */
+  install_face_model: [Record<string, never>, JobSnapshot];
+  /** สั่งวิเคราะห์ใบหน้าของรูปที่ยังไม่ได้วิเคราะห์ (ทั้งคลัง หรือเฉพาะกิจกรรม) */
+  analyze_faces: [{ eventId?: Id }, { jobIds: Id[] }];
+
+  get_review_overview: [{ eventId?: Id }, ReviewOverview];
+  get_review_faces: [{ kind: 'person' | 'cluster'; id: Id; eventId?: Id; reviewRevision: number }, ReviewGroupFaces];
+  /** "ไม่ใช่บุคคลนี้" สำหรับข้อเสนอของ AI: จำคู่ ใบหน้า–บุคคล ไว้ไม่เสนอซ้ำ ใบหน้ายังอยู่ให้เลือกคนอื่น */
+  reject_suggestions: [{ faceIds: Id[]; personId: Id }, { dataRevision: number }];
 }
 
 export type CommandName = keyof Commands;
@@ -557,8 +670,9 @@ export type CommandName = keyof Commands;
  *   photo/{photoId}            ไฟล์ต้นฉบับสำหรับตัวดูภาพ (404 เมื่อต้นทางไม่พร้อม)
  *   face/{faceId}              ภาพครอปใบหน้า ~256px
  *   draft/{previewId}/{draftId} รูปตัวอย่างในหน้าตรวจรายการก่อนเพิ่ม
+ *   sample/{sampleId}          ครอปใบหน้าตัวอย่างของบุคคลที่นำเข้าจากรุ่นเดิม
  */
-export type AssetKind = 'thumb' | 'photo' | 'face' | 'draft';
+export type AssetKind = 'thumb' | 'photo' | 'face' | 'draft' | 'sample';
 
 /** Event ที่ Rust ส่งหลัง commit สำเร็จ (ในแอป Tauri); UI ต้องทำงานได้แม้ไม่ได้รับ (ใช้ polling) */
 export interface DataChangedEvent {

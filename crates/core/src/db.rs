@@ -7,7 +7,8 @@ use std::path::Path;
 /// "PURI" — ใช้แยกไฟล์คลังของเราออกจาก SQLite อื่น (เช่นฐานของรุ่น Python)
 pub const APPLICATION_ID: i64 = 0x5055_5249;
 
-const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("../migrations/0001_init.sql"))];
+const MIGRATIONS: &[(i64, &str)] =
+    &[(1, include_str!("../migrations/0001_init.sql")), (2, include_str!("../migrations/0002_faces.sql"))];
 
 pub fn latest_version() -> i64 {
     MIGRATIONS.last().map(|m| m.0).unwrap_or(0)
@@ -51,6 +52,9 @@ pub fn open_library(path: &Path) -> Result<Connection> {
     let mut conn = Connection::open(path)?;
     configure(&conn)?;
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    // migration ที่สร้างตารางใหม่แทนของเดิมต้องปิด foreign keys ชั่วคราว (ทำได้เฉพาะนอก transaction)
+    // แล้วตรวจความสมบูรณ์ด้วย foreign_key_check หลังเปิดกลับ
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
     for (v, sql) in MIGRATIONS {
         if *v > version {
             let tx = conn.transaction()?;
@@ -59,6 +63,7 @@ pub fn open_library(path: &Path) -> Result<Connection> {
             tx.commit()?;
         }
     }
+    conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "application_id", APPLICATION_ID)?;
     let violations: i64 = conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r.get(0))?;
     if violations > 0 {
@@ -94,4 +99,18 @@ pub fn data_revision(conn: &Connection) -> Result<i64> {
 pub fn bump_revision(conn: &Connection) -> Result<i64> {
     conn.execute("UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'data_revision'", [])?;
     data_revision(conn)
+}
+
+/// ตัวนับที่เพิ่มเมื่อใบหน้า เวกเตอร์ คำยืนยัน หรือคำปฏิเสธเปลี่ยน — ใช้ทำให้ผลจัดกลุ่ม/ข้อเสนอที่ cache ไว้หมดอายุ
+pub fn identity_revision(conn: &Connection) -> Result<i64> {
+    Ok(meta_get(conn, "identity_revision")?.and_then(|v| v.parse().ok()).unwrap_or(1))
+}
+
+pub fn bump_identity(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES ('identity_revision', '2')
+         ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
+        [],
+    )?;
+    Ok(())
 }

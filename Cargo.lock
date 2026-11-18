@@ -2809,6 +2809,7 @@ name = "puri-devbridge"
 version = "2.0.0-alpha.1"
 dependencies = [
  "puri-core",
+ "puri-faces",
  "serde_json",
  "tiny_http",
 ]
@@ -2821,6 +2822,7 @@ dependencies = [
  "jpeg-decoder",
  "kamadak-exif",
  "ort",
+ "puri-core",
  "rusqlite",
 ]
 
@@ -2829,6 +2831,7 @@ name = "puri-photo-search"
 version = "2.0.0-alpha.1"
 dependencies = [
  "puri-core",
+ "puri-faces",
  "serde",
  "serde_json",
  "tauri",

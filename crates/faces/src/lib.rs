@@ -1,13 +1,16 @@
-//! ตรวจใบหน้าและสร้างเวกเตอร์ใบหน้าในเครื่องด้วย ONNX Runtime (งานทดลอง Phase 0 — ยังไม่ถูกเรียกจากแอป)
+//! ตรวจใบหน้าและสร้างเวกเตอร์ใบหน้าในเครื่องด้วย ONNX Runtime — implementation ของ `puri_core::ai::FaceAnalyzer`
 //!
-//! เป้าหมาย: พิสูจน์ว่า Rust ให้ผลใน embedding space เดียวกับรุ่น Python (insightface 0.7.3 + `buffalo_sc`)
-//! จึงเลียนขั้นตอนของรุ่นเดิมทีละขั้น: ย่อภาพให้ด้านยาว ≤ 1280 → SCRFD ที่ 640×640 (วางชิดมุมซ้ายบน) →
+//! ขั้นตอนเดียวกับ insightface: ย่อภาพให้ด้านยาว ≤ 1280 → SCRFD ที่ 640×640 (วางชิดมุมซ้ายบน) →
 //! จัดหน้า 112×112 ด้วย similarity transform จากจุดสำคัญ 5 จุด → เวกเตอร์ 512 มิติ (ไม่ normalize)
+//! แอปใช้ชุด `buffalo_l` (SCRFD-10GF + ResNet50@WebFace600K); ชุด `buffalo_sc` ของรุ่น Python ใช้เฉพาะใน
+//! `examples/legacy_compat` เพื่อพิสูจน์ว่า pipeline นี้ให้ผลตรงกับรุ่นเดิม
 //!
-//! ไฟล์โมเดลไม่อยู่ใน repo และไม่ถูกแจกกับแอป: ผู้เรียกชี้โฟลเดอร์ที่มี `det_500m.onnx` และ `w600k_mbf.onnx` เอง
-//! (สัญญาอนุญาตของโมเดล: docs/DECISIONS.md ข้อ 9)
+//! ไฟล์โมเดลไม่อยู่ใน repo และไม่อยู่ในตัวติดตั้ง: แอปดาวน์โหลดจากต้นทางเมื่อผู้ใช้กด แล้วตรวจ SHA-256
+//! (เงื่อนไขการใช้ของโมเดล: docs/DECISIONS.md ข้อ 9)
+#![cfg_attr(all(target_os = "macos", target_arch = "x86_64"), allow(dead_code, unused_imports))]
 
 use image::{imageops::FilterType, DynamicImage, RgbImage};
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 use ort::{environment::Environment, session::Session, value::Tensor};
 use std::io::Cursor;
 use std::path::Path;
@@ -36,14 +39,16 @@ pub struct Detection {
     pub score: f32,
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 pub struct FaceEngine {
     detector: Session,
     embedder: Session,
     _env: Environment,
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 impl FaceEngine {
-    pub fn load(model_dir: &Path, threads: usize) -> Result<Self> {
+    pub fn load(model_dir: &Path, detector: &str, embedder: &str, threads: usize) -> Result<Self> {
         let env = ort::init().with_name("puri-faces").build()?;
         let open = |file: &str| -> Result<Session> {
             let path = model_dir.join(file);
@@ -55,7 +60,7 @@ impl FaceEngine {
                 .map_err(|e| e.to_string())?
                 .commit_from_file(path)?)
         };
-        Ok(Self { detector: open("det_500m.onnx")?, embedder: open("w600k_mbf.onnx")?, _env: env })
+        Ok(Self { detector: open(detector)?, embedder: open(embedder)?, _env: env })
     }
 
     /// SCRFD: คืนใบหน้าที่คะแนน ≥ 0.5 หลัง NMS เรียงคะแนนมากไปน้อย
@@ -279,6 +284,128 @@ pub fn prepare(bytes: &[u8]) -> Result<Prepared> {
     }
     let (full_width, full_height) = if orientation >= 5 { (raw_h, raw_w) } else { (raw_w, raw_h) };
     Ok(Prepared { image: img.to_rgb8(), full_width, full_height })
+}
+
+// ───────────────────────── ตัววิเคราะห์ของแอป (ชุด buffalo_l) ─────────────────────────
+
+pub mod app {
+    use puri_core::ai::{FaceEngineProvider, ModelFile, ModelSpec};
+
+    /// เหตุผลที่แสดงผู้ใช้เมื่อ build นี้ไม่มีตัววิเคราะห์ใบหน้า
+    pub const UNAVAILABLE: &str = "Mac รุ่นชิป Intel ยังใช้การวิเคราะห์ใบหน้าอัตโนมัติไม่ได้ ระบุใบหน้าเองได้จากตัวดูภาพ";
+
+    pub fn spec() -> ModelSpec {
+        ModelSpec {
+            id: "buffalo_l",
+            display_name: "InsightFace buffalo_l",
+            space: "insightface/buffalo_l/w600k_r50",
+            files: &[
+                ModelFile {
+                    name: "det_10g.onnx",
+                    sha256: "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+                },
+                ModelFile {
+                    name: "w600k_r50.onnx",
+                    sha256: "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43",
+                },
+            ],
+            // นักพัฒนาชี้ไปไฟล์ในเครื่องได้ (file://…) เพื่อไม่ต้องดาวน์โหลดซ้ำระหว่างทดสอบ
+            download_url: std::env::var("PURI_MODEL_URL").unwrap_or_else(|_| {
+                "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip".into()
+            }),
+            download_bytes: 288_621_354,
+            download_source: "github.com/deepinsight/insightface (release v0.7)",
+            license_note: "โมเดลของ InsightFace อนุญาตให้ใช้เฉพาะงานที่ไม่ใช่เชิงพาณิชย์ (non-commercial research)",
+        }
+    }
+
+    /// ตัววิเคราะห์ของ build นี้; None บนแพลตฟอร์มที่ไม่มี ONNX Runtime สำเร็จรูป
+    pub fn provider() -> Option<FaceEngineProvider> {
+        #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+        {
+            Some(FaceEngineProvider { spec: spec(), factory: std::sync::Arc::new(super::analyzer::load) })
+        }
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        {
+            None
+        }
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+mod analyzer {
+    use super::{prepare, FaceEngine, ALIGNED, ARCFACE_DST};
+    use image::{imageops::FilterType, RgbImage};
+    use puri_core::ai::{DetectedFace, FaceAnalyzer};
+    use puri_core::faces::BBox;
+    use puri_core::AppError;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    /// ONNX Runtime ไม่ให้ใช้ session เดียวจากหลาย thread พร้อมกัน: เก็บ engine เดียวหลัง mutex
+    /// (งานถอดรหัสรูปยังขนานกันได้ ส่วน inference ใช้หลาย thread ภายในอยู่แล้ว)
+    struct OrtAnalyzer(Mutex<FaceEngine>);
+
+    fn failed(e: impl std::fmt::Display) -> AppError {
+        AppError::new("DECODE_FAILED", format!("วิเคราะห์ใบหน้าของรูปนี้ไม่สำเร็จ ({e})"))
+    }
+
+    pub fn load(model_dir: &Path) -> Result<Arc<dyn FaceAnalyzer>, AppError> {
+        let threads = std::thread::available_parallelism().map(|n| n.get() / 2).unwrap_or(2).clamp(1, 6);
+        let engine = FaceEngine::load(model_dir, "det_10g.onnx", "w600k_r50.onnx", threads)
+            .map_err(|e| AppError::new("MODEL_NOT_READY", e.to_string()))?;
+        Ok(Arc::new(OrtAnalyzer(Mutex::new(engine))))
+    }
+
+    impl FaceAnalyzer for OrtAnalyzer {
+        fn analyze(&self, image_bytes: &[u8]) -> Result<Vec<DetectedFace>, AppError> {
+            let prepared = prepare(image_bytes).map_err(failed)?;
+            let (w, h) = (prepared.image.width() as f64, prepared.image.height() as f64);
+            let mut engine = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            let detections = engine.detect(&prepared.image).map_err(failed)?;
+            let mut faces = Vec::with_capacity(detections.len());
+            for d in detections {
+                let embedding = engine.embed(&prepared.image, &d.landmarks).map_err(failed)?;
+                // พิกัดเป็นสัดส่วนบนภาพที่หมุนแล้ว หนีบให้อยู่ในภาพ (ตัวตรวจอาจให้กรอบล้นขอบเล็กน้อย)
+                let (x1, y1) = ((d.bbox[0] as f64 / w).clamp(0.0, 1.0), (d.bbox[1] as f64 / h).clamp(0.0, 1.0));
+                let (x2, y2) = ((d.bbox[2] as f64 / w).clamp(0.0, 1.0), (d.bbox[3] as f64 / h).clamp(0.0, 1.0));
+                if x2 - x1 <= 0.0 || y2 - y1 <= 0.0 {
+                    continue;
+                }
+                faces.push(DetectedFace {
+                    bbox: BBox { x: x1, y: y1, w: x2 - x1, h: y2 - y1 },
+                    score: d.score,
+                    embedding,
+                });
+            }
+            Ok(faces)
+        }
+
+        fn embed_crop(&self, image_bytes: &[u8]) -> Result<Option<Vec<f32>>, AppError> {
+            let crop = image::load_from_memory(image_bytes).map_err(failed)?.to_rgb8();
+            if crop.width() < 24 || crop.height() < 24 {
+                return Ok(None);
+            }
+            // ภาพครอปของรุ่นเดิมแน่นติดใบหน้า: วางกลางผืนดำที่ใหญ่กว่าเพื่อให้ตัวตรวจเห็นทั้งหน้า
+            let side = crop.width().max(crop.height()) * 2;
+            let scale = (640.0 / side as f32).max(1.0);
+            let (cw, ch) = ((crop.width() as f32 * scale) as u32, (crop.height() as f32 * scale) as u32);
+            let resized = image::imageops::resize(&crop, cw, ch, FilterType::Triangle);
+            let side = (side as f32 * scale) as u32;
+            let mut canvas = RgbImage::new(side, side);
+            image::imageops::replace(&mut canvas, &resized, ((side - cw) / 2) as i64, ((side - ch) / 2) as i64);
+            let mut engine = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            let found = engine.detect(&canvas).map_err(failed)?;
+            let area = |d: &super::Detection| (d.bbox[2] - d.bbox[0]) * (d.bbox[3] - d.bbox[1]);
+            if let Some(best) = found.iter().max_by(|a, b| area(a).total_cmp(&area(b))) {
+                return Ok(Some(engine.embed(&canvas, &best.landmarks).map_err(failed)?));
+            }
+            // ตรวจไม่พบ: ถือว่าครอปคือใบหน้าที่จัดกลางแล้ว (คุณภาพต่ำกว่า แต่ยังช่วยเสนอชื่อได้)
+            let s = [crop.width() as f32 / ALIGNED as f32, crop.height() as f32 / ALIGNED as f32];
+            let landmarks = ARCFACE_DST.map(|p| [p[0] * s[0], p[1] * s[1]]);
+            Ok(Some(engine.embed(&crop, &landmarks).map_err(failed)?))
+        }
+    }
 }
 
 #[cfg(test)]

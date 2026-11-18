@@ -6,9 +6,13 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+puri-core = { path = "../core" }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 jpeg-decoder = { version = "0.3.2", default-features = false }
 kamadak-exif = "0.6.2"
+
+# ONNX Runtime สำเร็จรูปของ `ort` ไม่มีสำหรับ Mac Intel: build นั้นจึงไม่มีตัววิเคราะห์ใบหน้า (แอปยังใช้งานส่วนอื่นได้ครบ)
+[target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
 ort = "=2.0.0-rc.15"
 
 [dev-dependencies]

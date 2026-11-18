@@ -49,7 +49,7 @@ fi
 export PURI_E2E_PICK="$PHOTOS
 $WORK/export
 $WORK/export"
-export PURI_DATA_DIR="$WORK/library" PURI_DISABLE_OPEN=1 PURI_E2E_SCRIPT="$WORK/smoke.js" PURI_E2E_REPORT="$REPORT"
+export PURI_DATA_DIR="$WORK/library" PURI_DISABLE_OPEN=1 PURI_DISABLE_FACE_ENGINE=1 PURI_E2E_SCRIPT="$WORK/smoke.js" PURI_E2E_REPORT="$REPORT"
 if [ -n "${APP:-}" ]; then
   echo "› เปิด $APP"
   "$APP" >"$WORK/app.log" 2>&1 &

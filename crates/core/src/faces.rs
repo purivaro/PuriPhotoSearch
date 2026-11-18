@@ -25,7 +25,16 @@ pub struct FaceBox {
     pub bbox: BBox,
     pub origin: String,
     pub person: Option<PersonRef>,
+    pub suggestion: Option<Suggestion>,
     pub record_version: i64,
+}
+
+/// ข้อเสนอของ AI สำหรับใบหน้าที่ยังไม่มีคนที่ยืนยัน — ไม่ใช่คำยืนยัน
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Suggestion {
+    pub person: PersonRef,
+    pub level: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -54,14 +63,29 @@ pub fn for_revision(conn: &Connection, revision_id: &str) -> Result<Vec<FaceBox>
                 id: r.get(0)?,
                 bbox: BBox { x: r.get(1)?, y: r.get(2)?, w: r.get(3)?, h: r.get(4)? },
                 origin: r.get(5)?,
+                suggestion: None,
                 record_version: r.get(6)?,
                 person: match person_id {
-                    Some(id) => Some(PersonRef { id, display_name: r.get(8)?, cover_face_id: r.get(9)? }),
+                    Some(id) => Some(PersonRef::new(id, r.get(8)?, r.get(9)?)),
                     None => None,
                 },
             })
         })?
         .collect::<rusqlite::Result<_>>()?)
+}
+
+/// ใบหน้าของ revision พร้อมข้อเสนอ "อาจเป็น …" สำหรับใบที่ยังไม่มีชื่อ
+pub fn for_revision_with_suggestions(app: &App, conn: &Connection, revision_id: &str) -> Result<Vec<FaceBox>> {
+    let mut faces = for_revision(conn, revision_id)?;
+    if faces.iter().any(|f| f.person.is_none()) {
+        let suggestions = crate::review::suggestions_for_revision(app, conn, revision_id)?;
+        for face in faces.iter_mut().filter(|f| f.person.is_none()) {
+            if let Some((person_id, level)) = suggestions.get(&face.id) {
+                face.suggestion = Some(Suggestion { person: crate::review::person_ref(conn, person_id)?, level });
+            }
+        }
+    }
+    Ok(faces)
 }
 
 /// ตรวจและหนีบกรอบให้อยู่ในภาพ: พิกัดเป็นสัดส่วน [0,1] บนภาพที่หมุนตาม EXIF แล้ว
@@ -104,7 +128,7 @@ fn resolve_person(
         }
         (None, Some(name)) => {
             let id = people::insert_person(conn, name)?;
-            let created = PersonRef { id: id.clone(), display_name: people::clean_name(name)?, cover_face_id: None };
+            let created = PersonRef::new(id.clone(), people::clean_name(name)?, None);
             Ok((id, Some(created)))
         }
         _ => Err(AppError::invalid("เลือกบุคคลเดิม หรือพิมพ์ชื่อเพื่อสร้างบุคคลใหม่ อย่างใดอย่างหนึ่ง")),
@@ -145,6 +169,7 @@ fn assign_one(conn: &Connection, face_id: &str, person_id: &str, origin: &str, o
 }
 
 fn result_for(
+    app: &App,
     conn: &Connection,
     operation_id: String,
     revision_ids: &[String],
@@ -152,7 +177,7 @@ fn result_for(
 ) -> Result<FaceMutationResult> {
     let mut faces = vec![];
     for rev in revision_ids {
-        faces.extend(for_revision(conn, rev)?);
+        faces.extend(for_revision_with_suggestions(app, conn, rev)?);
     }
     Ok(FaceMutationResult { operation_id, faces, created_person: created, data_revision: db::data_revision(conn)? })
 }
@@ -172,7 +197,7 @@ pub fn create_manual(app: &App, a: CreateManualArgs) -> Result<FaceMutationResul
     let result = {
         let mut conn = app.db();
         if let Some((op, rev)) = replay::<(String, String)>(&conn, &a.request_id)? {
-            return result_for(&conn, op, &[rev], None);
+            return result_for(app, &conn, op, &[rev], None);
         }
         let bbox = clean_bbox(a.bbox)?;
         let tx = conn.transaction()?;
@@ -198,9 +223,10 @@ pub fn create_manual(app: &App, a: CreateManualArgs) -> Result<FaceMutationResul
         )?;
         assign_one(&tx, &face_id, &person_id, "user_manual", &op)?;
         remember(&tx, &a.request_id, "create_manual_face", &(op.clone(), revision_id.clone()))?;
+        db::bump_identity(&tx)?;
         db::bump_revision(&tx)?;
         tx.commit()?;
-        result_for(&conn, op, &[revision_id], created)?
+        result_for(app, &conn, op, &[revision_id], created)?
     };
     app.notify(&["people", "photos"]);
     Ok(result)
@@ -240,7 +266,7 @@ pub fn assign(app: &App, a: AssignArgs) -> Result<FaceMutationResult> {
     let result = {
         let mut conn = app.db();
         if let Some((op, revs)) = replay::<(String, Vec<String>)>(&conn, &a.request_id)? {
-            return result_for(&conn, op, &revs, None);
+            return result_for(app, &conn, op, &revs, None);
         }
         let tx = conn.transaction()?;
         let revs = revisions_of(&tx, &a.face_ids)?;
@@ -251,9 +277,10 @@ pub fn assign(app: &App, a: AssignArgs) -> Result<FaceMutationResult> {
             assign_one(&tx, face_id, &person_id, "user_confirmed", &op)?;
         }
         remember(&tx, &a.request_id, "assign_faces", &(op.clone(), revs.clone()))?;
+        db::bump_identity(&tx)?;
         db::bump_revision(&tx)?;
         tx.commit()?;
-        result_for(&conn, op, &revs, created)?
+        result_for(app, &conn, op, &revs, created)?
     };
     app.notify(&["people", "photos"]);
     Ok(result)
@@ -278,9 +305,10 @@ fn revoke(app: &App, face_ids: &[String], kind: &str, ignore: bool) -> Result<Fa
                 params![face_id, status],
             )?;
         }
+        db::bump_identity(&tx)?;
         db::bump_revision(&tx)?;
         tx.commit()?;
-        result_for(&conn, op, &revs, None)?
+        result_for(app, &conn, op, &revs, None)?
     };
     app.notify(&["people", "photos"]);
     Ok(result)

@@ -3,6 +3,7 @@
 //! `src-tauri` เป็น wrapper บาง ๆ ที่ส่งคำสั่งมายัง [`api::dispatch`];
 //! กติกาข้อมูลทั้งหมด (Blueprint หมวด 6, 8, 9, 11, 13) อยู่ใน crate นี้
 
+pub mod ai;
 pub mod api;
 pub mod assets;
 pub mod catalog;
@@ -16,6 +17,7 @@ pub mod legacy;
 pub mod media;
 pub mod people;
 pub mod platform;
+pub mod review;
 pub mod util;
 
 pub use error::{AppError, Result};
@@ -46,6 +48,9 @@ pub struct Options {
     pub folder_picker: &'static str,
     /// เริ่ม worker งานเบื้องหลังทันที (ปิดได้ในเทสต์ที่ต้องคุมจังหวะเอง)
     pub start_worker: bool,
+    /// ตัววิเคราะห์ใบหน้าของ build นี้ (None = build/เครื่องนี้ไม่มี พร้อมเหตุผลใน `face_engine_unavailable`)
+    pub face_engine: Option<ai::FaceEngineProvider>,
+    pub face_engine_unavailable: &'static str,
 }
 
 pub struct App {
@@ -57,6 +62,8 @@ pub struct App {
     pub(crate) previews: Mutex<HashMap<String, Arc<import::PreviewSession>>>,
     pub(crate) export_plans: Mutex<HashMap<String, export::PlanData>>,
     pub(crate) worker: jobs::Worker,
+    pub(crate) ai: Arc<ai::AiState>,
+    pub(crate) review_cache: Mutex<Option<Arc<review::ReviewData>>>,
     /// กันสอง process เปิดคลังเดียวกัน (Blueprint 8.4)
     _lock: File,
 }
@@ -79,6 +86,8 @@ impl App {
         let conn = db::open_library(&db_path)?;
         jobs::recover_after_restart(&conn)?;
 
+        let ai =
+            Arc::new(ai::AiState::new(opts.face_engine, opts.face_engine_unavailable, &opts.data_dir.join("models")));
         let app = Arc::new(App {
             db: Mutex::new(conn),
             db_path: db_path.clone(),
@@ -87,7 +96,9 @@ impl App {
             folder_picker: opts.folder_picker,
             previews: Mutex::new(HashMap::new()),
             export_plans: Mutex::new(HashMap::new()),
-            worker: jobs::Worker::new(db_path, opts.cache_dir, opts.sink),
+            worker: jobs::Worker::new(db_path, opts.cache_dir, opts.sink, ai.clone()),
+            ai,
+            review_cache: Mutex::new(None),
             _lock: lock,
         });
         if opts.start_worker {

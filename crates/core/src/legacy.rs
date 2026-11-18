@@ -4,8 +4,10 @@
 //! ฐานเดิมเปิดด้วย `immutable=1` + read-only จึงไม่มีไฟล์ -wal/-shm เกิดข้างฐานเดิม
 
 use crate::error::{AppError, Result};
-use rusqlite::{Connection, OpenFlags};
-use serde::Serialize;
+use crate::import::{remember, replay};
+use crate::{db, people, util, App};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize)]
@@ -143,4 +145,143 @@ pub fn dry_run(path: Option<&str>) -> Result<LegacyReport> {
     }
     report.notes.push("การตรวจนี้อ่านอย่างเดียว ไม่แก้ฐานข้อมูลเดิม และยังไม่ได้นำข้อมูลเข้าคลังใหม่".into());
     Ok(report)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyImportResult {
+    pub persons_created: usize,
+    pub persons_skipped: usize,
+    pub groups_created: usize,
+    pub samples_imported: usize,
+    pub samples_pending_embedding: i64,
+    pub notes: Vec<String>,
+}
+
+struct LegacyPerson {
+    key: String,
+    id: i64,
+    name: String,
+    group: Option<String>,
+}
+
+/// นำรายชื่อ กลุ่ม และภาพใบหน้าตัวอย่างจากรุ่น Python เข้าคลัง (Blueprint 14.3 เฉพาะส่วนที่ผู้ใช้ยืนยันไว้จริง)
+///
+/// - ฐานเดิมเปิดแบบอ่านอย่างเดียว ไม่ถูกแก้
+/// - รันซ้ำไม่สร้างคนซ้ำ: จำคู่ (รหัสเดิม + เวลาสร้างเดิม) → ID ใหม่ ไว้ใน `legacy_id_map`
+/// - เวกเตอร์ของรุ่นเดิมไม่ถูกนำมาใช้ (คนละโมเดล คนละ space): ภาพครอปตัวอย่างจะถูกสร้างเวกเตอร์ใหม่ด้วยโมเดลปัจจุบัน
+/// - ผลจับคู่ของรุ่นเดิมไม่ถูกนำมาเป็นคำยืนยัน และรูป/โฟลเดอร์ไม่ถูกย้ายมา (ผู้ใช้เพิ่มโฟลเดอร์เอง)
+pub fn import_people(app: &App, path: Option<&str>, request_id: &str) -> Result<LegacyImportResult> {
+    if let Some(prev) = replay::<LegacyImportResult>(&app.db(), request_id)? {
+        return Ok(prev);
+    }
+    let path = match path {
+        Some(p) => PathBuf::from(p),
+        None => default_path().ok_or_else(|| AppError::invalid("ไม่ทราบตำแหน่งข้อมูลของรุ่นเดิม"))?,
+    };
+    let legacy = open_read_only(&path)?;
+    let has_table = |t: &str| -> Result<bool> {
+        Ok(legacy.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            [t],
+            |r| r.get(0),
+        )?)
+    };
+    if !has_table("persons")? || !has_table("person_embeddings")? {
+        return Err(AppError::invalid("ไฟล์นี้ไม่ใช่ฐานข้อมูลของ PuriPhotoSearch รุ่น Python ที่รู้จัก"));
+    }
+    let has_group: bool = legacy.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('persons') WHERE name = 'group_name')",
+        [],
+        |r| r.get(0),
+    )?;
+    let group_col = if has_group { "group_name" } else { "NULL" };
+    let persons: Vec<LegacyPerson> = legacy
+        .prepare(&format!("SELECT id, name, {group_col}, COALESCE(created_at, '') FROM persons ORDER BY id"))?
+        .query_map([], |r| {
+            let (id, created): (i64, String) = (r.get(0)?, r.get(3)?);
+            Ok(LegacyPerson { key: format!("{id}|{created}"), id, name: r.get(1)?, group: r.get(2)? })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut samples = legacy.prepare(
+        "SELECT thumbnail FROM person_embeddings WHERE person_id = ?1 AND thumbnail IS NOT NULL ORDER BY is_primary DESC, id",
+    )?;
+
+    let mut result = LegacyImportResult {
+        persons_created: 0,
+        persons_skipped: 0,
+        groups_created: 0,
+        samples_imported: 0,
+        samples_pending_embedding: 0,
+        notes: vec![],
+    };
+    {
+        let mut conn = app.db();
+        let tx = conn.transaction()?;
+        let now = util::now();
+        for person in &persons {
+            let known: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM legacy_id_map WHERE kind = 'person' AND legacy_id = ?1)",
+                [&person.key],
+                |r| r.get(0),
+            )?;
+            if known {
+                result.persons_skipped += 1;
+                continue;
+            }
+            let name = if person.name.trim().is_empty() { "ไม่มีชื่อ" } else { person.name.trim() };
+            let name: String = name.chars().take(120).collect();
+            let new_id = people::insert_person(&tx, &name)?;
+            tx.execute(
+                "INSERT INTO legacy_id_map(kind, legacy_id, new_id) VALUES ('person', ?1, ?2)",
+                params![person.key, new_id],
+            )?;
+            result.persons_created += 1;
+
+            if let Some(group) = person.group.as_deref().map(str::trim).filter(|g| !g.is_empty()) {
+                let key = util::text_key(group);
+                let existing: Option<String> =
+                    tx.query_row("SELECT id FROM groups WHERE name_key = ?1", [&key], |r| r.get(0)).optional()?;
+                let group_id = match existing {
+                    Some(id) => id,
+                    None => {
+                        let id = util::new_id();
+                        tx.execute(
+                            "INSERT INTO groups(id, name, name_key, created_at) VALUES (?1, ?2, ?3, ?4)",
+                            params![id, group, key, now],
+                        )?;
+                        result.groups_created += 1;
+                        id
+                    }
+                };
+                tx.execute(
+                    "INSERT OR IGNORE INTO person_groups(person_id, group_id) VALUES (?1, ?2)",
+                    params![new_id, group_id],
+                )?;
+            }
+            let thumbs: Vec<Vec<u8>> =
+                samples.query_map([person.id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            for thumbnail in thumbs.into_iter().filter(|t| !t.is_empty()) {
+                tx.execute(
+                    "INSERT INTO person_reference_samples(id, person_id, thumbnail, source, created_at) VALUES (?1, ?2, ?3, 'legacy_python', ?4)",
+                    params![util::new_id(), new_id, thumbnail, now],
+                )?;
+                result.samples_imported += 1;
+            }
+        }
+        result.samples_pending_embedding =
+            tx.query_row("SELECT COUNT(*) FROM person_reference_samples WHERE vector IS NULL", [], |r| r.get(0))?;
+        result.notes.push("ฐานข้อมูลของรุ่นเดิมไม่ถูกแก้ไข".into());
+        result.notes.push("รูปและโฟลเดอร์ของรุ่นเดิมไม่ได้ถูกย้ายมา เพิ่มโฟลเดอร์กิจกรรมในแอปนี้เพื่อให้ค้นรูปได้".into());
+        result.notes.push(
+            "ใบหน้าตัวอย่างที่นำเข้าใช้เป็นข้อเสนอ “อาจเป็น …” เท่านั้น ต้องกดยืนยันในหน้าตรวจสอบใบหน้าจึงจะนับเป็นรูปของบุคคลนั้น".into(),
+        );
+        remember(&tx, request_id, "import_legacy_people", &result)?;
+        db::bump_identity(&tx)?;
+        db::bump_revision(&tx)?;
+        tx.commit()?;
+    }
+    app.worker.wake();
+    app.notify(&["people"]);
+    Ok(result)
 }

@@ -17,11 +17,21 @@ pub struct PersonRef {
     pub id: String,
     pub display_name: String,
     pub cover_face_id: Option<String>,
+    pub cover_asset: Option<String>,
 }
 
-/// ภาพตัวแทนของบุคคล: ที่ผู้ใช้เลือก หรือใบหน้ายืนยันใบแรกเมื่อยังไม่ได้เลือก
-pub const PERSON_COVER_SQL: &str =
-    "COALESCE(pe.cover_face_id, (SELECT MIN(v.face_id) FROM v_confirmed v WHERE v.person_id = pe.id))";
+impl PersonRef {
+    /// `cover` คือค่าจาก [`PERSON_COVER_SQL`]
+    pub fn new(id: String, display_name: String, cover: Option<String>) -> Self {
+        let cover_face_id = cover.as_deref().and_then(|c| c.strip_prefix("face/")).map(str::to_string);
+        Self { id, display_name, cover_face_id, cover_asset: cover }
+    }
+}
+
+/// ภาพตัวแทนของบุคคลเป็น path ของ asset: ใบหน้าที่ผู้ใช้เลือก → ใบหน้ายืนยันใบแรก → ใบหน้าตัวอย่างที่นำเข้า
+pub const PERSON_COVER_SQL: &str = "COALESCE(\
+    'face/' || COALESCE(pe.cover_face_id, (SELECT MIN(v.face_id) FROM v_confirmed v WHERE v.person_id = pe.id)), \
+    'sample/' || (SELECT MIN(s.id) FROM person_reference_samples s WHERE s.person_id = pe.id))";
 
 /// เงื่อนไข "รูปนี้มีใบหน้าที่ยืนยันแล้วของ …" เมื่อมองจากแถวรูป (ความหมายเดียวกับ view v_confirmed)
 const CONFIRMED_ON_PHOTO: &str = "FROM faces f JOIN face_assignments a ON a.face_id = f.id AND a.revoked_at IS NULL \
@@ -35,6 +45,7 @@ pub struct LibrarySummary {
     pub event_count: i64,
     pub photo_count: i64,
     pub person_count: i64,
+    pub unnamed_face_count: i64,
     pub data_revision: i64,
 }
 
@@ -50,6 +61,15 @@ pub fn library_summary(conn: &Connection) -> Result<LibrarySummary> {
             |r| r.get(0),
         )?,
         person_count: conn.query_row("SELECT COUNT(*) FROM persons WHERE catalog_state = 'active'", [], |r| r.get(0))?,
+        unnamed_face_count: conn.query_row(
+            "SELECT COUNT(*) FROM faces f
+             JOIN photos p ON p.current_revision_id = f.photo_revision_id AND p.catalog_state = 'active'
+             JOIN event_photos ep ON ep.photo_id = p.id JOIN events e ON e.id = ep.event_id AND e.catalog_state = 'active'
+             WHERE f.status = 'active'
+               AND NOT EXISTS (SELECT 1 FROM face_assignments a WHERE a.face_id = f.id AND a.revoked_at IS NULL)",
+            [],
+            |r| r.get(0),
+        )?,
         data_revision: db::data_revision(conn)?,
     })
 }
@@ -66,6 +86,7 @@ pub struct EventSummary {
     pub photo_count: i64,
     pub thumb_ready_count: i64,
     pub failed_count: i64,
+    pub face_analyzed_count: i64,
     pub cover_photo_id: Option<String>,
     pub source_available: bool,
     pub folder_path: String,
@@ -103,11 +124,12 @@ fn event_select() -> String {
         "SELECT e.id, e.title, e.event_date, e.date_source, {total}, {ready}, {failed}, e.cover_photo_id,
            COALESCE((SELECT b.folder_path FROM event_source_bindings b WHERE b.event_id = e.id AND b.active = 1 LIMIT 1), ''),
            (SELECT j.id FROM jobs j WHERE j.event_id = e.id AND j.state IN {ACTIVE_STATES} ORDER BY j.created_at LIMIT 1),
-           e.created_at, e.record_version, e.notes
+           e.created_at, e.record_version, e.notes, {analyzed}
          FROM events e WHERE e.catalog_state = 'active'",
         total = count(""),
         ready = count(" AND r.thumbnail_status = 'ready'"),
         failed = count(" AND r.thumbnail_status = 'failed'"),
+        analyzed = count(" AND r.face_status = 'done'"),
     )
 }
 
@@ -122,6 +144,7 @@ fn event_from_row(r: &rusqlite::Row) -> rusqlite::Result<(EventSummary, String)>
             photo_count: r.get(4)?,
             thumb_ready_count: r.get(5)?,
             failed_count: r.get(6)?,
+            face_analyzed_count: r.get(13)?,
             cover_photo_id: r.get(7)?,
             // ตรวจสด: ไดรฟ์หลุดแล้วต่อกลับ สถานะต้องตามจริงโดยไม่ต้องสแกนใหม่
             source_available: !folder_path.is_empty() && Path::new(&folder_path).is_dir(),
@@ -161,10 +184,7 @@ pub fn get_event(conn: &Connection, event_id: &str) -> Result<EventDetail> {
              GROUP BY pe.id ORDER BY n DESC, pe.name_key, pe.id"
         ))?
         .query_map([event_id], |r| {
-            Ok(PersonCount {
-                person: PersonRef { id: r.get(0)?, display_name: r.get(1)?, cover_face_id: r.get(2)? },
-                photo_count: r.get(3)?,
-            })
+            Ok(PersonCount { person: PersonRef::new(r.get(0)?, r.get(1)?, r.get(2)?), photo_count: r.get(3)? })
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(EventDetail { summary, notes, people, jobs: jobs::list_for_event(conn, event_id)? })
@@ -306,6 +326,8 @@ pub struct Coverage {
     pub thumbnails_pending: i64,
     pub thumbnails_failed: i64,
     pub with_confirmed_people: i64,
+    pub faces_analyzed: i64,
+    pub faces_pending: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -484,7 +506,7 @@ fn attach_people(conn: &Connection, items: &mut [PhotoResult]) -> Result<()> {
     let mut by_rev: HashMap<String, Vec<PersonRef>> = HashMap::new();
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(items.iter().map(|i| i.revision_id.clone())), |r| {
-        Ok((r.get::<_, String>(0)?, PersonRef { id: r.get(1)?, display_name: r.get(2)?, cover_face_id: r.get(3)? }))
+        Ok((r.get::<_, String>(0)?, PersonRef::new(r.get(1)?, r.get(2)?, r.get(3)?)))
     })?;
     for row in rows {
         let (rev, person) = row?;
@@ -504,7 +526,8 @@ pub fn query_photos(conn: &Connection, p: &SearchParams) -> Result<PhotoPage> {
 
     let coverage_sql = format!(
         "SELECT COUNT(*), COALESCE(SUM(r.thumbnail_status = 'ready'), 0), COALESCE(SUM(r.thumbnail_status = 'pending'), 0),
-           COALESCE(SUM(r.thumbnail_status = 'failed'), 0), COALESCE(SUM(EXISTS (SELECT 1 {CONFIRMED_ON_PHOTO})), 0)
+           COALESCE(SUM(r.thumbnail_status = 'failed'), 0), COALESCE(SUM(EXISTS (SELECT 1 {CONFIRMED_ON_PHOTO})), 0),
+           COALESCE(SUM(r.face_status = 'done'), 0), COALESCE(SUM(r.face_status = 'not_analyzed'), 0)
          {PHOTO_FROM}{}",
         f.sql
     );
@@ -515,6 +538,8 @@ pub fn query_photos(conn: &Connection, p: &SearchParams) -> Result<PhotoPage> {
             thumbnails_pending: r.get(2)?,
             thumbnails_failed: r.get(3)?,
             with_confirmed_people: r.get(4)?,
+            faces_analyzed: r.get(5)?,
+            faces_pending: r.get(6)?,
         })
     })?;
 
@@ -582,7 +607,8 @@ pub fn create_selection(app: &App, p: &SearchParams) -> Result<SelectionSnapshot
     Ok(SelectionSnapshot { selection_token: token, count, data_revision: revision })
 }
 
-pub fn get_photo_details(conn: &Connection, photo_id: &str) -> Result<PhotoDetails> {
+pub fn get_photo_details(app: &App, photo_id: &str) -> Result<PhotoDetails> {
+    let conn = &app.db();
     let sql = format!("SELECT {PHOTO_COLS} {PHOTO_FROM} AND p.id = ?1");
     let (photo, path, file_size, event_date, decode_error) = conn
         .query_row(&sql, [photo_id], |r| {
@@ -599,7 +625,7 @@ pub fn get_photo_details(conn: &Connection, photo_id: &str) -> Result<PhotoDetai
     let mut one = [photo];
     attach_people(conn, &mut one)?;
     let [photo] = one;
-    let faces = faces::for_revision(conn, &photo.revision_id)?;
+    let faces = faces::for_revision_with_suggestions(app, conn, &photo.revision_id)?;
     let original_available = Path::new(&path).is_file();
     Ok(PhotoDetails { photo, path, file_size, event_date, original_available, decode_error, faces })
 }

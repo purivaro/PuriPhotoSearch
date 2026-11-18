@@ -105,7 +105,7 @@ fn person_select() -> String {
 
 fn person_from_row(r: &rusqlite::Row) -> rusqlite::Result<PersonSummary> {
     Ok(PersonSummary {
-        person: PersonRef { id: r.get(0)?, display_name: r.get(1)?, cover_face_id: r.get(2)? },
+        person: PersonRef::new(r.get(0)?, r.get(1)?, r.get(2)?),
         nickname: r.get(3)?,
         confirmed_photo_count: r.get(4)?,
         pinned: r.get(5)?,
