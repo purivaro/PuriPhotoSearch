@@ -167,6 +167,7 @@ function FaceRow({ face, photoId, selected, onSelect }: { face: FaceBox; photoId
       ref={rowRef}
       data-testid="face-row"
       data-face-id={face.id}
+      data-face-state={face.person ? 'confirmed' : face.suggestion ? 'suggested' : 'unknown'}
       className={cn('rounded-xl border transition-colors', selected ? 'border-brand-line bg-brand-soft' : 'border-transparent hover:bg-sunken')}
     >
       <button type="button" onClick={onSelect} aria-expanded={selected} className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left">

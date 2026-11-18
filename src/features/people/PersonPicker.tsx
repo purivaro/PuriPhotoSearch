@@ -9,6 +9,8 @@ import { FaceAvatar } from './FaceAvatar';
 
 export type PersonChoice = { kind: 'existing'; person: PersonSummary } | { kind: 'new'; name: string };
 
+const CREATE_VALUE = '__create__';
+
 interface PersonPickerProps {
   onPick: (choice: PersonChoice) => void;
   /** คนที่ไม่ต้องแสดง (เช่นคนที่ผูกกับใบหน้านี้อยู่แล้ว) */
@@ -30,9 +32,14 @@ export function PersonPicker({ onPick, excludeIds = [], allowCreate = true, busy
   const options = (people.data ?? []).filter((p) => !excludeIds.includes(p.id)).slice(0, 40);
   const name = text.trim();
   const sameName = name ? options.filter((p) => p.displayName.trim().toLocaleLowerCase() === name.toLocaleLowerCase()).length : 0;
+  // คุมรายการที่ไฮไลต์เอง: เมื่อผลค้นเปลี่ยนจนรายการเดิมหายไป cmdk ไม่เลือกรายการใหม่ให้ (Enter จะไม่ทำอะไร)
+  // จึงให้รายการแรกที่ยังแสดงอยู่ถูกเลือกเสมอ
+  const [highlighted, setHighlighted] = useState('');
+  const values = [...options.map((p) => p.id), ...(allowCreate && name ? [CREATE_VALUE] : [])];
+  const active = values.includes(highlighted) ? highlighted : (values[0] ?? '');
 
   return (
-    <Command shouldFilter={false} label="เลือกบุคคล" className="w-[320px] max-w-[calc(100vw-48px)]">
+    <Command shouldFilter={false} value={active} onValueChange={setHighlighted} label="เลือกบุคคล" className="w-[320px] max-w-[calc(100vw-48px)]">
       <div className="flex items-center gap-2 border-b border-line px-3">
         <Search className="size-4 shrink-0 text-muted" aria-hidden />
         <Command.Input
@@ -77,7 +84,7 @@ export function PersonPicker({ onPick, excludeIds = [], allowCreate = true, busy
         ))}
         {allowCreate && name && (
           <Command.Item
-            value="__create__"
+            value={CREATE_VALUE}
             disabled={busy}
             data-testid="person-picker-create"
             onSelect={() => onPick({ kind: 'new', name })}
