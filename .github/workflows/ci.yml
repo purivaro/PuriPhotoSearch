@@ -66,6 +66,11 @@ jobs:
         run: |
           cargo clippy --workspace --all-targets -- -D warnings
           cargo test --workspace --no-fail-fast
+      # จอของ runner เป็น 1024×768: หน้าต่าง 1440×900 ของแอปจะถูกบีบจนเลย์เอาต์เปลี่ยนเป็นแบบหน้าต่างแคบ
+      - name: ตั้งขนาดจอให้พอกับหน้าต่างแอป
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
       - name: แอปจริงในหน้าต่าง WebView2 (e2e)
         if: ${{ !cancelled() }}
         run: |
