@@ -13,7 +13,7 @@
 | Rust: คำสั่ง Tauri ครบทุกตัว | `cargo test -p puri-photo-search` | 1 ผ่าน |
 | Rust: lint | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` | ผ่าน ไม่มี warning |
 | Frontend | `pnpm typecheck`, `pnpm test`, `pnpm build` | typecheck ผ่าน (รวม `noUncheckedIndexedAccess`), vitest 41 ผ่านใน 6 ไฟล์, build ผ่าน (JS 762 kB / gzip 216 kB) |
-| แอปจริง | `e2e/run.sh` | ผ่าน 14 ขั้น ทั้ง `pnpm tauri dev` และ `.app` debug ที่ bundle แล้ว; รันซ้ำหลัง UI ชุดใบหน้าด้วย `pnpm tauri dev` ผ่าน 14 ขั้น (แบบ `.app` ยังไม่ได้รันซ้ำ) |
+| แอปจริง | `e2e/run.sh` | ผ่าน 14 ขั้น ทั้ง `pnpm tauri dev` และ `.app` debug ที่ bundle แล้ว; รันซ้ำหลัง UI ชุดใบหน้า ผ่าน 14 ขั้นทั้งสองแบบ (แบบ `.app` รันกับ bundle debug ที่เซ็นด้วย Developer ID + hardened runtime) |
 | ข้อมูลจริง | Rust core กับ `~/Photos/2569` และฐานของรุ่น Python (อ่านอย่างเดียว) | ดูหมวด "ข้อมูลจริง" |
 
 ## Rust: integration (`crates/core/tests/workflow.rs`)
@@ -168,7 +168,7 @@ debug build ฉีดสคริปต์เข้า WKWebView ของหน
 พบและแก้ระหว่างรอบนี้: ช่องเลือกบุคคลไม่ไฮไลต์รายการใดเมื่อคลังมีรายชื่ออยู่แล้วและผลค้นเปลี่ยน ทำให้พิมพ์ชื่อใหม่แล้วกด Enter ไม่เกิดอะไร
 (e2e ไม่เจอเพราะคลังทดสอบเริ่มจากไม่มีบุคคล) — แก้ให้รายการแรกที่แสดงอยู่ถูกเลือกเสมอ แล้วทดสอบซ้ำในหน้าจอผ่าน
 
-ยังไม่ได้ทดสอบ: ตัววิเคราะห์ใบหน้าใน release build ที่เซ็นแล้ว (ทดสอบในแอป debug และ dev bridge แบบ release), Mac Intel (compile ผ่านเท่านั้น),
+ยังไม่ได้ทดสอบ: ตัววิเคราะห์ใบหน้าใน release build ที่แจก (ทดสอบใน bundle debug ที่เซ็นแบบเดียวกัน และ dev bridge แบบ release — ดูหมวดตัวติดตั้ง), Mac Intel (compile ผ่านเท่านั้น),
 คลังใหญ่กว่า 292 รูปพร้อมวิเคราะห์ใบหน้า, การพักงานดาวน์โหลดโมเดล, เน็ตหลุดกลางทาง, หน้าตรวจสอบระหว่างที่งานวิเคราะห์กำลังวิ่งจริง
 (งาน 292 รูปจบใน 25 วินาทีก่อนเปิดหน้า — กติกานี้มีเทสต์อัตโนมัติยืนยันแทน)
 
