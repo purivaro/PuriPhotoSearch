@@ -94,16 +94,28 @@ pub fn publish_fake_model(base: &Path, corrupt: bool) {
 
 fn open(base: &Path, ai: bool) -> Arc<App> {
     std::env::set_var("PURI_DISABLE_OPEN", "1");
-    App::open(Options {
-        data_dir: base.join("data"),
-        cache_dir: base.join("cache"),
-        sink: Arc::new(NoopSink),
-        folder_picker: "dev_path_input",
-        start_worker: false,
-        face_engine: ai.then(|| fake_provider(base)),
-        face_engine_unavailable: "build ทดสอบนี้ไม่มีตัววิเคราะห์ใบหน้า",
-    })
-    .expect("open library")
+    // เทสต์รันขนานใน process เดียว: ช่วงที่เทสต์อื่นกำลัง fork ตัว zip/curl/unzip ลูกที่ยังไม่ exec ถือสำเนา fd ของ
+    // library.lock อยู่ชั่วครู่ การเปิดคลังซ้ำทันที (`reopen`) จึงเจอ LIBRARY_LOCKED ได้เป็นบางครั้ง
+    // lock หลุดเองเมื่อลูก exec (fd เป็น close-on-exec) — รอแล้วลองใหม่ ข้อผิดพลาดอื่นถือว่าเทสต์ล้ม
+    let started = std::time::Instant::now();
+    loop {
+        let opened = App::open(Options {
+            data_dir: base.join("data"),
+            cache_dir: base.join("cache"),
+            sink: Arc::new(NoopSink),
+            folder_picker: "dev_path_input",
+            start_worker: false,
+            face_engine: ai.then(|| fake_provider(base)),
+            face_engine_unavailable: "build ทดสอบนี้ไม่มีตัววิเคราะห์ใบหน้า",
+        });
+        match opened {
+            Ok(app) => return app,
+            Err(e) if e.code == "LIBRARY_LOCKED" && started.elapsed() < std::time::Duration::from_secs(5) => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => panic!("open library: {e:?}"),
+        }
+    }
 }
 
 impl Lib {
