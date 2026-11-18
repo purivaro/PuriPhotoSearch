@@ -74,7 +74,8 @@ macOS อาจถามสิทธิ์เข้าโฟลเดอร์ D
 
 ตัวติดตั้ง: `scripts/release-mac.sh` สร้างแอป universal เซ็นด้วย Developer ID + hardened runtime (ไม่มี entitlement เพิ่ม)
 แล้ว notarize และ staple DMG ผ่านโปรไฟล์ keychain ของ notarytool ไม่มีโมเดลใบหน้าหรือ ONNX Runtime อยู่ในตัวติดตั้ง
-ยังไม่มี workflow release บน GitHub (ต้องใส่ใบรับรองเป็น secret ของ repo ก่อน) และยังไม่มีระบบอัปเดตอัตโนมัติ
+ตั้งแต่ `v2.0.0-alpha.2` ตัวติดตั้งที่เผยแพร่สร้างโดย workflow `Release` บน GitHub Actions (push tag `v*` → build + เซ็น + notarize + แนบกับ release;
+ใบรับรองและรหัส notarize เป็น secret ของ repo ที่เจ้าของใส่เองด้วย `scripts/setup-release-secrets.sh`) ยังไม่มีระบบอัปเดตอัตโนมัติ
 
 ## 7. การเสิร์ฟรูป
 
