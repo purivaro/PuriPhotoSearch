@@ -7,6 +7,7 @@ import { AddFolderButton, JobIndicator, Page, SearchTrigger, SectionTitle, useDo
 import { EmptyState, ErrorState, LoadingBlock } from '@/components/ui/Feedback';
 import { Tabs } from '@/components/ui/Form';
 import { EVENT_GRID, EventCard } from '@/features/events/EventCard';
+import { FaceModelNotice } from '@/features/faces/FaceModelNotice';
 import { JobStrip } from '@/features/jobs/JobCard';
 import { PERSON_GRID, PersonCard } from '@/features/people/PersonCard';
 import { PersonQuickViewHost, useQuickView } from '@/features/people/PersonQuickView';
@@ -26,6 +27,7 @@ export function HomePage() {
   const capabilities = useCapabilities();
   const jobs = useActiveJobs();
   const pending = (jobs.data ?? []).filter((job) => isJobActive(job) || job.state === 'paused');
+  const unnamedFaces = summary.data?.unnamedFaceCount ?? 0;
 
   return (
     <Page aside={<PersonQuickViewHost personId={quickView.personId} onClose={quickView.close} restoreFocus={quickView.restoreFocus} />}>
@@ -82,6 +84,22 @@ export function HomePage() {
           </p>
         )}
       </div>
+
+      {/* ใบหน้ารอตรวจสอบ: อยู่บนสุดของเนื้อหา เพราะเป็นงานถัดไปที่ผู้ใช้ต้องทำหลังเพิ่มกิจกรรม */}
+      {unnamedFaces > 0 && (
+        <Link
+          to="/review"
+          data-testid="home-review-strip"
+          className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-card border border-brand-line bg-brand-soft px-5 py-3.5 transition-colors hover:border-brand"
+        >
+          <ScanFace className="size-6 shrink-0 text-action" aria-hidden />
+          <span className="min-w-[200px] flex-1 text-[17px] font-bold text-action">มี {formatCount(unnamedFaces)} ใบหน้ารอตรวจสอบ</span>
+          <span className="inline-flex h-9 shrink-0 items-center rounded-lg border border-action/60 bg-surface px-4 text-sm font-semibold text-action">ตรวจสอบใบหน้า</span>
+        </Link>
+      )}
+
+      {/* ยังไม่ติดตั้งตัววิเคราะห์ใบหน้า: แถบเดียว กดปุ่มเดียวจบ (ไม่แสดงเมื่อพร้อมใช้แล้ว) */}
+      <FaceModelNotice variant="bar" className="mb-6" />
 
       <HomePeopleSection quickViewPersonId={quickView.personId} onQuickView={quickView.toggle} />
       <RecentEvents />

@@ -1,7 +1,9 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
-import { CircleCheck, CloudOff, ScanFace } from 'lucide-react';
+import { CircleCheck, CircleHelp, CloudOff, ScanFace, Sparkles, X } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/Overlay';
-import { PersonPicker } from '@/features/people/PersonPicker';
+import { LevelBadge } from '@/features/faces/LevelBadge';
+import { PersonPicker, type PersonChoice } from '@/features/people/PersonPicker';
 import { cn } from '@/lib/cn';
 import { formatCount, newRequestId } from '@/lib/format';
 import { assetUrl } from '@/lib/ipc/client';
@@ -47,7 +49,9 @@ export const ViewerStage = forwardRef<ViewerStageHandle, ViewerStageProps>(funct
   const [panning, setPanning] = useState(false);
   const panStart = useRef<{ pointer: Point; pan: Point } | null>(null);
   const requestId = useRef(newRequestId());
-  const { createManual } = useFaceMutations(photoId);
+  const { createManual, assign, confirmSuggestion, rejectSuggestion } = useFaceMutations(photoId);
+  // ใบหน้าที่ยังไม่มีชื่อซึ่งกำลังเปิดช่องตั้งชื่ออยู่ (คลิกกรอบแล้วตั้งชื่อได้ทันที ไม่ต้องลากกรอบเอง)
+  const [namingFaceId, setNamingFaceId] = useState<Id | null>(null);
 
   const image: Size = natural ?? (details && details.width > 0 && details.height > 0 ? { w: details.width, h: details.height } : { w: 3, h: 2 });
   const rect = imageRect(container, image, zoom, pan);
@@ -64,6 +68,7 @@ export const ViewerStage = forwardRef<ViewerStageHandle, ViewerStageProps>(funct
     setPan({ x: 0, y: 0 });
     setDrag(null);
     setPending(null);
+    setNamingFaceId(null);
   }, [photoId]);
 
   useEffect(() => onZoomChange(zoom), [zoom, onZoomChange]);
@@ -217,7 +222,23 @@ export const ViewerStage = forwardRef<ViewerStageHandle, ViewerStageProps>(funct
 
         {showFaces &&
           faces.map((face) => (
-            <FaceFrame key={face.id} face={face} selected={face.id === selectedFaceId} inert={drawMode || Boolean(pending)} onSelect={() => onSelectFace(face.id)} />
+            <FaceFrame
+              key={face.id}
+              face={face}
+              selected={face.id === selectedFaceId}
+              inert={drawMode || Boolean(pending)}
+              naming={namingFaceId === face.id}
+              busy={assign.isPending || confirmSuggestion.isPending || rejectSuggestion.isPending}
+              onSelect={() => {
+                onSelectFace(face.id);
+                // ยังไม่มีชื่อที่ยืนยัน → เปิดช่องตั้งชื่อที่กรอบนี้เลย
+                setNamingFaceId(face.person ? null : face.id);
+              }}
+              onNamingChange={(open) => setNamingFaceId(open ? face.id : null)}
+              onPick={(choice) => assign.mutate({ faceId: face.id, choice }, { onSuccess: () => setNamingFaceId(null) })}
+              onConfirmSuggestion={() => confirmSuggestion.mutate(face, { onSuccess: () => setNamingFaceId(null) })}
+              onRejectSuggestion={() => rejectSuggestion.mutate(face)}
+            />
           ))}
 
         {draft && (
@@ -286,15 +307,42 @@ export const ViewerStage = forwardRef<ViewerStageHandle, ViewerStageProps>(funct
   );
 });
 
-function FaceFrame({ face, selected, inert, onSelect }: { face: FaceBox; selected: boolean; inert: boolean; onSelect: () => void }) {
+interface FaceFrameProps {
+  face: FaceBox;
+  selected: boolean;
+  inert: boolean;
+  /** ช่องตั้งชื่อของกรอบนี้เปิดอยู่ (เฉพาะใบหน้าที่ยังไม่มีชื่อที่ยืนยัน) */
+  naming: boolean;
+  busy: boolean;
+  onSelect: () => void;
+  onNamingChange: (open: boolean) => void;
+  onPick: (choice: PersonChoice) => void;
+  onConfirmSuggestion: () => void;
+  onRejectSuggestion: () => void;
+}
+
+/**
+ * กรอบใบหน้าบนภาพ มีสามสถานะที่ต่างกันทั้งรูปแบบเส้นและไอคอน (ไม่ใช่สีอย่างเดียว):
+ * ยืนยันแล้ว = เส้นทึบ + เครื่องหมายถูก · AI เสนอ = เส้นประสีแบรนด์ + ไอคอนตามระดับ · ยังไม่ทราบชื่อ = เส้นประสีขาว + ไอคอนสแกน
+ */
+function FaceFrame({ face, selected, inert, naming, busy, onSelect, onNamingChange, onPick, onConfirmSuggestion, onRejectSuggestion }: FaceFrameProps) {
   const confirmed = Boolean(face.person);
-  return (
+  const suggestion = confirmed ? null : face.suggestion;
+  const label = confirmed ? `${face.person?.displayName} · ยืนยันแล้ว` : suggestion ? `อาจเป็น “${suggestion.person.displayName}” — รอตรวจสอบ` : 'ยังไม่ทราบชื่อ';
+  const frame = (
     <button
       type="button"
       data-testid="face-box"
       data-face-id={face.id}
+      data-face-state={confirmed ? 'confirmed' : suggestion ? 'suggested' : 'unknown'}
       tabIndex={inert ? -1 : 0}
-      aria-label={confirmed ? `ใบหน้าของ ${face.person?.displayName} ยืนยันแล้ว` : 'ใบหน้าที่ยังไม่ทราบชื่อ'}
+      aria-label={
+        confirmed
+          ? `ใบหน้าของ ${face.person?.displayName} ยืนยันแล้ว`
+          : suggestion
+            ? `ใบหน้าที่ AI เสนอว่าอาจเป็น ${suggestion.person.displayName} รอตรวจสอบ กดเพื่อยืนยันหรือตั้งชื่อ`
+            : 'ใบหน้าที่ยังไม่ทราบชื่อ กดเพื่อตั้งชื่อ'
+      }
       aria-pressed={selected}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
@@ -304,8 +352,7 @@ function FaceFrame({ face, selected, inert, onSelect }: { face: FaceBox; selecte
       className={cn(
         'absolute rounded-lg',
         inert && 'pointer-events-none',
-        // ยืนยันแล้ว = เส้นทึบสีส้ม + เครื่องหมายถูก; ยังไม่ทราบชื่อ = เส้นประสีขาว (ต่างกันทั้งรูปแบบเส้นและไอคอน ไม่ใช่สีอย่างเดียว)
-        confirmed ? 'border-[3px] border-brand' : 'border-[2.5px] border-dashed border-white',
+        confirmed ? 'border-[3px] border-brand' : suggestion ? 'border-[2.5px] border-dashed border-brand' : 'border-[2.5px] border-dashed border-white',
         'shadow-[0_0_0_1.5px_rgba(0,0,0,0.5)]',
         selected && 'ring-4 ring-white/80',
       )}
@@ -313,13 +360,51 @@ function FaceFrame({ face, selected, inert, onSelect }: { face: FaceBox; selecte
     >
       <span
         className={cn(
-          'absolute top-full left-1/2 mt-1.5 inline-flex max-w-[220px] -translate-x-1/2 items-center gap-1 rounded-full px-2.5 py-0.5 text-[12.5px] font-semibold whitespace-nowrap shadow-raised',
+          'absolute top-full left-1/2 mt-1.5 inline-flex max-w-[260px] -translate-x-1/2 items-center gap-1 rounded-full px-2.5 py-0.5 text-[12.5px] font-semibold whitespace-nowrap shadow-raised',
           confirmed ? 'bg-action text-on-action' : 'bg-white text-[#20242b]',
         )}
       >
-        {confirmed ? <CircleCheck className="size-3.5 shrink-0" aria-hidden /> : <ScanFace className="size-3.5 shrink-0" aria-hidden />}
-        <span className="truncate">{confirmed ? `${face.person?.displayName} · ยืนยันแล้ว` : 'ยังไม่ทราบชื่อ'}</span>
+        {confirmed ? (
+          <CircleCheck className="size-3.5 shrink-0" aria-hidden />
+        ) : suggestion ? (
+          suggestion.level === 'close' ? (
+            <Sparkles className="size-3.5 shrink-0 text-[#b54708]" aria-hidden />
+          ) : (
+            <CircleHelp className="size-3.5 shrink-0 text-[#b54708]" aria-hidden />
+          )
+        ) : (
+          <ScanFace className="size-3.5 shrink-0" aria-hidden />
+        )}
+        <span className="truncate">{label}</span>
       </span>
     </button>
+  );
+  if (confirmed) return frame;
+  return (
+    <Popover open={naming && !inert} onOpenChange={onNamingChange}>
+      <PopoverAnchor asChild>{frame}</PopoverAnchor>
+      <PopoverContent side="right" align="start" onPointerDown={(event) => event.stopPropagation()} aria-label="ใบหน้านี้คือใคร" data-testid="face-name-popover">
+        <p className="border-b border-line px-3 pt-2.5 pb-2 text-sm font-bold text-ink">ใบหน้านี้คือใคร</p>
+        {suggestion && (
+          <div className="border-b border-line px-3 py-2.5">
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px] text-ink">
+              <span>
+                AI เสนอ: <span className="font-bold">{suggestion.person.displayName}</span>
+              </span>
+              <LevelBadge level={suggestion.level} />
+            </p>
+            <div className="mt-2 flex gap-2">
+              <Button size="sm" variant="primary" icon={<CircleCheck className="size-3.5" aria-hidden />} disabled={busy} onClick={onConfirmSuggestion} data-testid="face-suggestion-yes">
+                ใช่ {suggestion.person.displayName}
+              </Button>
+              <Button size="sm" variant="danger" icon={<X className="size-3.5" aria-hidden />} disabled={busy} onClick={onRejectSuggestion} data-testid="face-suggestion-no">
+                ไม่ใช่
+              </Button>
+            </div>
+          </div>
+        )}
+        <PersonPicker busy={busy} excludeIds={suggestion ? [suggestion.person.id] : []} onPick={onPick} placeholder={suggestion ? 'เป็นคนอื่น — พิมพ์ชื่อเพื่อค้นหาหรือสร้าง' : undefined} />
+      </PopoverContent>
+    </Popover>
   );
 }

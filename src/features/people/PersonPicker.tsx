@@ -64,7 +64,7 @@ export function PersonPicker({ onPick, excludeIds = [], allowCreate = true, busy
             onSelect={() => onPick({ kind: 'existing', person })}
             className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-1.5 data-[disabled=true]:opacity-50 data-[selected=true]:bg-selected"
           >
-            <FaceAvatar faceId={person.coverFaceId} name={person.displayName} decorative className="size-9" />
+            <FaceAvatar asset={person.coverAsset} name={person.displayName} decorative className="size-9" />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-semibold text-ink">{person.displayName}</span>
               <span className="block truncate text-[12.5px] text-muted">

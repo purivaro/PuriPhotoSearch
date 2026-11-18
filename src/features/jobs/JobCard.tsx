@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { toast } from 'sonner';
-import { ChevronDown, CircleCheck, FileText, FolderOpen, History, Pause, Play, RotateCcw, Square, TriangleAlert, Upload } from 'lucide-react';
+import { ChevronDown, CircleCheck, Download, FileText, FolderOpen, History, Pause, Play, RotateCcw, Square, TriangleAlert, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog, Dialog } from '@/components/ui/Dialog';
 import { ErrorState, LoadingBlock, ProgressBar, StatusBadge } from '@/components/ui/Feedback';
@@ -40,7 +40,8 @@ export function JobCard({ job, defaultExpanded = false }: { job: JobSnapshot; de
   const finished = FINISHED.includes(job.state);
   const active = isJobActive(job);
   const processed = job.counts.done + job.counts.failed + job.counts.skipped;
-  const KindIcon = job.kind === 'export' ? Upload : FolderOpen;
+  const KindIcon = job.kind === 'export' ? Upload : job.kind === 'model' ? Download : FolderOpen;
+  const isModel = job.kind === 'model';
 
   return (
     <li data-testid="job-card" data-job-id={job.id} data-job-state={job.state} className="rounded-card border border-line bg-surface shadow-card">
@@ -75,7 +76,12 @@ export function JobCard({ job, defaultExpanded = false }: { job: JobSnapshot; de
                 <span className="font-semibold text-ink">{jobProgressText(job)}</span>
                 {job.counts.failed > 0 && <span className="text-warn">ผิดพลาด {formatCount(job.counts.failed)}</span>}
               </div>
-              <ProgressBar value={processed} max={job.counts.total} indeterminate={!job.totalKnown && job.state === 'running'} label={`ความคืบหน้าของ ${job.title}`} />
+              <ProgressBar
+                value={processed}
+                max={job.counts.total}
+                indeterminate={(!job.totalKnown || (isModel && job.stage === 'verify')) && job.state === 'running'}
+                label={`ความคืบหน้าของ ${job.title}`}
+              />
             </div>
           )}
           {job.state === 'blocked' && job.blockedReason && <p className="mt-2 text-sm text-warn">{job.blockedReason}</p>}
@@ -130,10 +136,14 @@ export function JobCard({ job, defaultExpanded = false }: { job: JobSnapshot; de
       <ConfirmDialog
         open={confirmCancel}
         onOpenChange={setConfirmCancel}
-        title="ยกเลิกส่วนที่เหลือ?"
-        description="ข้อมูลที่ทำสำเร็จแล้วจะยังอยู่ การยกเลิกงานไม่ใช่การนำกิจกรรมออกจากคลัง และรูปต้นฉบับไม่ถูกแก้ไข"
-        confirmLabel="ยกเลิกส่วนที่เหลือ"
-        cancelLabel="ทำงานต่อ"
+        title={isModel ? 'ยกเลิกการดาวน์โหลด?' : 'ยกเลิกส่วนที่เหลือ?'}
+        description={
+          isModel
+            ? 'ตัววิเคราะห์ใบหน้าจะยังไม่ถูกติดตั้ง กดดาวน์โหลดใหม่ได้ภายหลัง รูปและชื่อบุคคลในคลังไม่กระทบ'
+            : 'ข้อมูลที่ทำสำเร็จแล้วจะยังอยู่ การยกเลิกงานไม่ใช่การนำกิจกรรมออกจากคลัง และรูปต้นฉบับไม่ถูกแก้ไข'
+        }
+        confirmLabel={isModel ? 'ยกเลิกการดาวน์โหลด' : 'ยกเลิกส่วนที่เหลือ'}
+        cancelLabel={isModel ? 'ดาวน์โหลดต่อ' : 'ทำงานต่อ'}
         tone="danger"
         busy={controls.cancel.isPending}
         onConfirm={() => controls.cancel.mutate(undefined, { onSettled: () => setConfirmCancel(false) })}
@@ -187,7 +197,9 @@ export function JobStrip({ job }: { job: JobSnapshot }) {
       <div className="min-w-[140px] flex-1">
         <ProgressBar value={processed} max={job.counts.total} indeterminate={!job.totalKnown && job.state === 'running'} label={`ความคืบหน้าของ ${job.title}`} />
       </div>
-      <p className="shrink-0 text-[13.5px] text-muted">{job.state === 'pausing' ? 'กำลังหยุดหลังรายการปัจจุบัน' : 'ใช้งานรูปที่พร้อมได้ทันที'}</p>
+      <p className="shrink-0 text-[13.5px] text-muted">
+        {job.state === 'pausing' ? 'กำลังหยุดหลังรายการปัจจุบัน' : job.kind === 'model' ? 'ระหว่างนี้ใช้แอปได้ตามปกติ' : 'ใช้งานรูปที่พร้อมได้ทันที'}
+      </p>
       <Link
         to={`/activity?job=${job.id}`}
         className="inline-flex h-8 shrink-0 items-center rounded-lg border border-action/60 bg-surface px-3.5 text-[13px] font-semibold text-action hover:bg-brand-soft"

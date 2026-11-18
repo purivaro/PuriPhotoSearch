@@ -2,7 +2,9 @@ import { NavLink } from 'react-router';
 import { Folder, HardDrive, House, PanelLeft, ScanFace, Search, Settings, Users, type LucideIcon } from 'lucide-react';
 import { Tooltip } from '@/components/ui/Overlay';
 import { cn } from '@/lib/cn';
+import { formatCount } from '@/lib/format';
 import { isTauri } from '@/lib/ipc/client';
+import { useSummary } from '@/lib/queries';
 import { useSettings } from '@/stores/settings';
 import { Wordmark } from './Logo';
 import { useBackgroundLocation } from './navigation';
@@ -29,6 +31,8 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
   // เมนูที่เลือกตามหน้าที่มาจริง แม้เปิดตัวดูภาพหรือ dialog ทับอยู่
   const background = useBackgroundLocation();
   const setCollapsed = useSettings((s) => s.setSidebarCollapsed);
+  // ใบหน้าที่ตรวจพบแล้วแต่ยังไม่มีชื่อที่ยืนยัน — ตัวเลขจริงจากคลัง ซ่อนเมื่อไม่มี
+  const unnamed = useSummary().data?.unnamedFaceCount ?? 0;
 
   return (
     <nav
@@ -72,26 +76,37 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
         )}
         {NAV.map((item) => {
           const active = [item.to, ...(item.also ?? [])].some((p) => background.pathname === p || background.pathname.startsWith(`${p}/`));
+          const badge = item.to === '/review' && unnamed > 0 ? unnamed : 0;
           const link = (
             <NavLink
               to={item.to}
               data-testid={item.testId}
               aria-current={active ? 'page' : undefined}
-              aria-label={collapsed ? item.label : undefined}
+              aria-label={collapsed ? (badge ? `${item.label} — รอตรวจ ${formatCount(badge)} ใบหน้า` : item.label) : undefined}
               className={cn(
-                'flex h-11 items-center rounded-control text-[15px] font-semibold transition-colors',
+                'relative flex h-11 items-center rounded-control text-[15px] font-semibold transition-colors',
                 collapsed ? 'justify-center' : 'gap-3 px-3',
                 active ? 'bg-selected text-action' : 'text-ink hover:bg-sunken',
               )}
             >
               <item.icon className="size-[22px] shrink-0" strokeWidth={active ? 2.3 : 1.9} aria-hidden />
-              {!collapsed && <span className="truncate">{item.label}</span>}
+              {!collapsed && <span className="min-w-0 flex-1 truncate">{item.label}</span>}
+              {badge > 0 &&
+                (collapsed ? (
+                  <span className="absolute top-1.5 right-2 size-2.5 rounded-full bg-brand ring-2 ring-surface" aria-hidden />
+                ) : (
+                  <span className="shrink-0 rounded-full bg-sunken px-2 py-0.5 text-[12.5px] font-bold text-ink" data-testid="nav-review-badge">
+                    <span className="sr-only">รอตรวจ </span>
+                    {formatCount(badge)}
+                    <span className="sr-only"> ใบหน้า</span>
+                  </span>
+                ))}
             </NavLink>
           );
           return (
             <li key={item.to}>
               {collapsed ? (
-                <Tooltip label={item.label} side="right">
+                <Tooltip label={badge ? `${item.label} · รอตรวจ ${formatCount(badge)} ใบหน้า` : item.label} side="right">
                   {link}
                 </Tooltip>
               ) : (

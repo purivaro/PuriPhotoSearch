@@ -195,7 +195,7 @@ function PersonForm({
     >
       {person && (
         <div className="flex items-center gap-3 rounded-xl bg-sunken px-3 py-2.5">
-          <FaceAvatar faceId={person.coverFaceId} name={person.displayName} shape="rounded" decorative className="size-12" />
+          <FaceAvatar asset={person.coverAsset} name={person.displayName} shape="rounded" decorative className="size-12" />
           <p className="text-[13.5px] text-muted">
             แก้ชื่อหรือข้อมูลแล้ว รูปและใบหน้าที่ยืนยันไว้ยังผูกกับบุคคลนี้เหมือนเดิม
           </p>
@@ -225,7 +225,7 @@ function PersonForm({
           <ul className="space-y-1">
             {sameName.slice(0, 3).map((p) => (
               <li key={p.id} className="flex items-center gap-2">
-                <FaceAvatar faceId={p.coverFaceId} name={p.displayName} decorative className="size-7" />
+                <FaceAvatar asset={p.coverAsset} name={p.displayName} decorative className="size-7" />
                 <span className="min-w-0 flex-1 truncate">
                   {p.displayName}
                   {p.nickname ? ` (${p.nickname})` : ''} · {p.confirmedPhotoCount} รูป

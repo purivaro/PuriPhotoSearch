@@ -22,11 +22,13 @@ export const qk = {
   jobsAll: ['jobs', 'all'] as const,
   job: (id: Id) => ['jobs', 'detail', id] as const,
   jobErrors: (id: Id) => ['jobs', 'errors', id] as const,
+  reviewOverview: (eventId: Id | null) => ['review', 'overview', eventId ?? ''] as const,
+  reviewFaces: (kind: 'person' | 'cluster', id: Id, eventId: Id | null, revision: number) => ['review', 'faces', kind, id, eventId ?? '', revision] as const,
 };
 
 /** หลังแก้ข้อมูลบุคคล/ใบหน้า: จำนวนรูปและรายชื่อในทุกหน้าต้องตามให้ทัน */
 export function invalidatePeopleData(qc: QueryClient) {
-  for (const key of [['people'], ['photos'], ['photo'], ['events'], ['summary'], ['groups']]) {
+  for (const key of [['people'], ['photos'], ['photo'], ['events'], ['summary'], ['groups'], ['review']]) {
     void qc.invalidateQueries({ queryKey: key });
   }
 }
@@ -139,6 +141,9 @@ export function useJobWatcher() {
     void qc.invalidateQueries({ queryKey: qk.jobsAll });
     void qc.invalidateQueries({ queryKey: ['jobs', 'detail'] });
     const finished = activeIds !== lastActiveIds.current;
+    // งานดาวน์โหลดตัววิเคราะห์ใบหน้าเริ่ม/จบ → สถานะ AI เปลี่ยน; งานจบ → คิวตรวจสอบใบหน้าอาจมีรายการใหม่
+    // (คิวตรวจสอบใบหน้าไม่ถูกโหลดใหม่เองที่นี่: หน้านั้นแจ้งผู้ใช้แล้วให้กดอัปเดต เพื่อไม่สลับรายการที่กำลังตรวจอยู่)
+    if (finished || data.some((j) => j.kind === 'model')) void qc.invalidateQueries({ queryKey: qk.capabilities });
     lastActiveIds.current = activeIds;
     const now = Date.now();
     if (finished || now - lastPhotoRefresh.current > 3000) {
@@ -155,6 +160,9 @@ export function useJobWatcher() {
         if (scope === 'photos') {
           void qc.invalidateQueries({ queryKey: ['photos'] });
           void qc.invalidateQueries({ queryKey: ['photo'] });
+        } else if (scope === 'people') {
+          void qc.invalidateQueries({ queryKey: ['people'] });
+          void qc.invalidateQueries({ queryKey: ['review'] });
         } else {
           void qc.invalidateQueries({ queryKey: [scope] });
         }
