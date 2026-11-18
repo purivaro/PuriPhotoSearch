@@ -381,13 +381,21 @@ fn iou(a: &BBox, b: &BBox) -> f64 {
 
 /// บันทึกผลวิเคราะห์ของ revision หนึ่ง: ใบหน้าที่ตรงกับกรอบที่ผู้ใช้วาดไว้แล้วได้เวกเตอร์เพิ่ม (ไม่สร้างกรอบซ้ำ
 /// และไม่แตะคำยืนยัน) ที่เหลือเป็นใบหน้าใหม่แบบ origin = detector
-pub(crate) fn save_analysis(conn: &Connection, revision_id: &str, space: &str, faces: &[DetectedFace]) -> Result<()> {
+/// `crops` (ลำดับเดียวกับ `faces`; ว่างได้) คือภาพครอปที่ทำไว้ตอนวิเคราะห์ เก็บลง cache ให้คิวตรวจสอบแสดงได้ทันที
+pub(crate) fn save_analysis(
+    conn: &Connection,
+    cache_dir: &Path,
+    revision_id: &str,
+    space: &str,
+    faces: &[DetectedFace],
+    crops: &[Vec<u8>],
+) -> Result<()> {
     let existing: Vec<(String, BBox)> = conn
         .prepare("SELECT id, bbox_x, bbox_y, bbox_w, bbox_h FROM faces WHERE photo_revision_id = ?1 AND status <> 'superseded'")?
         .query_map([revision_id], |r| Ok((r.get(0)?, BBox { x: r.get(1)?, y: r.get(2)?, w: r.get(3)?, h: r.get(4)? })))?
         .collect::<rusqlite::Result<_>>()?;
     let now = util::now();
-    for face in faces {
+    for (i, face) in faces.iter().enumerate() {
         let b = face.bbox;
         if !(b.w > 0.0 && b.h > 0.0) {
             continue;
@@ -401,6 +409,10 @@ pub(crate) fn save_analysis(conn: &Connection, revision_id: &str, space: &str, f
                      VALUES (?1, ?2, 'detector', ?3, ?4, ?5, ?6, ?7, ?8)",
                     params![id, revision_id, b.x, b.y, b.w, b.h, face.score, now],
                 )?;
+                // cache เป็นของที่สร้างใหม่ได้: เขียนไม่สำเร็จไม่ถือว่าวิเคราะห์ล้มเหลว (ครอปจะถูกสร้างตอนถูกขอ)
+                if let Some(crop) = crops.get(i) {
+                    let _ = crate::media::write_cache_file(&crate::face_crop_path(cache_dir, &id), crop);
+                }
                 id
             }
         };

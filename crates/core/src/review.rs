@@ -163,6 +163,7 @@ pub fn suggestions_for_revision(
 /// ผลจัดคิวที่คำนวณไว้ของ identity revision หนึ่ง; `get_review_faces` อ่านจากที่นี่
 pub struct ReviewData {
     revision: i64,
+    decisions: i64,
     event_id: Option<String>,
     unnamed: usize,
     suggested: Vec<(String, Vec<(String, &'static str)>)>,
@@ -183,6 +184,7 @@ fn compute(app: &App, conn: &Connection, event_id: Option<&str>) -> Result<Revie
     )?;
     let mut data = ReviewData {
         revision,
+        decisions: db::decision_revision(conn)?,
         event_id: event_id.map(str::to_string),
         unnamed: unnamed_total as usize,
         suggested: vec![],
@@ -359,9 +361,17 @@ pub fn group_faces(
     event_id: Option<&str>,
     review_revision: i64,
 ) -> Result<ReviewGroupFaces> {
-    let data = current(app, event_id)?;
     let stale = || AppError::new("PREVIEW_STALE", "รายการตรวจสอบเปลี่ยนไปแล้ว กำลังโหลดรายการล่าสุด").next("refresh_preview");
-    if data.revision != review_revision {
+    // เสิร์ฟจากคิวที่ออกไปแล้วเท่านั้น (ไม่คิดใหม่): ใบหน้าที่เพิ่งวิเคราะห์เสร็จไม่ทำให้รายการที่ผู้ใช้ดูอยู่เก่า
+    // มีแต่การตัดสินของผู้ใช้ที่ทำให้เก่า เพราะสมาชิกของกลุ่มเปลี่ยนจริง
+    let data = app
+        .review_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .filter(|d| d.revision == review_revision && d.event_id.as_deref() == event_id)
+        .ok_or_else(stale)?;
+    if db::decision_revision(&app.db())? != data.decisions {
         return Err(stale());
     }
     let members: Vec<(String, Option<&'static str>)> = match kind {
@@ -418,7 +428,7 @@ pub fn reject(app: &App, face_ids: &[String], person_id: &str) -> Result<i64> {
             "INSERT INTO operations(id, kind, summary, created_at) VALUES (?1, 'reject_suggestions', ?2, ?3)",
             params![util::new_id(), serde_json::json!({ "faceIds": face_ids, "personId": person_id }).to_string(), now],
         )?;
-        db::bump_identity(&tx)?;
+        db::bump_decision(&tx)?;
         let revision = db::bump_revision(&tx)?;
         tx.commit()?;
         revision

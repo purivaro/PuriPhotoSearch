@@ -106,11 +106,28 @@ pub fn identity_revision(conn: &Connection) -> Result<i64> {
     Ok(meta_get(conn, "identity_revision")?.and_then(|v| v.parse().ok()).unwrap_or(1))
 }
 
-pub fn bump_identity(conn: &Connection) -> Result<()> {
+fn bump_meta(conn: &Connection, key: &str) -> Result<()> {
     conn.execute(
-        "INSERT INTO meta(key, value) VALUES ('identity_revision', '2')
+        "INSERT INTO meta(key, value) VALUES (?1, '2')
          ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
-        [],
+        [key],
     )?;
     Ok(())
+}
+
+/// มีใบหน้าหรือเวกเตอร์ใหม่ (ความคืบหน้าของการวิเคราะห์): คิวตรวจสอบรอบถัดไปต้องคิดใหม่
+/// แต่รายการที่ผู้ใช้เปิดดูอยู่ยังใช้ได้ — ไม่มีใบไหนในนั้นเปลี่ยนสถานะ
+pub fn bump_identity(conn: &Connection) -> Result<()> {
+    bump_meta(conn, "identity_revision")
+}
+
+/// ตัวนับเฉพาะ "การตัดสิน": ยืนยัน เพิกถอน ปฏิเสธข้อเสนอ ไม่ใช่ใบหน้า เก็บ/คืนบุคคล
+/// รายการตรวจสอบที่ออกไปก่อนค่านี้เปลี่ยนถือว่าเก่า (`PREVIEW_STALE`)
+pub fn decision_revision(conn: &Connection) -> Result<i64> {
+    Ok(meta_get(conn, "decision_revision")?.and_then(|v| v.parse().ok()).unwrap_or(1))
+}
+
+pub fn bump_decision(conn: &Connection) -> Result<()> {
+    bump_meta(conn, "decision_revision")?;
+    bump_identity(conn)
 }

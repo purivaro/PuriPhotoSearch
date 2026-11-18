@@ -386,7 +386,8 @@ pub fn set_archived(app: &App, person_id: &str, archived: bool) -> Result<Person
             "UPDATE persons SET catalog_state = ?2, record_version = record_version + 1 WHERE id = ?1",
             params![person_id, if archived { "archived" } else { "active" }],
         )?;
-        Ok(())
+        // บุคคลที่เก็บแล้วต้องไม่ถูกเสนอชื่อ: คิวตรวจสอบที่ออกไปแล้วใช้ไม่ได้
+        db::bump_decision(conn)
     })
 }
 

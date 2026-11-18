@@ -223,7 +223,7 @@ pub fn create_manual(app: &App, a: CreateManualArgs) -> Result<FaceMutationResul
         )?;
         assign_one(&tx, &face_id, &person_id, "user_manual", &op)?;
         remember(&tx, &a.request_id, "create_manual_face", &(op.clone(), revision_id.clone()))?;
-        db::bump_identity(&tx)?;
+        db::bump_decision(&tx)?;
         db::bump_revision(&tx)?;
         tx.commit()?;
         result_for(app, &conn, op, &[revision_id], created)?
@@ -277,7 +277,7 @@ pub fn assign(app: &App, a: AssignArgs) -> Result<FaceMutationResult> {
             assign_one(&tx, face_id, &person_id, "user_confirmed", &op)?;
         }
         remember(&tx, &a.request_id, "assign_faces", &(op.clone(), revs.clone()))?;
-        db::bump_identity(&tx)?;
+        db::bump_decision(&tx)?;
         db::bump_revision(&tx)?;
         tx.commit()?;
         result_for(app, &conn, op, &revs, created)?
@@ -305,7 +305,7 @@ fn revoke(app: &App, face_ids: &[String], kind: &str, ignore: bool) -> Result<Fa
                 params![face_id, status],
             )?;
         }
-        db::bump_identity(&tx)?;
+        db::bump_decision(&tx)?;
         db::bump_revision(&tx)?;
         tx.commit()?;
         result_for(app, &conn, op, &revs, None)?

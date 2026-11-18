@@ -515,9 +515,14 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
                             done += 1;
                         }
                         match &prepared.faces {
-                            Some(Ok(found)) if current => {
-                                crate::ai::save_analysis(conn, &item.revision_id, space, found)?
-                            }
+                            Some(Ok(found)) if current => crate::ai::save_analysis(
+                                conn,
+                                cache_dir,
+                                &item.revision_id,
+                                space,
+                                found,
+                                &prepared.crops,
+                            )?,
                             Some(Err(e)) if current => {
                                 // วิเคราะห์ใบหน้าไม่สำเร็จ ≠ ไม่มีใบหน้า: บันทึกเป็นข้อผิดพลาด รูปยังดูได้ตามปกติ
                                 conn.execute(
@@ -706,6 +711,8 @@ fn register_file(
 struct Prepared {
     processed: Option<media::Processed>,
     faces: Option<Result<Vec<crate::ai::DetectedFace>>>,
+    /// ภาพครอปของ `faces` ตามลำดับ; ว่างเมื่อไม่พบใบหน้าหรือทำครอปไม่ได้
+    crops: Vec<Vec<u8>>,
 }
 
 /// อ่านไฟล์หนึ่งรูปครั้งเดียว แล้วสร้างภาพย่อและ/หรือวิเคราะห์ใบหน้า;
@@ -731,7 +738,15 @@ fn prepare_photo(
         Some(a) if item.need_faces => Some(a.analyze(&bytes)),
         _ => None,
     };
-    Ok(Prepared { processed, faces })
+    // ทำครอปตอนที่ไฟล์ยังอยู่ในมือ (ถอดรหัสครั้งเดียวต่อรูป): คิวตรวจสอบใบหน้าไม่ต้องเปิดต้นฉบับทีละใบอีก
+    let crops = match &faces {
+        Some(Ok(found)) => {
+            let boxes: Vec<_> = found.iter().map(|f| (f.bbox.x, f.bbox.y, f.bbox.w, f.bbox.h)).collect();
+            media::face_crops(&bytes, &boxes, false).unwrap_or_default()
+        }
+        _ => vec![],
+    };
+    Ok(Prepared { processed, faces, crops })
 }
 
 /// งานเบา ๆ ตอน worker ว่าง: สร้างเวกเตอร์ให้ใบหน้าตัวอย่างที่นำเข้าไว้ เมื่อโมเดลพร้อม; คืน true ถ้ายังมีงานเหลือ

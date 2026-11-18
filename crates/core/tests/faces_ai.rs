@@ -200,6 +200,69 @@ fn suggestions_are_never_confirmations_and_review_acts_only_on_selected_faces() 
     assert_eq!(lib.call("get_library_summary", json!({}))["unnamedFaceCount"], 2, "เหลือ B สองใบ");
 }
 
+/// ระหว่างที่งานวิเคราะห์ยังวิ่ง (มีใบหน้าใหม่เข้ามาเรื่อย ๆ) รายการที่ผู้ใช้เปิดดูอยู่ต้องยังใช้ได้
+/// มีแต่การตัดสินของผู้ใช้ที่ทำให้รายการนั้นเก่า
+#[test]
+fn review_list_stays_usable_while_analysis_adds_faces() {
+    let lib = Lib::with_ai();
+    party(&lib);
+    lib.install_model();
+    let overview = lib.call("get_review_overview", json!({}));
+    let cluster = overview["clusters"][0]["clusterId"].clone();
+    let args = json!({ "kind": "cluster", "id": cluster, "reviewRevision": overview["reviewRevision"] });
+    assert_eq!(lib.call("get_review_faces", args.clone())["total"], 3);
+
+    // รูปใหม่ของคนกลุ่มเดียวกันถูกวิเคราะห์เสร็จหลังจากคิวออกไปแล้ว
+    let root = lib.photos().join("2026-11-19 งานที่สอง");
+    write_jpeg(&root.join("a4.jpg"), 40);
+    write_jpeg(&root.join("d1.jpg"), 160);
+    lib.import(&root, "single_event", |_| true);
+    assert_eq!(lib.call("get_library_summary", json!({}))["unnamedFaceCount"], 8);
+
+    let listed = lib.call("get_review_faces", args.clone());
+    assert_eq!(
+        (listed["total"].as_i64(), listed["reviewRevision"].as_i64()),
+        (Some(3), overview["reviewRevision"].as_i64())
+    );
+
+    // คิวรอบถัดไปเห็นใบหน้าใหม่ และรายการของรอบก่อนใช้ไม่ได้แล้ว (คิวเดียวต่อครั้ง)
+    let next = lib.call("get_review_overview", json!({}));
+    assert_ne!(next["reviewRevision"], overview["reviewRevision"]);
+    assert_eq!((next["unnamedFaceCount"].as_i64(), next["clusters"][0]["faceCount"].as_i64()), (Some(8), Some(4)));
+    assert_eq!(lib.try_call("get_review_faces", args).unwrap_err().code, "PREVIEW_STALE");
+
+    // เก็บบุคคลออกจากรายชื่อ = การตัดสิน: ข้อเสนอของคนนั้นหายจากคิว และรายการเดิมเก่า
+    let a1 = faces_of(&lib, "a1.jpg");
+    let named =
+        lib.call("assign_faces", json!({ "requestId": new_id(), "faceIds": [a1[0]["id"]], "newPersonName": "คุณกานต์" }));
+    let kan = named["createdPerson"]["id"].clone();
+    let with_kan = lib.call("get_review_overview", json!({}));
+    assert_eq!(with_kan["suggested"][0]["faceCount"], 3);
+    let args = json!({ "kind": "person", "id": kan, "reviewRevision": with_kan["reviewRevision"] });
+    lib.call("get_review_faces", args.clone());
+    lib.call("set_person_archived", json!({ "personId": kan, "archived": true }));
+    assert_eq!(lib.try_call("get_review_faces", args).unwrap_err().code, "PREVIEW_STALE");
+    assert_eq!(arr(&lib.call("get_review_overview", json!({}))["suggested"]).len(), 0);
+}
+
+/// ครอปใบหน้าถูกทำตอนวิเคราะห์: คิวตรวจสอบไม่ต้องเปิดต้นฉบับทีละใบ และยังแสดงได้เมื่อไดรฟ์รูปไม่ได้ต่ออยู่
+#[test]
+fn face_crops_are_ready_after_analysis_without_reopening_originals() {
+    let lib = Lib::with_ai();
+    party(&lib);
+    lib.install_model();
+    let crops = std::fs::read_dir(lib.app.cache_dir.join("faces")).unwrap().count();
+    assert_eq!(crops, 6, "หนึ่งไฟล์ต่อใบหน้าที่ตรวจพบ ก่อนมีใครขอดู");
+
+    let a1 = faces_of(&lib, "a1.jpg");
+    let id = a1[0]["id"].as_str().unwrap();
+    assert!(lib.app.face_crop_path(id).is_file());
+    std::fs::rename(lib.photos(), lib.photos().with_extension("unplugged")).unwrap();
+    let crop = puri_core::api::asset(&lib.app, &format!("face/{id}")).unwrap();
+    let img = image::load_from_memory(&crop.bytes).unwrap();
+    assert_eq!((img.width(), crop.mime), (img.height(), "image/jpeg"), "ครอปเป็นสี่เหลี่ยมจัตุรัส");
+}
+
 #[test]
 fn manual_labels_survive_analysis_and_gain_an_embedding() {
     let lib = Lib::with_ai();

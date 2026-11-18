@@ -132,7 +132,7 @@ impl App {
     }
 
     pub fn face_crop_path(&self, face_id: &str) -> PathBuf {
-        self.cache_dir.join("faces").join(format!("{face_id}.jpg"))
+        face_crop_path(&self.cache_dir, face_id)
     }
 }
 
@@ -146,4 +146,9 @@ impl Drop for App {
 pub fn thumb_path(cache_dir: &Path, revision_id: &str) -> PathBuf {
     let shard = revision_id.get(revision_id.len().saturating_sub(2)..).unwrap_or("00");
     cache_dir.join("thumbs").join(shard).join(format!("{revision_id}.jpg"))
+}
+
+/// ตำแหน่งภาพครอปของใบหน้า; ผูกกับ face ID ซึ่งไม่ถูกใช้ซ้ำ จึงไม่มีวันเก่า
+pub fn face_crop_path(cache_dir: &Path, face_id: &str) -> PathBuf {
+    cache_dir.join("faces").join(format!("{face_id}.jpg"))
 }
