@@ -69,6 +69,11 @@ export interface Capabilities {
     available: boolean;
     reason: string;
   };
+  /** ติดตามรูปใหม่ในโฟลเดอร์ที่เชื่อมแล้วโดยอัตโนมัติ — false ในชุดงานนี้: ต้องกด "ตรวจรูปใหม่" เอง */
+  folderWatch: {
+    available: boolean;
+    reason: string;
+  };
   /** 'native' ในแอปจริง, 'dev_path_input' เมื่อรัน UI ในเบราว์เซอร์ผ่าน dev bridge */
   folderPicker: 'native' | 'dev_path_input';
   libraryPath: string;
@@ -223,6 +228,7 @@ export interface PhotoResult {
   /** เวลาท้องถิ่นจาก EXIF แบบ `YYYY-MM-DDTHH:MM:SS` (ไม่มี timezone) หรือ null */
   takenAt: string | null;
   takenSource: 'exif' | 'none';
+  /** ขนาดภาพหลังหมุนตาม EXIF แล้ว (ตรงกับที่ผู้ใช้เห็น); 0 เมื่อยังเตรียมข้อมูลรูปไม่เสร็จ */
   width: number;
   height: number;
   thumbStatus: 'ready' | 'pending' | 'failed';
@@ -537,6 +543,8 @@ export interface Commands {
   preview_export: [{ selection: SelectionSpec; destination: string }, ExportPlan];
   start_export: [{ planId: Id; requestId: Id }, JobSnapshot];
   get_export_report: [{ jobId: Id }, ExportReport];
+  /** แสดงโฟลเดอร์ปลายทางของงานส่งออกในตัวจัดการไฟล์ */
+  reveal_export_destination: [{ jobId: Id }, null];
 
   preview_legacy_import: [{ path?: string }, LegacyReport];
 }

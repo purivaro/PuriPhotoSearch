@@ -1,0 +1,241 @@
+@import "tailwindcss";
+@import "@fontsource-variable/noto-sans-thai";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ── Design tokens (Blueprint 4.1) ──────────────────────────────────────────
+   ขาว–ส้ม: brand ใช้ตกแต่ง/เน้นพื้นที่ ส่วนตัวอักษรและปุ่มหลักใช้ action ที่เข้มกว่า
+   เพื่อให้ contrast ผ่าน WCAG AA บนพื้นขาว ธีมมืดใช้ token แยก ไม่ invert สีภาพ */
+:root {
+  --canvas: #f7f8fa; /* พื้นหลังหลัก */
+  --surface: #ffffff; /* การ์ด/แผงข้อมูล */
+  --sunken: #f2f4f7; /* hover, ช่องว่างรอภาพ */
+  --ink: #20242b;
+  --muted: #667085;
+  --faint: #98a2b3; /* placeholder/disabled เท่านั้น */
+  --brand: #f47c20;
+  --brand-soft: #fff1e8;
+  --brand-line: #f9c9a3;
+  --action: #b54708; /* ปุ่มหลักตัวอักษรขาว และข้อความสีแบรนด์บนพื้นขาว */
+  --action-hover: #93370d;
+  --on-action: #ffffff;
+  --line: #e4e7ec;
+  --line-strong: #d0d5dd;
+  --ok: #067647;
+  --ok-soft: #ecfdf3;
+  --warn: #93370d;
+  --warn-soft: #fffaeb;
+  --danger: #b42318;
+  --danger-soft: #fef3f2;
+  --info: #175cd3;
+  --info-soft: #eff8ff;
+  --viewer: #15171b; /* พื้นตัวดูภาพ มืดทั้งสองธีม */
+  --scrim: rgba(16, 24, 40, 0.42);
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-raised: 0 4px 14px -4px rgba(16, 24, 40, 0.12), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --shadow-pop: 0 18px 48px -12px rgba(16, 24, 40, 0.28), 0 2px 8px rgba(16, 24, 40, 0.08);
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --canvas: #151618;
+  --surface: #1d1f22;
+  --sunken: #26292d;
+  --ink: #ededee;
+  --muted: #a4a9b3;
+  --faint: #737984;
+  --brand: #ff8a30;
+  --brand-soft: rgba(255, 138, 48, 0.15);
+  --brand-line: rgba(255, 138, 48, 0.42);
+  --action: #ff9a4d;
+  --action-hover: #ffb070;
+  --on-action: #241202;
+  --line: #2f3237;
+  --line-strong: #41454c;
+  --ok: #5bc27a;
+  --ok-soft: rgba(91, 194, 122, 0.15);
+  --warn: #e6b450;
+  --warn-soft: rgba(230, 180, 80, 0.14);
+  --danger: #f2726a;
+  --danger-soft: rgba(242, 114, 106, 0.15);
+  --info: #74a9f7;
+  --info-soft: rgba(116, 169, 247, 0.15);
+  --viewer: #0e0f11;
+  --scrim: rgba(0, 0, 0, 0.58);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-raised: 0 6px 18px -6px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-pop: 0 18px 48px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: "Noto Sans Thai Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-sunken: var(--sunken);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-brand: var(--brand);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-line: var(--brand-line);
+  --color-action: var(--action);
+  --color-action-hover: var(--action-hover);
+  --color-on-action: var(--on-action);
+  --color-selected: var(--brand-soft);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-viewer: var(--viewer);
+  --color-scrim: var(--scrim);
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
+  --shadow-pop: var(--shadow-pop);
+  --radius-card: 14px;
+  --radius-control: 10px;
+}
+
+/* ก่อนสคริปต์ตั้งธีม ให้ตามระบบ จอมืดจะไม่วาบขาว */
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) {
+    background: #151618;
+  }
+}
+
+/* อยู่ใน base layer เพื่อให้ utility ของ component ปิด/ปรับได้ (เช่น ช่องพิมพ์ที่วาด focus เอง) */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 14.5px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow: hidden;
+    cursor: default;
+    overscroll-behavior: none;
+  }
+
+  h1,
+  h2,
+  h3 {
+    line-height: 1.35;
+  }
+
+  button,
+  [role="button"],
+  a,
+  label[for],
+  summary {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+  }
+
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    outline-offset: 0;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--brand) 32%, transparent);
+  }
+}
+
+/* แถบเลื่อนบาง ไม่แย่งความสนใจจากภาพ */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+img {
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+@keyframes puri-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes puri-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes puri-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes puri-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+.anim-fade {
+  animation: puri-fade-in 140ms ease-out;
+}
+.anim-pop {
+  animation: puri-pop-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.anim-slide {
+  animation: puri-slide-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.anim-indeterminate {
+  animation: puri-indeterminate 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* แถบสรุปแบบ sticky ที่เนื้อหาเลื่อนผ่านด้านหลัง: สีแบรนด์อ่อนบนพื้นทึบ (ในธีมมืด --brand-soft โปร่งแสง) */
+.bar-brand {
+  background: linear-gradient(var(--brand-soft), var(--brand-soft)), var(--surface);
+}

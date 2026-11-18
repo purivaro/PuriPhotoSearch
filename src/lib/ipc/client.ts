@@ -95,6 +95,8 @@ export async function onFolderDropped(handler: (path: string) => void): Promise<
   if (!isTauri) return () => {};
   const { getCurrentWebview } = await import('@tauri-apps/api/webview');
   return getCurrentWebview().onDragDropEvent((ev) => {
-    if (ev.payload.type === 'drop' && ev.payload.paths.length > 0) handler(ev.payload.paths[0]);
+    if (ev.payload.type !== 'drop') return;
+    const [first] = ev.payload.paths;
+    if (first) handler(first);
   });
 }

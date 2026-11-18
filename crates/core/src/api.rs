@@ -166,6 +166,10 @@ enum Command {
     GetExportReport {
         job_id: String,
     },
+    #[serde(rename_all = "camelCase")]
+    RevealExportDestination {
+        job_id: String,
+    },
 
     PreviewLegacyImport {
         path: Option<String>,
@@ -218,12 +222,13 @@ pub const COMMAND_NAMES: &[&str] = &[
     "preview_export",
     "start_export",
     "get_export_report",
+    "reveal_export_destination",
     "preview_legacy_import",
 ];
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct FaceAnalysis {
+struct Availability {
     available: bool,
     reason: &'static str,
 }
@@ -232,10 +237,11 @@ struct FaceAnalysis {
 #[serde(rename_all = "camelCase")]
 struct Capabilities {
     app_version: &'static str,
+    folder_watch: Availability,
     schema_version: i64,
     platform: &'static str,
     image_formats: &'static [&'static str],
-    face_analysis: FaceAnalysis,
+    face_analysis: Availability,
     folder_picker: &'static str,
     library_path: String,
     cache_path: String,
@@ -256,9 +262,13 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
             platform: std::env::consts::OS,
             image_formats: media::SUPPORTED_EXTS,
             // ชุดงานนี้ยังไม่มีตัววิเคราะห์ใบหน้าอัตโนมัติ: บอกตามจริง ไม่แสดงผลจำลอง
-            face_analysis: FaceAnalysis {
+            face_analysis: Availability {
                 available: false,
                 reason: "รุ่นนี้ยังไม่มีการวิเคราะห์ใบหน้าอัตโนมัติ ระบุใบหน้าเองได้จากตัวดูภาพ",
+            },
+            folder_watch: Availability {
+                available: false,
+                reason: "รุ่นนี้ยังไม่ติดตามรูปใหม่อัตโนมัติ กด “ตรวจรูปใหม่” ที่กิจกรรมเมื่อเพิ่มรูปในโฟลเดอร์",
             },
             folder_picker: app.folder_picker,
             library_path: app.db_path.to_string_lossy().into_owned(),
@@ -328,6 +338,10 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         PreviewExport { selection, destination } => ok(export::preview(app, &selection, &destination)?),
         StartExport { plan_id, request_id } => ok(export::start(app, &plan_id, &request_id)?),
         GetExportReport { job_id } => ok(export::report(&app.db(), &job_id)?),
+        RevealExportDestination { job_id } => {
+            let destination = export::report(&app.db(), &job_id)?.destination;
+            ok(platform::reveal(Path::new(&destination))?)
+        }
 
         PreviewLegacyImport { path } => ok(legacy::dry_run(path.as_deref())?),
     }

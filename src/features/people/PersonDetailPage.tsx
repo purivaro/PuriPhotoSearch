@@ -1,0 +1,325 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useParams, useSearchParams } from 'react-router';
+import { Archive, ArchiveRestore, Calendar, CircleCheck, EllipsisVertical, Image as ImageIcon, Pencil, Pin, UserRoundSearch } from 'lucide-react';
+import { Page, PageHeader, useDocumentTitle } from '@/app/PageLayout';
+import { Button, IconButton } from '@/components/ui/Button';
+import { ConfirmDialog } from '@/components/ui/Dialog';
+import { EmptyState, ErrorState, InlineNotice, LoadingBlock, StatusBadge } from '@/components/ui/Feedback';
+import { Select, Tabs } from '@/components/ui/Form';
+import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/Overlay';
+import { PhotoResults } from '@/features/photos/PhotoResults';
+import { formatCount, formatThaiDate, isErrorCode } from '@/lib/format';
+import { assetUrl, call } from '@/lib/ipc/client';
+import type { PersonDetail, SearchParams } from '@/lib/ipc/types';
+import { PHOTO_PAGE_SIZE, qk, type PhotoQuery } from '@/lib/queries';
+import { CoappearanceList } from './CoappearanceList';
+import { FaceAvatar } from './FaceAvatar';
+import { PersonEditorDialog } from './PersonEditorDialog';
+import { useSetArchived, useTogglePin } from './usePersonActions';
+
+type PersonTab = 'photos' | 'events' | 'together' | 'info';
+
+/** S09 — รายละเอียดบุคคล: รูปของคนหนึ่งข้ามทุกกิจกรรม */
+export function PersonDetailPage() {
+  const { personId = '' } = useParams();
+  const [params, setParams] = useSearchParams();
+  const qc = useQueryClient();
+  const person = useQuery({ queryKey: qk.person(personId), queryFn: () => call('get_person', { personId }) });
+  const togglePin = useTogglePin();
+  const setArchived = useSetArchived();
+  const [editing, setEditing] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState(false);
+  useDocumentTitle(person.data?.displayName);
+
+  // เปิดหน้านี้โดยเจตนา → บันทึก "เปิดล่าสุด" หนึ่งครั้งต่อคน
+  const recorded = useRef<string | null>(null);
+  useEffect(() => {
+    if (!person.data || recorded.current === personId) return;
+    recorded.current = personId;
+    void call('record_person_view', { personId })
+      .then(() => qc.invalidateQueries({ queryKey: qk.homePeople }))
+      .catch(() => {});
+  }, [person.data, personId, qc]);
+
+  const tab = (params.get('tab') as PersonTab | null) ?? 'photos';
+  const setTab = (value: PersonTab) => {
+    const next = new URLSearchParams(params);
+    if (value === 'photos') next.delete('tab');
+    else next.set('tab', value);
+    setParams(next, { replace: true });
+  };
+
+  if (person.isPending) {
+    return (
+      <Page>
+        <PageHeader breadcrumb={[{ label: 'บุคคล', to: '/people' }, { label: 'กำลังโหลด…' }]} />
+        <LoadingBlock label="กำลังโหลดข้อมูลบุคคล…" />
+      </Page>
+    );
+  }
+  if (person.isError) {
+    return (
+      <Page>
+        <PageHeader breadcrumb={[{ label: 'บุคคล', to: '/people' }, { label: 'เปิดข้อมูลบุคคลไม่ได้' }]} />
+        <ErrorState
+          error={person.error}
+          title={isErrorCode(person.error, 'NOT_FOUND') ? 'ไม่พบบุคคลนี้ในคลัง' : 'โหลดข้อมูลบุคคลไม่สำเร็จ'}
+          onRetry={() => void person.refetch()}
+          extraAction={
+            <Link to="/people" className="inline-flex h-8 items-center rounded-lg border border-line-strong bg-surface px-3 text-[13px] font-semibold text-ink hover:bg-sunken">
+              กลับไปรายชื่อบุคคล
+            </Link>
+          }
+        />
+      </Page>
+    );
+  }
+
+  const data = person.data;
+  return (
+    <Page>
+      <PageHeader breadcrumb={[{ label: 'บุคคล', to: '/people' }, { label: data.displayName }]} />
+
+      <div className="mb-5 flex flex-wrap items-start gap-5">
+        <FaceAvatar faceId={data.coverFaceId} name={data.displayName} shape="rounded" className="size-[128px] rounded-2xl text-5xl" />
+        <div className="min-w-[240px] flex-1">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h1 className="text-[30px] leading-tight font-extrabold tracking-tight text-ink" data-testid="person-name">
+              {data.displayName}
+            </h1>
+            {data.hasConfirmedFaces && (
+              <StatusBadge tone="ok" icon={<CircleCheck aria-hidden />}>
+                ยืนยันแล้ว
+              </StatusBadge>
+            )}
+            {data.archived && <StatusBadge tone="neutral">เก็บไว้</StatusBadge>}
+          </div>
+          {(data.nickname || data.aliases.length > 0) && (
+            <p className="mt-0.5 text-[15px] text-muted">{[data.nickname, ...data.aliases].filter(Boolean).join(' · ')}</p>
+          )}
+          <p className="mt-1.5 text-[16px] text-ink" data-testid="person-counts">
+            <span className="font-bold">{formatCount(data.confirmedPhotoCount)}</span> รูปที่ยืนยันแล้ว · <span className="font-bold">{formatCount(data.confirmedEventCount)}</span> กิจกรรม
+          </p>
+          {data.groups.length > 0 && (
+            <ul className="mt-2 flex flex-wrap gap-1.5" aria-label="กลุ่ม">
+              {data.groups.map((group) => (
+                <li key={group.id} className="rounded-full bg-brand-soft px-3 py-0.5 text-[13px] font-semibold text-action">
+                  {group.name}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2.5">
+          <Button
+            icon={<Pin className="size-[18px]" fill={data.pinned ? 'currentColor' : 'none'} aria-hidden />}
+            variant={data.pinned ? 'outline' : 'secondary'}
+            aria-pressed={data.pinned}
+            busy={togglePin.isPending}
+            onClick={() => togglePin.mutate(data)}
+            data-testid="person-detail-pin"
+          >
+            {data.pinned ? 'ปักหมุดอยู่' : 'ปักหมุด'}
+          </Button>
+          <Button icon={<Pencil className="size-4" aria-hidden />} onClick={() => setEditing(true)} data-testid="person-edit">
+            แก้ไขข้อมูล
+          </Button>
+          <Menu>
+            <MenuTrigger asChild>
+              <IconButton label="คำสั่งเพิ่มเติมของบุคคลนี้" className="border border-line-strong bg-surface shadow-card">
+                <EllipsisVertical className="size-[18px]" aria-hidden />
+              </IconButton>
+            </MenuTrigger>
+            <MenuContent>
+              {data.archived ? (
+                <MenuItem icon={<ArchiveRestore />} onSelect={() => setArchived.mutate({ personId: data.id, archived: false })}>
+                  นำกลับมาในรายชื่อหลัก
+                </MenuItem>
+              ) : (
+                <MenuItem icon={<Archive />} onSelect={() => setConfirmArchive(true)}>
+                  เก็บออกจากรายชื่อหลัก
+                </MenuItem>
+              )}
+            </MenuContent>
+          </Menu>
+        </div>
+      </div>
+
+      <Tabs<PersonTab>
+        label="ส่วนของบุคคล"
+        testId="person-tab"
+        value={tab}
+        onChange={setTab}
+        items={[
+          { value: 'photos', label: 'รูปทั้งหมด' },
+          { value: 'events', label: `กิจกรรม${data.events.length ? ` (${formatCount(data.events.length)})` : ''}` },
+          { value: 'together', label: `ปรากฏร่วมในภาพ${data.coappearances.length ? ` (${formatCount(data.coappearances.length)})` : ''}` },
+          { value: 'info', label: 'ข้อมูล' },
+        ]}
+        className="mb-4"
+      />
+
+      {tab === 'photos' && <PersonPhotos person={data} eventId={params.get('event')} onEventChange={(id) => {
+        const next = new URLSearchParams(params);
+        if (id) next.set('event', id);
+        else next.delete('event');
+        setParams(next, { replace: true });
+      }} />}
+      {tab === 'events' && <PersonEvents person={data} />}
+      {tab === 'together' && (
+        <div className="max-w-[560px] rounded-card border border-line bg-surface p-5 shadow-card">
+          <p className="mb-3 text-sm text-muted">เลือกคนเพื่อค้นรูปที่อยู่ด้วยกัน · นับจากทุกกิจกรรม เฉพาะใบหน้าที่ยืนยันแล้ว (เป็นการปรากฏในภาพเดียวกัน ไม่ใช่ข้อสรุปความสัมพันธ์)</p>
+          <CoappearanceList personId={data.id} items={data.coappearances} layout="list" />
+        </div>
+      )}
+      {tab === 'info' && <PersonInfo person={data} onEdit={() => setEditing(true)} />}
+
+      <PersonEditorDialog open={editing} onOpenChange={setEditing} personId={data.id} />
+      <ConfirmDialog
+        open={confirmArchive}
+        onOpenChange={setConfirmArchive}
+        title={`เก็บ ${data.displayName} ออกจากรายชื่อหลัก?`}
+        description="เก็บบุคคลนี้ออกจากรายชื่อหลัก โดยคงข้อมูลในภาพไว้ นำกลับมาได้จากตัวกรอง “รวมคนที่เก็บไว้” ในหน้าบุคคล"
+        confirmLabel="เก็บออกจากรายชื่อหลัก"
+        busy={setArchived.isPending}
+        onConfirm={() => setArchived.mutate({ personId: data.id, archived: true }, { onSettled: () => setConfirmArchive(false) })}
+      />
+    </Page>
+  );
+}
+
+function PersonPhotos({ person, eventId, onEventChange }: { person: PersonDetail; eventId: string | null; onEventChange: (id: string | null) => void }) {
+  const [sort, setSort] = useState<SearchParams['sort']>('taken_desc');
+  const query = useMemo<PhotoQuery>(
+    () => ({ personIds: [person.id], personMode: 'all', eventIds: eventId ? [eventId] : [], faceFilter: 'any', sort, limit: PHOTO_PAGE_SIZE }),
+    [person.id, eventId, sort],
+  );
+  return (
+    <div>
+      <div className="mb-3.5 flex flex-wrap items-center gap-2.5">
+        <Select value={eventId ?? ''} onChange={(e) => onEventChange(e.target.value || null)} aria-label="กรองตามกิจกรรม" className="max-w-[320px]">
+          <option value="">ทุกกิจกรรม</option>
+          {person.events.map((event) => (
+            <option key={event.eventId} value={event.eventId}>
+              {event.title} ({formatCount(event.photoCount)})
+            </option>
+          ))}
+        </Select>
+        <Select value={sort} onChange={(e) => setSort(e.target.value as SearchParams['sort'])} aria-label="เรียงรูปตาม">
+          <option value="taken_desc">วันถ่าย ใหม่ → เก่า</option>
+          <option value="taken_asc">วันถ่าย เก่า → ใหม่</option>
+          <option value="added_desc">เพิ่มล่าสุด</option>
+          <option value="filename">ชื่อไฟล์</option>
+        </Select>
+        <p className="ml-auto text-[13.5px] text-muted">แสดงเฉพาะรูปที่ยืนยันแล้วว่าเป็นบุคคลนี้</p>
+      </div>
+      <PhotoResults
+        query={query}
+        label={`รูปของ ${person.displayName}`}
+        originLabel="กลับไปบุคคล"
+        showEvent={!eventId}
+        selectionKey={`${person.id}|${eventId ?? ''}`}
+        summary={(meta) =>
+          meta.total > 0 ? (
+            <p className="mb-2.5 text-sm text-muted" aria-live="polite">
+              {formatCount(meta.total)} รูป{eventId ? ' ในกิจกรรมที่เลือก' : ' จากทุกกิจกรรม'}
+            </p>
+          ) : null
+        }
+        empty={
+          eventId ? (
+            <EmptyState icon={<UserRoundSearch aria-hidden />} title="ไม่มีรูปของบุคคลนี้ในกิจกรรมที่เลือก" action={<Button onClick={() => onEventChange(null)}>ดูทุกกิจกรรม</Button>} />
+          ) : (
+            <EmptyState
+              icon={<UserRoundSearch aria-hidden />}
+              title="ยังไม่มีรูปที่เชื่อมกับบุคคลนี้"
+              description="เปิดรูปที่มีบุคคลนี้ กด “เพิ่มกรอบใบหน้า” แล้วเลือกชื่อนี้ รูปจะปรากฏที่นี่และค้นจากชื่อได้ทันที"
+              action={
+                <Link to="/events" className="inline-flex h-10 items-center rounded-control bg-action px-4 text-sm font-semibold text-on-action hover:bg-action-hover">
+                  เลือกใบหน้าจากรูปในกิจกรรม
+                </Link>
+              }
+            />
+          )
+        }
+      />
+    </div>
+  );
+}
+
+function PersonEvents({ person }: { person: PersonDetail }) {
+  if (person.events.length === 0) {
+    return <EmptyState icon={<Calendar aria-hidden />} title="ยังไม่พบบุคคลนี้ในกิจกรรมใด" description="เมื่อยืนยันใบหน้าของบุคคลนี้ในรูป กิจกรรมของรูปนั้นจะแสดงที่นี่" />;
+  }
+  return (
+    <ul className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4">
+      {person.events.map((event) => (
+        <li key={event.eventId}>
+          {/* เปิดกิจกรรมพร้อมตัวกรองคนเดิม */}
+          <Link
+            to={`/events/${event.eventId}?person=${person.id}`}
+            className="group block overflow-hidden rounded-card border border-line bg-surface shadow-card hover:shadow-raised"
+            data-testid="person-event-card"
+          >
+            <div className="aspect-[16/9.5] bg-sunken">
+              {event.coverPhotoId ? (
+                <img src={assetUrl('thumb', event.coverPhotoId)} alt="" loading="lazy" className="size-full object-cover" />
+              ) : (
+                <div className="flex size-full items-center justify-center text-faint">
+                  <ImageIcon className="size-8" aria-hidden />
+                </div>
+              )}
+            </div>
+            <div className="px-4 py-3">
+              <h3 className="truncate text-[16px] font-bold text-ink">{event.title}</h3>
+              <p className="text-[13.5px] text-muted">
+                {formatThaiDate(event.eventDate) ?? 'ยังไม่ระบุวันที่'} · มีบุคคลนี้ {formatCount(event.photoCount)} รูป
+              </p>
+            </div>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function PersonInfo({ person, onEdit }: { person: PersonDetail; onEdit: () => void }) {
+  const row = 'grid grid-cols-[140px_1fr] gap-3 border-b border-line py-3 text-sm last:border-b-0';
+  return (
+    <div className="max-w-[680px] rounded-card border border-line bg-surface px-6 py-2 shadow-card">
+      <dl>
+        <div className={row}>
+          <dt className="font-semibold text-ink">ชื่อที่ใช้แสดง</dt>
+          <dd className="text-ink">{person.displayName}</dd>
+        </div>
+        <div className={row}>
+          <dt className="font-semibold text-ink">ชื่อเล่น / ชื่อรอง</dt>
+          <dd className={person.nickname ? 'text-ink' : 'text-muted'}>{person.nickname ?? 'ไม่มี'}</dd>
+        </div>
+        <div className={row}>
+          <dt className="font-semibold text-ink">ชื่ออื่นที่ใช้ค้นหา</dt>
+          <dd className={person.aliases.length ? 'text-ink' : 'text-muted'}>{person.aliases.length ? person.aliases.join(' · ') : 'ไม่มี'}</dd>
+        </div>
+        <div className={row}>
+          <dt className="font-semibold text-ink">กลุ่ม</dt>
+          <dd className={person.groups.length ? 'text-ink' : 'text-muted'}>{person.groups.length ? person.groups.map((g) => g.name).join(' · ') : 'ยังไม่ได้จัดกลุ่ม'}</dd>
+        </div>
+        <div className={row}>
+          <dt className="font-semibold text-ink">หมายเหตุ</dt>
+          <dd className={person.notes ? 'break-words whitespace-pre-wrap text-ink' : 'text-muted'}>{person.notes || 'ไม่มี'}</dd>
+        </div>
+      </dl>
+      {!person.hasConfirmedFaces && (
+        <InlineNotice tone="info" className="my-3">
+          บุคคลนี้ยังไม่มีใบหน้าที่ยืนยันในรูปใด จึงยังไม่มีภาพตัวแทน
+        </InlineNotice>
+      )}
+      <div className="flex justify-end py-3">
+        <Button icon={<Pencil className="size-4" aria-hidden />} onClick={onEdit}>
+          แก้ไขข้อมูล
+        </Button>
+      </div>
+    </div>
+  );
+}

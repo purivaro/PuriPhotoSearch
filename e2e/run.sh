@@ -45,8 +45,9 @@ if [ -z "${APP:-}" ] && lsof -ti tcp:1420 >/dev/null 2>&1; then
 fi
 
 # native folder picker ขับด้วยสคริปต์ไม่ได้: debug build ตอบคำขอ pick_folder ตามลำดับนี้แทน
-# (1) โฟลเดอร์ที่จะเพิ่ม  (2) ปลายทางส่งออก
+# (1) โฟลเดอร์ที่จะเพิ่ม  (2) ปลายทางส่งออก  (3) ปลายทางส่งออกรอบสอง (ที่เดิม เพื่อทดสอบชื่อชน)
 export PURI_E2E_PICK="$PHOTOS
+$WORK/export
 $WORK/export"
 export PURI_DATA_DIR="$WORK/library" PURI_DISABLE_OPEN=1 PURI_E2E_SCRIPT="$WORK/smoke.js" PURI_E2E_REPORT="$REPORT"
 if [ -n "${APP:-}" ]; then
@@ -108,16 +109,21 @@ echo "  · ต้นฉบับทุกไฟล์เหมือนเดิ
 
 exported=$(find "$WORK/export" -type f ! -name '.*' | wc -l | tr -d ' ')
 [ "$exported" -ge 1 ] || fail "ไม่มีไฟล์ถูกส่งออก"
+renamed=0
 for f in "$WORK"/export/*; do
   name=$(basename "$f")
-  src=$(find "$PHOTOS" -type f -name "${name/ (2)/}" | head -1)
-  [ -n "$src" ] || fail "ไฟล์ส่งออก $name ไม่มีต้นฉบับชื่อนี้"
-  # สำเนาต้องตรงกับต้นฉบับไฟล์ใดไฟล์หนึ่งที่ชื่อนี้ทุก byte
+  # ชื่อที่ถูกเติมเลขท้ายเพราะชน เช่น "IMG_0248 (2).jpg" มาจากต้นฉบับชื่อ "IMG_0248.jpg"
+  original=$(printf '%s' "$name" | sed -E 's/ \([0-9]+\)(\.[^.]+)$/\1/')
+  [ "$original" = "$name" ] || renamed=$((renamed + 1))
+  # สำเนาต้องตรงทุก byte กับต้นฉบับไฟล์ใดไฟล์หนึ่งที่ชื่อนี้ (เก็บผลไว้ก่อน grep: pipefail + grep -q ทำให้ท่อแตกได้)
+  sums=$(find "$PHOTOS" -type f -name "$original" -exec shasum -a 256 {} +)
+  [ -n "$sums" ] || fail "ไฟล์ส่งออก $name ไม่มีต้นฉบับชื่อ $original"
   sum=$(shasum -a 256 "$f" | cut -d' ' -f1)
-  find "$PHOTOS" -type f -name "${name/ (2)/}" -exec shasum -a 256 {} + | grep -q "^$sum " || fail "ไฟล์ส่งออก $name ไม่ตรงกับต้นฉบับ"
+  case "$sums" in *"$sum"*) ;; *) fail "ไฟล์ส่งออก $name ไม่ตรงกับต้นฉบับ" ;; esac
 done
+[ "$renamed" -ge 1 ] || fail "ไม่มีไฟล์ที่ถูกเติมเลขท้าย ทั้งที่ส่งออกชื่อซ้ำไปที่เดิม"
 [ -z "$(find "$WORK/export" -name '.puri-export-*')" ] || fail "เหลือไฟล์ชั่วคราวในปลายทาง"
-echo "  · ส่งออก $exported ไฟล์ ตรงกับต้นฉบับทุก byte ไม่เหลือไฟล์ชั่วคราว"
+echo "  · ส่งออก $exported ไฟล์ ตรงกับต้นฉบับทุก byte ($renamed ไฟล์ถูกเติมเลขท้ายแทนการเขียนทับ) ไม่เหลือไฟล์ชั่วคราว"
 
 db="$WORK/library/data/library/library.sqlite"
 q() { sqlite3 "file:$db?mode=ro" "$1"; }

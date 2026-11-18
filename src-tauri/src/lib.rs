@@ -88,6 +88,7 @@ domain_commands!(
     preview_export,
     start_export,
     get_export_report,
+    reveal_export_destination,
     preview_legacy_import,
 );
 
@@ -96,7 +97,7 @@ domain_commands!(
 async fn pick_folder(app: tauri::AppHandle, title: String) -> Option<String> {
     #[cfg(debug_assertions)]
     if let Some(answer) = e2e::next_pick() {
-        return Some(answer);
+        return answer;
     }
     tauri::async_runtime::spawn_blocking(move || {
         app.dialog().file().set_title(title).blocking_pick_folder().and_then(|p| p.into_path().ok())
@@ -202,12 +203,12 @@ mod e2e {
     static PICKS: Mutex<Option<Vec<String>>> = Mutex::new(None);
 
     /// native dialog ขับด้วยสคริปต์ไม่ได้: เทสต์เตรียมคำตอบของ picker ไว้ใน `PURI_E2E_PICK` (คั่นด้วยขึ้นบรรทัดใหม่)
-    pub fn next_pick() -> Option<String> {
+    /// คืน None เมื่อไม่ได้อยู่ในเทสต์; เมื่ออยู่ในเทสต์จะไม่เปิด dialog จริงเลย — คำตอบหมดแล้วถือว่าผู้ใช้กดยกเลิก
+    pub fn next_pick() -> Option<Option<String>> {
+        let answers = std::env::var("PURI_E2E_PICK").ok()?;
         let mut picks = PICKS.lock().unwrap_or_else(|e| e.into_inner());
-        let list = picks.get_or_insert_with(|| {
-            std::env::var("PURI_E2E_PICK").map(|v| v.lines().map(str::to_string).collect()).unwrap_or_default()
-        });
-        (!list.is_empty()).then(|| list.remove(0))
+        let list = picks.get_or_insert_with(|| answers.lines().map(str::to_string).collect());
+        Some((!list.is_empty()).then(|| list.remove(0)))
     }
 
     pub fn write_report(text: &str) {
