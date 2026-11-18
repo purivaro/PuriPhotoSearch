@@ -1,3 +1,5 @@
+<img src="src-tauri/icons/128x128@2x.png" width="96" alt="โลโก้ Puri Photo Search">
+
 # Puri Photo Search 2
 
 แอป desktop สำหรับคลังภาพกิจกรรม: เพิ่มโฟลเดอร์งานที่มีอยู่แล้วในเครื่อง ตั้งชื่อคนจากใบหน้า ค้นรูปข้ามกิจกรรม และส่งออกสำเนา
