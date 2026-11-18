@@ -9,6 +9,7 @@ import { cn } from '@/lib/cn';
 import { isJobActive, useActiveJobs } from '@/lib/queries';
 import { useUi } from '@/stores/ui';
 import { useBackgroundLocation, useStartImport } from './navigation';
+import { MOD_KEY } from '@/lib/platform';
 
 const scrollMemory = new Map<string, number>();
 
@@ -78,7 +79,7 @@ export function SearchTrigger({ className, large }: { className?: string; large?
     >
       <Search className={cn('shrink-0', large ? 'size-5' : 'size-[18px]')} aria-hidden />
       <span className="min-w-0 flex-1 truncate">ค้นหาคน กิจกรรม หรือชื่อไฟล์…</span>
-      <kbd className="shrink-0 rounded-md border border-line bg-sunken px-1.5 py-0.5 font-sans text-[11.5px] font-semibold text-muted">⌘ K</kbd>
+      <kbd className="shrink-0 rounded-md border border-line bg-sunken px-1.5 py-0.5 font-sans text-[11.5px] font-semibold text-muted">{MOD_KEY} K</kbd>
     </button>
   );
 }

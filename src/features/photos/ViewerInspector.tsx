@@ -13,6 +13,7 @@ import { cn } from '@/lib/cn';
 import { formatBytes, formatCount, formatTakenAt, formatThaiDate } from '@/lib/format';
 import type { FaceBox, Id, PhotoDetails } from '@/lib/ipc/types';
 import { useFaceMutations } from './useFaceMutations';
+import { FILE_MANAGER } from '@/lib/platform';
 
 interface ViewerInspectorProps {
   details: PhotoDetails;
@@ -112,7 +113,7 @@ export function ViewerInspector({ details, selectedFaceId, onSelectFace, drawMod
 
         <div className="mt-3 grid grid-cols-2 gap-2">
           <Button size="sm" icon={<FolderOpen className="size-4" aria-hidden />} onClick={onReveal} disabled={!details.originalAvailable} data-testid="viewer-reveal">
-            เปิดใน Finder
+            เปิดใน {FILE_MANAGER}
           </Button>
           <Button size="sm" icon={<ExternalLink className="size-4" aria-hidden />} onClick={onOpenOriginal} disabled={!details.originalAvailable} data-testid="viewer-open-original">
             เปิดต้นฉบับ

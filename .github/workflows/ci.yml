@@ -36,4 +36,45 @@ jobs:
           cargo fmt --all --check
           cargo clippy --workspace --all-targets -- -D warnings
           cargo test --workspace
-      # การทดสอบแอปจริง (e2e/run.sh) ต้องมี window server จึงรันในเครื่องเท่านั้น — ดู docs/TEST_REPORT.md
+      # การทดสอบแอปจริง (e2e/run.sh) บน macOS ต้องมี window server จึงรันในเครื่องเท่านั้น — ดู docs/TEST_REPORT.md
+
+  # Windows ไม่มีเครื่องทดสอบของเราเอง: runner นี้คือที่เดียวที่โค้ดฝั่ง Windows ถูกรันจริง
+  # จึงรันทั้งเทสต์ Rust และแอปจริงในหน้าต่าง WebView2 (e2e) ที่นี่
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: pnpm install --frozen-lockfile
+      # เปลือก Tauri ต้องมี dist ตอน compile
+      - name: Frontend — production bundle
+        run: pnpm exec vite build
+      - name: Rust — lint, tests
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+      - name: แอปจริงในหน้าต่าง WebView2 (e2e)
+        run: |
+          pnpm tauri build --debug --no-bundle
+          # โฟลเดอร์ชั่วคราวของ runner เอง: %TEMP% ของผู้ใช้เป็นชื่อสั้นแบบ 8.3 ซึ่งไม่ตรงกับ path ที่แอปแสดง
+          export TMPDIR="$(cygpath -u "$RUNNER_TEMP")"
+          APP="$PWD/target/debug/puri-photo-search.exe" e2e/run.sh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: windows-e2e-report
+          path: target/e2e-report.json
+          if-no-files-found: ignore

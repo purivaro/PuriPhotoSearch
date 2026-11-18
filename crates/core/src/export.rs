@@ -153,7 +153,7 @@ fn inside_tracked_source(conn: &Connection, dest: &Path) -> Result<bool> {
 }
 
 pub fn preview(app: &App, selection: &SelectionSpec, destination: &str) -> Result<ExportPlan> {
-    let dest = std::fs::canonicalize(destination)
+    let dest = util::canonical(destination)
         .map_err(|_| AppError::new("SOURCE_UNAVAILABLE", "ไม่พบโฟลเดอร์ปลายทาง กรุณาเลือกโฟลเดอร์อีกครั้ง"))?;
     if !dest.is_dir() {
         return Err(AppError::invalid("ปลายทางต้องเป็นโฟลเดอร์"));

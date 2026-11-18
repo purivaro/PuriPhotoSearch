@@ -6,13 +6,13 @@
 use crate::error::{AppError, Result};
 use crate::faces::BBox;
 use crate::jobs::{self, Control, JobCtx, JobSnapshot, Outcome, ACTIVE_STATES};
-use crate::{db, util, App};
+use crate::{db, platform, util, App};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -246,7 +246,8 @@ pub fn install(app: &App) -> Result<JobSnapshot> {
 }
 
 /// งานติดตั้งโมเดล: ดาวน์โหลด (ทำต่อจากเดิมได้) → แตกเฉพาะไฟล์ที่ใช้ → ตรวจ checksum → วิเคราะห์รูปในคลังต่อ
-/// ใช้ `curl` และ `unzip` ของระบบ (มีใน macOS ทุกเครื่อง) ส่ง argument ตรง ๆ ไม่ผ่าน shell
+/// ใช้ตัวดาวน์โหลดและตัวแตกไฟล์ของระบบ ส่ง argument ตรง ๆ ไม่ผ่าน shell: `curl` + `unzip` บน macOS,
+/// `curl.exe` + `tar.exe` (bsdtar อ่าน zip ได้) ใน System32 บน Windows 10 รุ่น 1803 ขึ้นไป
 pub(crate) fn run_install(ctx: &JobCtx) -> Result<Outcome> {
     let ai = ctx.ai();
     let spec = ai.spec().ok_or_else(|| AppError::new("MODEL_NOT_READY", "build นี้ไม่มีตัววิเคราะห์ใบหน้า"))?;
@@ -257,7 +258,7 @@ pub(crate) fn run_install(ctx: &JobCtx) -> Result<Outcome> {
 
     if !ai.installed() {
         ctx.stage("download")?;
-        let mut child = Command::new("curl")
+        let mut child = platform::system_tool("curl")
             .args([
                 "--location",
                 "--fail",
@@ -306,12 +307,20 @@ pub(crate) fn run_install(ctx: &JobCtx) -> Result<Outcome> {
         ctx.progress(total_mb, total_mb, 0, 0, true)?;
 
         ctx.stage("verify")?;
-        let mut unzip = Command::new("unzip");
-        unzip.args(["-o", "-j", "-q"]).arg(&archive);
-        for file in spec.files {
-            unzip.arg(file.name);
-        }
-        let out = unzip.arg("-d").arg(&ai.model_dir).output().map_err(AppError::internal)?;
+        // แตกเฉพาะไฟล์ที่ใช้ (ชุดโมเดลวางไฟล์ไว้ที่รากของ zip)
+        #[cfg(not(windows))]
+        let mut unzip = {
+            let mut c = platform::system_tool("unzip");
+            c.args(["-o", "-j", "-q"]).arg(&archive).arg("-d").arg(&ai.model_dir);
+            c
+        };
+        #[cfg(windows)]
+        let mut unzip = {
+            let mut c = platform::system_tool("tar");
+            c.arg("-xf").arg(&archive).arg("-C").arg(&ai.model_dir);
+            c
+        };
+        let out = unzip.args(spec.files.iter().map(|f| f.name)).output().map_err(AppError::internal)?;
         if !out.status.success() {
             let _ = std::fs::remove_file(&archive);
             return Err(AppError::new("MODEL_NOT_READY", "ไฟล์ที่ดาวน์โหลดมาเสียหาย กรุณาลองดาวน์โหลดใหม่")

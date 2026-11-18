@@ -130,7 +130,7 @@ pub(crate) fn find_covering_event(
 }
 
 pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
-    let root = std::fs::canonicalize(path)?;
+    let root = util::canonical(path)?;
     if !root.is_dir() {
         return Err(AppError::invalid("กรุณาเลือกโฟลเดอร์ ไม่ใช่ไฟล์รูป"));
     }
