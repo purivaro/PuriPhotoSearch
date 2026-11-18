@@ -60,10 +60,22 @@ describe('เงื่อนไข → คำขอไป Rust', () => {
     expect(filterIdentity(a)).not.toBe(filterIdentity({ ...a, personIds: ['y'] }));
   });
 
-  it('ลิงก์ปรากฏร่วมในภาพเป็น AND ของสองคน', () => {
+  it('ลิงก์ปรากฏร่วมในภาพเป็น AND ของสองคน นับเฉพาะที่ยืนยันแล้ว (ตรงกับตัวเลขปรากฏร่วม)', () => {
     const path = coappearanceSearchPath('a', 'b');
     const parsed = parseFilters(new URLSearchParams(path.split('?')[1]));
     expect(parsed.personIds).toEqual(['a', 'b']);
     expect(parsed.personMode).toBe('all');
+    expect(parsed.includeAi).toBe(false);
+  });
+
+  it('รวมรูปที่ AI จัดให้เป็นค่าเริ่มต้น ปิดได้ด้วย ai=0 และส่งต่อถึงคำค้น', () => {
+    expect(parseFilters(new URLSearchParams('p=a')).includeAi).toBe(true);
+    expect(filtersToQuery({ ...DEFAULT_FILTERS, personIds: ['a'] }, 100).includeSuggested).toBe(true);
+    const off = { ...DEFAULT_FILTERS, personIds: ['a'], includeAi: false };
+    expect(filtersToSearch(off).toString()).toBe('p=a&ai=0');
+    expect(parseFilters(new URLSearchParams('p=a&ai=0'))).toEqual(off);
+    expect(filtersToQuery(off, 100).includeSuggested).toBe(false);
+    // เปิด/ปิดแล้วชุดผลเปลี่ยน: รูปที่เลือกไว้ต้องถูกล้าง
+    expect(filterIdentity(off)).not.toBe(filterIdentity({ ...off, includeAi: true }));
   });
 });
