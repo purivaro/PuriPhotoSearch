@@ -10,7 +10,7 @@
 | 3 | IPC | หนึ่งคำสั่ง Tauri ต่อคำสั่งโดเมน ทุกตัวส่งต่อไป `api::dispatch` ที่ตรวจชนิดด้วย serde | ใช้แล้ว |
 | 4 | ฐานข้อมูล | SQLite ผ่าน `rusqlite` (bundled), WAL, foreign keys เปิดทุก connection (D04) | ใช้แล้ว |
 | 5 | ตัวตนของไฟล์ | path ที่ `realpath` คืน เป็นคีย์ตำแหน่ง; `photo_id` ไม่ผูกกับ path | ใช้แล้ว บางส่วน |
-| 6 | สิทธิ์ไฟล์บน macOS | แจกนอก App Store ไม่เปิด App Sandbox | เสนอ — รอยืนยันช่องทางแจก |
+| 6 | สิทธิ์ไฟล์บน macOS | แจกนอก App Store ด้วย Developer ID ไม่เปิด App Sandbox | ใช้แล้ว (เจ้าของผลิตภัณฑ์สั่งทำตัวติดตั้งที่เซ็นแล้ว 18 พ.ย. 69) |
 | 7 | การเสิร์ฟรูป | protocol `puri://` รับเฉพาะ ID | ใช้แล้ว |
 | 8 | ถอดรหัสรูป | crate `image` (JPEG/PNG) เป็นฐาน; วางแผน adapter ImageIO | ใช้แล้ว / วางแผน |
 | 9 | โมเดลใบหน้า | **ยังไม่เลือก** — ติดสัญญาอนุญาต | รอเจ้าของผลิตภัณฑ์ |
@@ -71,6 +71,10 @@ path เดิมที่พบผ่าน parent หรือ child ใช้
 
 ผลที่ตามมา: ถ้าภายหลังต้องเข้า App Store ต้องเพิ่ม bookmark ใน `platform` และทดสอบสิทธิ์หลังเปิดแอปใหม่
 macOS อาจถามสิทธิ์เข้าโฟลเดอร์ Desktop/Documents/ไดรฟ์ภายนอกครั้งแรก — **ยังไม่ได้ทดสอบกับ build ที่เซ็นแล้ว**
+
+ตัวติดตั้ง: `scripts/release-mac.sh` สร้างแอป universal เซ็นด้วย Developer ID + hardened runtime (ไม่มี entitlement เพิ่ม)
+แล้ว notarize และ staple DMG ผ่านโปรไฟล์ keychain ของ notarytool ไม่มีโมเดลใบหน้าหรือ ONNX Runtime อยู่ในตัวติดตั้ง
+ยังไม่มี workflow release บน GitHub (ต้องใส่ใบรับรองเป็น secret ของ repo ก่อน) และยังไม่มีระบบอัปเดตอัตโนมัติ
 
 ## 7. การเสิร์ฟรูป
 

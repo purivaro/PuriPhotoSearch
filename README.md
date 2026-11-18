@@ -5,9 +5,20 @@
 
 เขียนใหม่ด้วย Rust + Tauri 2 + React แทนรุ่น Python (PuriPhotoSearch 1.9.3)
 
-> **สถานะ: ระหว่างพัฒนา (2.0.0-alpha.1) ยังไม่พร้อมใช้กับงานจริงและยังไม่มี installer**
+> **สถานะ: รุ่นทดลอง (2.0.0-alpha.1) ยังไม่พร้อมใช้กับงานจริง**
 > รุ่นนี้ยัง **ไม่มีการวิเคราะห์ใบหน้าอัตโนมัติ** — ตั้งชื่อคนได้ด้วยการลากกรอบใบหน้าเองในตัวดูภาพ
 > สิ่งที่ทำแล้ว ทดสอบแล้ว และยังไม่ได้ทำ ดูที่ [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)
+
+## ติดตั้ง (macOS)
+
+1. ดาวน์โหลด `PuriPhotoSearch-mac.dmg` จากหน้า [Releases](https://github.com/purivaro/PuriPhotoSearch/releases)
+2. เปิดไฟล์ แล้วลาก **Puri Photo Search** ไปไว้ใน Applications
+3. เปิดแอปได้ตามปกติ — ตัวติดตั้งเซ็นด้วย Developer ID และผ่านการ notarize ของ Apple แล้ว จึงไม่ต้องปลดล็อกใน System Settings
+
+ต้องการ macOS 12 ขึ้นไป ไฟล์เป็น universal (Apple Silicon + Intel) **ทดสอบจริงเฉพาะ macOS 26.7 บน Apple Silicon**
+ไม่ต้องติดตั้ง Python, Node หรือ Rust ตรวจไฟล์ที่ดาวน์โหลดได้ด้วย `shasum -a 256 PuriPhotoSearch-mac.dmg` เทียบกับ `SHA256SUMS.txt`
+
+รุ่นนี้เป็นคนละแอปกับ PuriPhotoSearch 1.x (Python): ติดตั้งคู่กันได้ และไม่แตะข้อมูลของรุ่นเดิม
 
 ## เอกสาร
 
@@ -28,7 +39,7 @@
   `export PATH="/opt/homebrew/opt/rustup/bin:$PATH"`
 - Node ≥ 22 และ pnpm 10
 
-ผู้ใช้ปลายทางจะไม่ต้องติดตั้ง Python, Node หรือ Rust (ยังไม่ได้ทดสอบกับแอปที่แพ็กแล้ว)
+ผู้ใช้ปลายทางไม่ต้องติดตั้งสิ่งเหล่านี้
 
 ## รัน
 
@@ -58,6 +69,15 @@ pnpm check                     # typecheck + vitest + cargo fmt --check + clippy
 e2e/run.sh                     # เส้นทางหลักในหน้าต่างแอปจริง (ต้องมี desktop session)
 ```
 
+## สร้างตัวติดตั้ง
+
+```sh
+APPLE_SIGNING_IDENTITY="Developer ID Application: …" PURI_NOTARY_PROFILE=<โปรไฟล์ของ notarytool> scripts/release-mac.sh
+```
+
+ได้ `target/release-download/PuriPhotoSearch-mac.dmg` (universal, เซ็น + notarize + staple) และ `SHA256SUMS.txt`
+ใบรับรองและรหัสอยู่ใน keychain ของเครื่องที่ build สคริปต์ไม่อ่านหรือเขียนความลับ
+
 ## ข้อมูลอยู่ที่ไหน
 
 | อะไร | ตำแหน่ง |
@@ -74,6 +94,7 @@ e2e/run.sh                     # เส้นทางหลักในหน�
 ```
 crates/core      กติกาข้อมูลทั้งหมด (ไม่ขึ้นกับ Tauri) + เทสต์กับไฟล์จริง
 crates/devbridge เครื่องมือพัฒนา: คำสั่งชุดเดียวกันผ่าน HTTP ในเครื่อง
+crates/faces     งานทดลอง: ตรวจใบหน้าด้วย ONNX Runtime (ยังไม่อยู่ในแอป)
 src-tauri        เปลือก Tauri: ลงทะเบียนคำสั่ง, protocol puri://, native picker
 src              React UI
 e2e              ทดสอบแอปจริงด้วยสคริปต์ที่ฉีดเข้า debug build
