@@ -717,25 +717,25 @@ fn t26_select_all_results_is_a_frozen_snapshot_beyond_the_loaded_page() {
 fn t30_thai_and_special_character_search_is_literal() {
     let lib = Lib::new();
     let root = lib.photos().join("2026-11-18 งานค้นหา");
-    for name in [
-        "ภูริ.jpg",
-        "100%_done.jpg",
-        "100x_done.jpg",
-        "it's \"quoted\".jpg",
-        "น้ำ.jpg",
-        "นำ.jpg",
-        "😀 emoji.jpg",
-        "'; DROP TABLE photos;--.jpg",
-    ] {
+    // Windows ไม่ยอมให้ชื่อไฟล์มีเครื่องหมาย " จึงทดสอบชื่อนั้นเฉพาะระบบที่สร้างไฟล์ได้
+    let quoted = (!cfg!(windows)).then_some("it's \"quoted\".jpg");
+    let names: Vec<&str> =
+        ["ภูริ.jpg", "100%_done.jpg", "100x_done.jpg", "น้ำ.jpg", "นำ.jpg", "😀 emoji.jpg", "'; DROP TABLE photos;--.jpg"]
+            .into_iter()
+            .chain(quoted)
+            .collect();
+    for name in &names {
         write_jpeg(&root.join(name), name.len() as u8);
     }
     lib.import(&root, "single_event", |_| true);
-    assert_eq!(lib.query(json!({}))["total"], 8);
+    assert_eq!(lib.query(json!({}))["total"], names.len());
 
     assert_eq!(lib.filenames(json!({ "text": "ภู" })), ["ภูริ.jpg"], "คำไทยสั้นสองตัวอักษรค้นแบบ substring ได้");
     assert_eq!(lib.filenames(json!({ "text": "100%" })), ["100%_done.jpg"], "% เป็นตัวอักษรธรรมดา ไม่ใช่ wildcard");
     assert_eq!(lib.filenames(json!({ "text": "0%_d" })), ["100%_done.jpg"], "_ เป็นตัวอักษรธรรมดา");
-    assert_eq!(lib.filenames(json!({ "text": "\"quoted\"" })), ["it's \"quoted\".jpg"]);
+    if let Some(quoted) = quoted {
+        assert_eq!(lib.filenames(json!({ "text": "\"quoted\"" })), [quoted]);
+    }
     assert_eq!(lib.filenames(json!({ "text": "น้ำ" })), ["น้ำ.jpg"], "ไม่ตัดวรรณยุกต์เพื่อให้ตรงมากขึ้น");
     assert_eq!(lib.filenames(json!({ "text": "นำ" })), ["นำ.jpg"]);
     assert_eq!(lib.filenames(json!({ "text": "😀" })), ["😀 emoji.jpg"]);
@@ -744,8 +744,8 @@ fn t30_thai_and_special_character_search_is_literal() {
         ["'; DROP TABLE photos;--.jpg"],
         "ข้อความไม่ถูกตีความเป็นคำสั่ง"
     );
-    assert_eq!(lib.query(json!({}))["total"], 8);
-    assert_eq!(lib.query(json!({ "text": "งานค้นหา" }))["total"], 8, "ค้นจากชื่อกิจกรรมได้");
+    assert_eq!(lib.query(json!({}))["total"], names.len());
+    assert_eq!(lib.query(json!({ "text": "งานค้นหา" }))["total"], names.len(), "ค้นจากชื่อกิจกรรมได้");
     assert_eq!(lib.query(json!({ "text": "ไม่มีคำนี้" }))["total"], 0);
 
     // ชื่อบุคคล ชื่อเล่น และชื่ออื่น
