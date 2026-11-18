@@ -1,0 +1,11 @@
+[package]
+name = "puri-devbridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+puri-core = { version = "2.0.0-alpha.1", path = "../core" }
+serde_json = "1.0.154"
+tiny_http = "0.12.0"

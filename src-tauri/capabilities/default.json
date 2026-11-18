@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "หน้าต่างหลัก: IPC หลักของ Tauri และการลากหน้าต่างจากแถบบนที่ทำเอง ไม่ให้สิทธิ์ shell, filesystem, HTTP หรือ dialog กับ web view — การเลือกโฟลเดอร์ทำโดยคำสั่ง pick_folder ฝั่ง Rust และไฟล์รูปเสิร์ฟผ่าน protocol puri:// ด้วย ID ของรูปเท่านั้น",
+  "windows": ["main"],
+  "permissions": ["core:default", "core:window:allow-start-dragging"]
+}

@@ -1,0 +1,21 @@
+[package]
+name = "puri-photo-search"
+description = "Puri Photo Search 2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "puri_photo_search_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+puri-core = { path = "../crates/core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tauri = "2"
+tauri-plugin-dialog = "2"
+
+[build-dependencies]
+tauri-build = "2"

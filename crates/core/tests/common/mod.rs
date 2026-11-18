@@ -1,0 +1,224 @@
+//! ตัวช่วยของ integration tests: คลังชั่วคราว + โฟลเดอร์รูปที่สร้างขึ้นจริงบนดิสก์
+#![allow(dead_code)]
+
+use puri_core::{api, App, AppError, NoopSink, Options};
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tempfile::TempDir;
+
+pub struct Lib {
+    pub tmp: TempDir,
+    pub app: Arc<App>,
+}
+
+fn open(base: &Path) -> Arc<App> {
+    std::env::set_var("PURI_DISABLE_OPEN", "1");
+    App::open(Options {
+        data_dir: base.join("data"),
+        cache_dir: base.join("cache"),
+        sink: Arc::new(NoopSink),
+        folder_picker: "dev_path_input",
+        start_worker: false,
+    })
+    .expect("open library")
+}
+
+impl Lib {
+    pub fn new() -> Self {
+        let tmp = TempDir::new().unwrap();
+        let app = open(tmp.path());
+        Lib { tmp, app }
+    }
+
+    /// ปิดแล้วเปิดคลังเดิมใหม่ (จำลอง restart)
+    pub fn reopen(self) -> Self {
+        let Lib { tmp, app } = self;
+        app.shutdown();
+        drop(app);
+        let app = open(tmp.path());
+        Lib { tmp, app }
+    }
+
+    /// โฟลเดอร์สำหรับวางรูปทดสอบ (canonical path เหมือนที่แอปเห็น)
+    pub fn photos(&self) -> PathBuf {
+        let p = self.tmp.path().join("Photos");
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::canonicalize(p).unwrap()
+    }
+
+    pub fn try_call(&self, cmd: &str, args: Value) -> Result<Value, AppError> {
+        api::dispatch(&self.app, cmd, args)
+    }
+
+    pub fn call(&self, cmd: &str, args: Value) -> Value {
+        self.try_call(cmd, args).unwrap_or_else(|e| panic!("{cmd} failed: {e}"))
+    }
+
+    pub fn run_jobs(&self) {
+        self.app.run_pending_jobs().unwrap();
+    }
+
+    pub fn preview(&self, root: &Path) -> Value {
+        self.call("preview_import", json!({ "path": root }))
+    }
+
+    /// commit ตาม draft ที่เลือกด้วย `pick` (ชื่อ/วันที่ใช้ค่าที่เสนอ) แล้วทำงานเบื้องหลังจนเสร็จ
+    pub fn import(&self, root: &Path, mode: &str, pick: impl Fn(&Value) -> bool) -> Value {
+        let preview = self.preview(root);
+        let drafts = drafts_of(&preview, mode, pick);
+        let result = self.call(
+            "commit_import",
+            json!({ "previewId": preview["previewId"], "requestId": new_id(), "mode": mode, "drafts": drafts, "analyzeFaces": true, "watch": true }),
+        );
+        self.run_jobs();
+        result
+    }
+
+    pub fn query(&self, params: Value) -> Value {
+        let mut p = json!({ "personIds": [], "personMode": "all", "eventIds": [], "faceFilter": "any", "sort": "filename", "limit": 200 });
+        for (k, v) in params.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        self.call("query_photos", p)
+    }
+
+    pub fn filenames(&self, params: Value) -> Vec<String> {
+        names(&self.query(params))
+    }
+
+    pub fn photo_id(&self, filename: &str) -> String {
+        let page = self.query(json!({ "text": filename }));
+        let hit = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["filename"] == filename)
+            .unwrap_or_else(|| panic!("no photo {filename}"));
+        hit["id"].as_str().unwrap().to_string()
+    }
+
+    /// วาดกรอบใบหน้าเองแล้วตั้งชื่อ: `person` เป็น ("id", ..) หรือ ("name", ..)
+    pub fn label(&self, filename: &str, x: f64, person: (&str, &str)) -> Value {
+        let mut args = json!({ "requestId": new_id(), "photoId": self.photo_id(filename), "bbox": { "x": x, "y": 0.1, "w": 0.2, "h": 0.3 } });
+        match person {
+            ("id", id) => args["personId"] = json!(id),
+            (_, name) => args["newPersonName"] = json!(name),
+        }
+        self.call("create_manual_face", args)
+    }
+
+    pub fn person_id(&self, name: &str) -> String {
+        let people = self.call("list_people", json!({ "text": name }));
+        people
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["displayName"] == name)
+            .unwrap_or_else(|| panic!("no person {name}"))["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    pub fn count(&self, sql: &str) -> i64 {
+        let conn = rusqlite::Connection::open(self.tmp.path().join("data/library.sqlite")).unwrap();
+        conn.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+}
+
+pub fn drafts_of(preview: &Value, mode: &str, pick: impl Fn(&Value) -> bool) -> Vec<Value> {
+    let mut all: Vec<Value> = vec![];
+    if mode == "single_event" {
+        all.push(preview["single"].clone());
+    } else {
+        all.extend(preview["children"].as_array().unwrap().iter().cloned());
+        if !preview["rootLoose"].is_null() {
+            all.push(preview["rootLoose"].clone());
+        }
+    }
+    all.iter()
+        .filter(|d| pick(d))
+        .map(|d| json!({ "draftId": d["draftId"], "title": d["suggestedTitle"], "eventDate": d["suggestedDate"] }))
+        .collect()
+}
+
+pub fn names(page: &Value) -> Vec<String> {
+    page["items"].as_array().unwrap().iter().map(|i| i["filename"].as_str().unwrap().to_string()).collect()
+}
+
+pub fn new_id() -> String {
+    puri_core::util::new_id()
+}
+
+pub fn jpeg_bytes(w: u32, h: u32, seed: u8) -> Vec<u8> {
+    let img = image::RgbImage::from_fn(w, h, |x, y| image::Rgb([seed, (x % 251) as u8, (y % 241) as u8]));
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&img).unwrap();
+    out
+}
+
+pub fn write_jpeg(path: &Path, seed: u8) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, jpeg_bytes(64, 48, seed)).unwrap();
+}
+
+pub fn write_png(path: &Path) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    image::RgbImage::from_pixel(40, 30, image::Rgb([10, 200, 30]))
+        .save_with_format(path, image::ImageFormat::Png)
+        .unwrap();
+}
+
+/// JPEG ที่มี EXIF Orientation และ DateTimeOriginal (แทรก APP1 หลัง SOI)
+pub fn jpeg_with_exif(w: u32, h: u32, orientation: u16, datetime: &str) -> Vec<u8> {
+    assert_eq!(datetime.len(), 19);
+    let mut tiff: Vec<u8> = vec![];
+    tiff.extend_from_slice(b"II*\0");
+    tiff.extend_from_slice(&8u32.to_le_bytes());
+    let entry = |tag: u16, typ: u16, count: u32, value: u32| {
+        let mut e = vec![];
+        e.extend_from_slice(&tag.to_le_bytes());
+        e.extend_from_slice(&typ.to_le_bytes());
+        e.extend_from_slice(&count.to_le_bytes());
+        e.extend_from_slice(&value.to_le_bytes());
+        e
+    };
+    tiff.extend_from_slice(&2u16.to_le_bytes());
+    tiff.extend(entry(0x0112, 3, 1, orientation as u32));
+    tiff.extend(entry(0x8769, 4, 1, 38));
+    tiff.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(tiff.len(), 38);
+    tiff.extend_from_slice(&1u16.to_le_bytes());
+    tiff.extend(entry(0x9003, 2, 20, 56));
+    tiff.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(tiff.len(), 56);
+    tiff.extend_from_slice(datetime.as_bytes());
+    tiff.push(0);
+
+    let mut payload = b"Exif\0\0".to_vec();
+    payload.extend(tiff);
+    let base = jpeg_bytes(w, h, 77);
+    let mut out = base[..2].to_vec();
+    out.extend_from_slice(&[0xFF, 0xE1]);
+    out.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+    out.extend(payload);
+    out.extend_from_slice(&base[2..]);
+    out
+}
+
+/// hash + mtime ของทุกไฟล์ใต้โฟลเดอร์ — ใช้ยืนยันว่าแอปไม่แตะต้นฉบับ (T34)
+pub fn tree_state(dir: &Path) -> BTreeMap<PathBuf, (String, std::time::SystemTime)> {
+    let mut out = BTreeMap::new();
+    for entry in walkdir::WalkDir::new(dir) {
+        let entry = entry.unwrap();
+        if entry.file_type().is_file() {
+            let bytes = std::fs::read(entry.path()).unwrap();
+            let sha = puri_core::util::hex(&Sha256::digest(&bytes));
+            out.insert(entry.path().to_path_buf(), (sha, entry.metadata().unwrap().modified().unwrap()));
+        }
+    }
+    out
+}
