@@ -54,8 +54,10 @@ export const PersonCard = forwardRef<HTMLDivElement, PersonCardProps>(function P
             className="block truncate pr-7 text-[13.5px] text-muted"
             title={person.aiPhotoCount > 0 ? `AI จัดให้ ${formatCount(person.aiPhotoCount)} รูป (ยังไม่มีคนตรวจ) · ยืนยันแล้ว ${formatCount(person.confirmedPhotoCount)} รูป` : undefined}
           >
+            {/* ทุกรูปมาจาก AI: ใส่รูปประกายนำหน้าจำนวนเดียว; มีทั้งสองแบบ: บอกส่วนที่ AI จัดให้ต่อท้าย */}
+            {person.aiPhotoCount > 0 && person.confirmedPhotoCount === 0 && <Sparkles className="mr-1 inline size-3.5 align-[-2px] text-action" aria-hidden />}
             {formatCount(person.confirmedPhotoCount + person.aiPhotoCount)} รูป
-            {person.aiPhotoCount > 0 && (
+            {person.aiPhotoCount > 0 && person.confirmedPhotoCount > 0 && (
               <span className="ml-1.5 inline-flex items-center gap-0.5 font-semibold text-action" data-testid="person-ai-count">
                 <Sparkles className="size-3.5" aria-hidden />
                 {formatCount(person.aiPhotoCount)}
