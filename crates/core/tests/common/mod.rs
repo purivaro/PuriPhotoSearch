@@ -19,9 +19,10 @@ pub struct Lib {
 
 /// ตัววิเคราะห์จำลองสำหรับเทสต์เท่านั้น (ไม่มีในแอป): "บุคคล" ของรูปคือค่าสีแดงของภาพ ÷ 20
 /// รูปที่สีแดงใกล้ 0 = ไม่มีใบหน้า; ค่าสีเดียวกัน = เวกเตอร์เดียวกัน; ต่างค่า = ตั้งฉากกัน
+/// ค่าสีแดงที่เกินหลักยี่สิบขึ้นไป 4 หรือมากกว่า (เช่น 47) = คนเดิมแต่ตัวตรวจไม่มั่นใจ (คะแนน 0.55)
 pub struct FakeAnalyzer;
 
-fn fake_vector(image_bytes: &[u8]) -> Option<Vec<f32>> {
+fn fake_face(image_bytes: &[u8]) -> Option<(Vec<f32>, f32)> {
     let img = image::load_from_memory(image_bytes).ok()?.to_rgb8();
     let red = img.get_pixel(img.width() / 2, img.height() / 2)[0] as f32;
     let person = (red / 20.0).round() as usize;
@@ -30,18 +31,18 @@ fn fake_vector(image_bytes: &[u8]) -> Option<Vec<f32>> {
     }
     let mut v = vec![0.0f32; 512];
     v[person % 512] = 3.0; // ไม่ normalize เหมือนเวกเตอร์ดิบของโมเดลจริง
-    Some(v)
+    Some((v, if red - person as f32 * 20.0 >= 4.0 { 0.55 } else { 0.9 }))
 }
 
 impl FaceAnalyzer for FakeAnalyzer {
     fn analyze(&self, image_bytes: &[u8]) -> Result<Vec<DetectedFace>, AppError> {
-        Ok(fake_vector(image_bytes)
-            .map(|embedding| DetectedFace { bbox: BBox { x: 0.3, y: 0.2, w: 0.25, h: 0.4 }, score: 0.9, embedding })
+        Ok(fake_face(image_bytes)
+            .map(|(embedding, score)| DetectedFace { bbox: BBox { x: 0.3, y: 0.2, w: 0.25, h: 0.4 }, score, embedding })
             .into_iter()
             .collect())
     }
     fn embed_crop(&self, image_bytes: &[u8]) -> Result<Option<Vec<f32>>, AppError> {
-        Ok(fake_vector(image_bytes))
+        Ok(fake_face(image_bytes).map(|f| f.0))
     }
 }
 

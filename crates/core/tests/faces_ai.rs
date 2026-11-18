@@ -263,6 +263,41 @@ fn face_crops_are_ready_after_analysis_without_reopening_originals() {
     assert_eq!((img.width(), crop.mime), (img.height(), "image/jpeg"), "ครอปเป็นสี่เหลี่ยมจัตุรัส");
 }
 
+/// ใบหน้าที่ตัวตรวจไม่มั่นใจ (คะแนนต่ำกว่า 0.6): AI ไม่เสนอชื่อและไม่จัดกลุ่มให้ แต่ยังเห็นและตั้งชื่อเองได้
+#[test]
+fn low_confidence_detections_are_not_suggested_or_clustered_but_can_be_named() {
+    let lib = Lib::with_ai();
+    let root = lib.photos().join("2026-11-18 งานเลี้ยง");
+    for (name, seed) in [("a_blur.jpg", 47), ("x_blur1.jpg", 107), ("x_blur2.jpg", 107)] {
+        write_jpeg(&root.join(name), seed);
+    }
+    party(&lib);
+    lib.install_model();
+    assert_eq!(lib.count("SELECT COUNT(*) FROM faces WHERE score < 0.6"), 3, "ตัววิเคราะห์จำลองให้คะแนนต่ำสามใบ");
+
+    // สองใบเบลอของ "คนเดียวกัน" ไม่ถูกจับเป็นกลุ่ม; ทั้งสามใบยังนับเป็นใบหน้าที่ยังไม่มีชื่อ
+    let overview = lib.call("get_review_overview", json!({}));
+    assert_eq!(overview["unnamedFaceCount"], 9);
+    let sizes: Vec<i64> = arr(&overview["clusters"]).iter().map(|c| c["faceCount"].as_i64().unwrap()).collect();
+    assert_eq!(sizes, [3, 2], "กลุ่มมีแต่ใบที่ตัวตรวจมั่นใจ");
+    assert_eq!(overview["singleFaceCount"], 4, "C หนึ่งใบ + ใบคะแนนต่ำสามใบ");
+
+    // ตั้งชื่อ A แล้ว: ใบคะแนนต่ำของ A ไม่ได้ข้อเสนอ ทั้งในตัวดูภาพและในคิว
+    let a1 = faces_of(&lib, "a1.jpg");
+    let named =
+        lib.call("assign_faces", json!({ "requestId": new_id(), "faceIds": [a1[0]["id"]], "newPersonName": "คุณกานต์" }));
+    let kan = named["createdPerson"]["id"].as_str().unwrap().to_string();
+    assert_eq!(faces_of(&lib, "a2.jpg")[0]["suggestion"]["person"]["id"], kan.as_str());
+    let blur = faces_of(&lib, "a_blur.jpg");
+    assert_eq!(blur.len(), 1, "กรอบยังอยู่ให้เห็นในตัวดูภาพ");
+    assert!(blur[0]["suggestion"].is_null() && blur[0]["person"].is_null());
+    assert_eq!(lib.call("get_review_overview", json!({}))["suggested"][0]["faceCount"], 2);
+
+    // ผู้ใช้ยังตั้งชื่อใบนั้นเองได้ และค้นเจอทันที
+    lib.call("assign_faces", json!({ "requestId": new_id(), "faceIds": [blur[0]["id"]], "personId": kan }));
+    assert_eq!(lib.filenames(json!({ "personIds": [kan] })), ["a1.jpg", "a_blur.jpg"]);
+}
+
 #[test]
 fn manual_labels_survive_analysis_and_gain_an_embedding() {
     let lib = Lib::with_ai();

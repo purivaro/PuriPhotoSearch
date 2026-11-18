@@ -233,7 +233,7 @@ function ReviewWorkspace({ overview, eventId, tab, onTabChange, modelReady }: { 
         <p className="mt-4 flex items-start gap-2 text-[13.5px] text-muted" data-testid="review-single-faces">
           <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
           <span>
-            อีก {formatCount(overview.singleFaceCount)} ใบหน้ายังไม่เข้ากลุ่มใด (พบครั้งเดียวหรือไม่คล้ายใบหน้าอื่นพอ) ตั้งชื่อได้จากตัวดูภาพโดยคลิกที่กรอบใบหน้า —{' '}
+            อีก {formatCount(overview.singleFaceCount)} ใบหน้ายังไม่เข้ากลุ่มใด (พบครั้งเดียว ไม่คล้ายใบหน้าอื่นพอ หรือภาพไม่ชัดพอให้ AI เสนอชื่อ) ตั้งชื่อได้จากตัวดูภาพโดยคลิกที่กรอบใบหน้า —{' '}
             <Link to={`/search?face=no_person${eventId ? `&e=${eventId}` : ''}`} className="font-semibold text-action hover:underline">
               ดูรูปที่ยังไม่มีชื่อบุคคล
             </Link>

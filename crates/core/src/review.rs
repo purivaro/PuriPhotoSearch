@@ -17,6 +17,9 @@ use std::sync::Arc;
 const SUGGEST_MIN: f32 = 0.45;
 const CLOSE_MIN: f32 = 0.60;
 const CLUSTER_MIN: f32 = 0.50;
+/// คะแนนต่ำสุดของตัวตรวจใบหน้าที่จะนำใบนั้นมาเสนอชื่อหรือจัดกลุ่ม ใบที่ต่ำกว่านี้ (ท้ายทอย ภาพเบลอ สิ่งที่ไม่ใช่หน้า)
+/// ยังมีกรอบในตัวดูภาพและตั้งชื่อเองได้ แต่ AI ไม่เดาให้ — เจ้าของผลิตภัณฑ์ตัดสิน 18 พ.ย. 2569 (DECISIONS ข้อ 9)
+const MIN_DETECTION_SCORE: f64 = 0.6;
 const REFS_PER_PERSON: usize = 12;
 /// เพดานจำนวนใบหน้าที่นำมาคิดต่อครั้ง เพื่อให้หน้าตรวจสอบตอบสนองทัน (ใบหน้าคุณภาพดีกว่ามาก่อน)
 const MAX_REVIEW_FACES: usize = 12_000;
@@ -105,6 +108,7 @@ struct Unnamed {
 }
 
 /// ใบหน้าที่ยังไม่มีชื่อ (active, อยู่บน revision ปัจจุบัน, ไม่มีคำยืนยัน) ที่มีเวกเตอร์ใน space นี้
+/// และตัวตรวจมั่นใจพอ (กรอบที่ผู้ใช้วาดเองไม่มีคะแนน ถือว่ามั่นใจ)
 fn load_unnamed(
     conn: &Connection,
     space: &str,
@@ -120,11 +124,13 @@ fn load_unnamed(
          WHERE f.status = 'active'
            AND NOT EXISTS (SELECT 1 FROM face_assignments a WHERE a.face_id = f.id AND a.revoked_at IS NULL)
            AND (?2 IS NULL OR ep.event_id = ?2) AND (?3 IS NULL OR f.photo_revision_id = ?3)
+           AND COALESCE(f.score, 1) >= ?5
          ORDER BY COALESCE(f.score, 1) DESC, f.id LIMIT ?4",
     )?;
-    let rows = stmt.query_map(params![space, event_id, revision_id, MAX_REVIEW_FACES as i64], |r| {
-        Ok(Unnamed { face_id: r.get(0)?, vector: normalize(ai::from_blob(&r.get::<_, Vec<u8>>(1)?)) })
-    })?;
+    let rows = stmt
+        .query_map(params![space, event_id, revision_id, MAX_REVIEW_FACES as i64, MIN_DETECTION_SCORE], |r| {
+            Ok(Unnamed { face_id: r.get(0)?, vector: normalize(ai::from_blob(&r.get::<_, Vec<u8>>(1)?)) })
+        })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 

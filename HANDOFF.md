@@ -7,8 +7,8 @@
 
 | | สถานะ |
 |---|---|
-| `main` (GitHub: purivaro/PuriPhotoSearch, public) | รุ่น 2.0.0-alpha.1 เผยแพร่แล้วเป็น pre-release (ยังไม่มี AI ใบหน้า) |
-| branch **`feat/face-analysis`** | Rust + UI ของชุดใบหน้าครบ ตรวจรับแล้ว เปิดเป็น Draft PR รอหลวงพี่ดู |
+| `main` (GitHub: purivaro/PuriPhotoSearch, public) | รุ่น 2.0.0-alpha.1 เผยแพร่แล้วเป็น pre-release (ยังไม่มี AI ใบหน้า); โลโก้/ไอคอนใหม่ (น้องโพลารอยด์) merge แล้วใน PR #5 |
+| branch **`feat/face-analysis`** | Rust + UI ของชุดใบหน้าครบ ตรวจรับแล้ว เปิดเป็น Draft PR #4 รอหลวงพี่ดู (ยังไม่มีโลโก้ใหม่จนกว่าจะรวมกับ `main`) |
 
 ## ที่ทำในรอบสอง (รายละเอียดและตัวเลขอยู่ใน `docs/TEST_REPORT.md` หมวดวิเคราะห์ใบหน้า)
 
@@ -21,7 +21,7 @@
 
 ## ที่ค้าง
 
-1. **รอหลวงพี่ตัดสิน** (IMPLEMENTATION_STATUS คำถามข้อ 3): จะกรองใบหน้าที่คะแนนตัวตรวจต่ำกว่า 0.6 ออกจากข้อเสนอ/การจัดกลุ่มไหม
+1. ~~กรองใบหน้าคะแนนตัวตรวจต่ำกว่า 0.6~~ — หลวงพี่ตัดสินให้กรอง ทำแล้ว (`MIN_DETECTION_SCORE` ใน `review.rs`, มีเทสต์, วัดกับรูปจริงแล้ว)
 2. **รอหลวงพี่ดู PR** แล้วค่อย merge และออกรุ่น alpha.2 ด้วย `scripts/release-mac.sh` (หรือ workflow เมื่อมี secret) — งานใหญ่ เปลี่ยน schema
 3. **หลวงพี่ต้องรันเอง** (ผมไม่แตะรหัส/ใบรับรอง): `scripts/setup-release-secrets.sh` หนึ่งครั้ง เพื่อให้ GitHub Actions เซ็น + notarize ได้
    (`.github/workflows/release.yml` ยังไม่เคยรัน)
