@@ -58,12 +58,12 @@ PersonQuickView (S05/S08): **ทำแล้ว ทดสอบแล้ว** �
 | W02 Folder preview | ทำแล้ว ทดสอบแล้ว (ไม่มีตัวนับระหว่างตรวจ) |
 | W03 Catalog + jobs | ทำแล้ว ทดสอบแล้ว — ยกเว้นการ kill process กลางงานจริง (ทดสอบด้วยการจำลองสถานะในฐาน) |
 | W04 People + manual labels | ทำแล้ว ทดสอบแล้ว — ยกเว้นหน้าจัดกลุ่ม |
-| W05 AI pipeline | ทำแล้ว ทดสอบแล้ว (Apple Silicon) — `buffalo_l` ผ่าน ONNX Runtime, ติดตั้งโมเดลในแอป, วิเคราะห์ในงานเบื้องหลัง; Mac Intel ไม่มีตัววิเคราะห์; ยังไม่มี CoreML และการเปลี่ยนรุ่นโมเดล |
+| W05 AI pipeline | ทำแล้ว ทดสอบแล้ว (Apple Silicon; Windows x64 เฉพาะบน runner ของ CI) — `buffalo_l` ผ่าน ONNX Runtime, ติดตั้งโมเดลในแอป, วิเคราะห์ในงานเบื้องหลัง; Mac Intel ไม่มีตัววิเคราะห์; ยังไม่มี CoreML และการเปลี่ยนรุ่นโมเดล |
 | W06 Review + correction | บางส่วน — ยืนยัน/ปฏิเสธข้อเสนอ, เปลี่ยนคน, ไม่ใช่ใบหน้า, คิวตรวจสอบ; ไม่มี merge/split/undo |
 | W07 Advanced search | บางส่วน — AND/OR, ปรากฏร่วม→AND, ภาษาไทย; ไม่มีค้นด้วยใบหน้าตัวอย่าง |
 | W08 Sources + recovery | บางส่วน — ออฟไลน์/ต่อกลับ; ไม่มี relink, archive, watcher |
 | W09 Export + backups | บางส่วน — คัดลอกแบบ flat; ไม่มี CSV, manifest ไฟล์, สำรอง/กู้คืน |
-| W10 Migration + release | บางส่วน — นำรายชื่อ/กลุ่ม/ใบหน้าตัวอย่างจากฐานจริงเข้าได้; ยังไม่นำรูป/กรอบ/คำปฏิเสธเข้า; เผยแพร่ตัวติดตั้ง macOS ที่เซ็น + notarize แล้วเป็น pre-release `v2.0.0-alpha.2` (สร้างโดย workflow `Release` เมื่อ push tag; ยังไม่ได้ลองบนเครื่องอื่น) |
+| W10 Migration + release | บางส่วน — นำรายชื่อ/กลุ่ม/ใบหน้าตัวอย่างจากฐานจริงเข้าได้; ยังไม่นำรูป/กรอบ/คำปฏิเสธเข้า; workflow `Release` สร้างตัวติดตั้ง Windows (NSIS, ไม่ได้เซ็น, ยังไม่เคยติดตั้งบนเครื่องจริงและยังไม่เคยเผยแพร่) คู่กับของ macOS; เผยแพร่ตัวติดตั้ง macOS ที่เซ็น + notarize แล้วเป็น pre-release `v2.0.0-alpha.2` (สร้างโดย workflow `Release` เมื่อ push tag; ยังไม่ได้ลองบนเครื่องอื่น) |
 
 ## Acceptance matrix T01–T37
 
