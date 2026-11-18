@@ -35,6 +35,8 @@ pub struct PersonSummary {
     pub person: PersonRef,
     pub nickname: Option<String>,
     pub confirmed_photo_count: i64,
+    /// รูปที่ AI จัดให้คนนี้และยังไม่มีคำยืนยันของคนนี้ในรูปนั้น (0 จนกว่า `review::ensure_matches` จะถูกเรียก)
+    pub ai_photo_count: i64,
     pub pinned: bool,
     pub groups: Vec<GroupRef>,
     pub archived: bool,
@@ -98,7 +100,9 @@ fn person_select() -> String {
         "SELECT pe.id, pe.display_name, {PERSON_COVER_SQL}, pe.nickname,
            (SELECT COUNT(DISTINCT v.photo_id) FROM v_confirmed v WHERE v.person_id = pe.id),
            EXISTS(SELECT 1 FROM pinned_persons pp WHERE pp.person_id = pe.id),
-           pe.catalog_state = 'archived', pe.record_version
+           pe.catalog_state = 'archived', pe.record_version,
+           (SELECT COUNT(DISTINCT m.revision_id) FROM temp.ai_matches m WHERE m.person_id = pe.id AND NOT EXISTS (
+              SELECT 1 FROM v_confirmed v WHERE v.person_id = pe.id AND v.revision_id = m.revision_id))
          FROM persons pe"
     )
 }
@@ -108,6 +112,7 @@ fn person_from_row(r: &rusqlite::Row) -> rusqlite::Result<PersonSummary> {
         person: PersonRef::new(r.get(0)?, r.get(1)?, r.get(2)?),
         nickname: r.get(3)?,
         confirmed_photo_count: r.get(4)?,
+        ai_photo_count: r.get(8)?,
         pinned: r.get(5)?,
         groups: vec![],
         archived: r.get(6)?,
@@ -199,8 +204,18 @@ pub fn coappearances(conn: &Connection, person_id: &str, limit: i64) -> Result<V
         .collect()
 }
 
+/// รูปของบุคคลหนึ่ง (?1) แยกตามกิจกรรม: ที่ยืนยันแล้ว รวมกับที่ AI จัดให้ (`temp.ai_matches`)
+const PERSON_PHOTOS_CTE: &str = "WITH mine(photo_id, event_id) AS (
+       SELECT v.photo_id, v.event_id FROM v_confirmed v WHERE v.person_id = ?1
+       UNION
+       SELECT p.id, ep.event_id FROM temp.ai_matches m
+       JOIN photos p ON p.current_revision_id = m.revision_id AND p.catalog_state = 'active'
+       JOIN event_photos ep ON ep.photo_id = p.id
+       JOIN events e ON e.id = ep.event_id AND e.catalog_state = 'active'
+       WHERE m.person_id = ?1)";
+
 fn event_count(conn: &Connection, person_id: &str) -> Result<i64> {
-    Ok(conn.query_row("SELECT COUNT(DISTINCT event_id) FROM v_confirmed WHERE person_id = ?1", [person_id], |r| {
+    Ok(conn.query_row(&format!("{PERSON_PHOTOS_CTE} SELECT COUNT(DISTINCT event_id) FROM mine"), [person_id], |r| {
         r.get(0)
     })?)
 }
@@ -213,11 +228,12 @@ pub fn get(conn: &Connection, person_id: &str) -> Result<PersonDetail> {
         .collect::<rusqlite::Result<_>>()?;
     let notes: String = conn.query_row("SELECT notes FROM persons WHERE id = ?1", [person_id], |r| r.get(0))?;
     let events = conn
-        .prepare(
-            "SELECT e.id, e.title, e.event_date, COUNT(DISTINCT v.photo_id), MIN(v.photo_id)
-             FROM v_confirmed v JOIN events e ON e.id = v.event_id WHERE v.person_id = ?1
-             GROUP BY e.id ORDER BY e.event_date IS NULL, e.event_date DESC, e.id DESC",
-        )?
+        .prepare(&format!(
+            "{PERSON_PHOTOS_CTE}
+             SELECT e.id, e.title, e.event_date, COUNT(DISTINCT mine.photo_id), MIN(mine.photo_id)
+             FROM mine JOIN events e ON e.id = mine.event_id
+             GROUP BY e.id ORDER BY e.event_date IS NULL, e.event_date DESC, e.id DESC"
+        ))?
         .query_map([person_id], |r| {
             Ok(PersonEventCount {
                 event_id: r.get(0)?,
@@ -244,7 +260,12 @@ pub fn quick_view(conn: &Connection, person_id: &str) -> Result<QuickView> {
     let notes: String = conn.query_row("SELECT notes FROM persons WHERE id = ?1", [person_id], |r| r.get(0))?;
     let recent = catalog::query_photos(
         conn,
-        &SearchParams { person_ids: vec![person_id.to_string()], limit: Some(4), ..Default::default() },
+        &SearchParams {
+            person_ids: vec![person_id.to_string()],
+            limit: Some(4),
+            include_suggested: true,
+            ..Default::default()
+        },
     )?;
     Ok(QuickView {
         confirmed_event_count: event_count(conn, person_id)?,

@@ -229,11 +229,19 @@ function ReviewWorkspace({ overview, eventId, tab, onTabChange, modelReady }: { 
         </div>
       )}
 
+      {tab === 'unknown' && overview.unexaminedFaceCount > 0 && (
+        <p className="mt-4 flex items-start gap-2 text-[13.5px] text-muted" data-testid="review-unexamined-faces">
+          <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span>
+            ยังมีอีก {formatCount(overview.unexaminedFaceCount)} ใบหน้าที่ยังไม่ได้นำมาจัดกลุ่ม ระบบจัดกลุ่มครั้งละ 12,000 ใบที่ชัดที่สุดก่อน เมื่อตั้งชื่อกลุ่มข้างบนแล้ว ชุดถัดไปจะตามเข้ามาเอง
+          </span>
+        </p>
+      )}
       {tab === 'unknown' && overview.singleFaceCount > 0 && (
         <p className="mt-4 flex items-start gap-2 text-[13.5px] text-muted" data-testid="review-single-faces">
           <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
           <span>
-            อีก {formatCount(overview.singleFaceCount)} ใบหน้ายังไม่เข้ากลุ่มใด (พบครั้งเดียว ไม่คล้ายใบหน้าอื่นพอ หรือภาพไม่ชัดพอให้ AI เสนอชื่อ) ตั้งชื่อได้จากตัวดูภาพโดยคลิกที่กรอบใบหน้า —{' '}
+            อีก {formatCount(overview.singleFaceCount)} ใบหน้ายังไม่เข้ากลุ่มใด (พบครั้งเดียว ไม่คล้ายใบหน้าอื่นพอ หรือภาพไม่ชัดพอให้ AI จัดให้) ตั้งชื่อได้จากตัวดูภาพโดยคลิกที่กรอบใบหน้า —{' '}
             <Link to={`/search?face=no_person${eventId ? `&e=${eventId}` : ''}`} className="font-semibold text-action hover:underline">
               ดูรูปที่ยังไม่มีชื่อบุคคล
             </Link>

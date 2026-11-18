@@ -19,7 +19,7 @@ type PeopleSort = 'name' | 'photos';
 function sortPeople(people: PersonSummary[], sort: PeopleSort): PersonSummary[] {
   const byName = (a: PersonSummary, b: PersonSummary) => a.displayName.localeCompare(b.displayName, 'th') || a.id.localeCompare(b.id);
   const list = [...people];
-  return sort === 'photos' ? list.sort((a, b) => b.confirmedPhotoCount - a.confirmedPhotoCount || byName(a, b)) : list.sort(byName);
+  return sort === 'photos' ? list.sort((a, b) => b.confirmedPhotoCount + b.aiPhotoCount - (a.confirmedPhotoCount + a.aiPhotoCount) || byName(a, b)) : list.sort(byName);
 }
 
 /** S08 — รายชื่อบุคคล: เฉพาะคนที่ตั้งชื่อแล้ว ไม่ปะปนกับใบหน้าที่ยังไม่ยืนยัน */
@@ -61,7 +61,7 @@ export function PeoplePage() {
     <Page aside={<PersonQuickViewHost personId={quickView.personId} onClose={quickView.close} restoreFocus={quickView.restoreFocus} />}>
       <PageHeader
         title="บุคคล"
-        subtitle="คนที่ตั้งชื่อแล้ว จำนวนรูปนับเฉพาะใบหน้าที่ยืนยัน"
+        subtitle="คนที่ตั้งชื่อแล้ว จำนวนรูปรวมรูปที่ AI จัดให้ (เลขหลังรูปประกาย) ซึ่งยังไม่มีคนตรวจ"
         actions={
           <Button icon={<UserPlus className="size-[18px]" aria-hidden />} onClick={() => setCreating(true)} data-testid="people-add">
             เพิ่มบุคคล
@@ -103,7 +103,7 @@ export function PeoplePage() {
           </label>
           <Select value={sort} onChange={(e) => setSort(e.target.value as PeopleSort)} aria-label="เรียงบุคคลตาม" className="ml-auto">
             <option value="name">เรียงตามชื่อ</option>
-            <option value="photos">เรียงตามจำนวนรูปยืนยัน</option>
+            <option value="photos">เรียงตามจำนวนรูป</option>
           </Select>
         </div>
       )}

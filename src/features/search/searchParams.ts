@@ -13,6 +13,8 @@ export interface SearchFilters {
   includeUnknownDate: boolean;
   faceFilter: SearchParams['faceFilter'];
   sort: SearchParams['sort'];
+  /** นับรูปที่ AI จัดให้ด้วย (ค่าเริ่มต้น); ปิด = เฉพาะรูปที่มีคนยืนยันแล้ว */
+  includeAi: boolean;
 }
 
 export const DEFAULT_FILTERS: SearchFilters = {
@@ -26,6 +28,7 @@ export const DEFAULT_FILTERS: SearchFilters = {
   includeUnknownDate: false,
   faceFilter: 'any',
   sort: 'taken_desc',
+  includeAi: true,
 };
 
 const SORTS: SearchParams['sort'][] = ['taken_desc', 'taken_asc', 'added_desc', 'filename'];
@@ -54,6 +57,7 @@ export function parseFilters(search: URLSearchParams): SearchFilters {
     includeUnknownDate: search.get('unk') === '1',
     faceFilter: face && FACE_FILTERS.includes(face) ? face : 'any',
     sort: sort && SORTS.includes(sort) ? sort : 'taken_desc',
+    includeAi: search.get('ai') !== '0',
   };
 }
 
@@ -73,6 +77,7 @@ export function filtersToSearch(filters: SearchFilters): URLSearchParams {
   }
   if (filters.faceFilter !== 'any') out.set('face', filters.faceFilter);
   if (filters.sort !== 'taken_desc') out.set('sort', filters.sort);
+  if (!filters.includeAi) out.set('ai', '0');
   return out;
 }
 
@@ -94,6 +99,7 @@ export function filtersToQuery(filters: SearchFilters, limit: number): PhotoQuer
     faceFilter: filters.faceFilter,
     sort: filters.sort,
     limit,
+    includeSuggested: filters.includeAi,
   };
   if (text) query.text = text;
   if (hasDateFilter(filters)) {
@@ -111,9 +117,9 @@ export function filterIdentity(filters: SearchFilters): string {
   return search.toString();
 }
 
-/** ลิงก์ค้นรูปที่ A และ B อยู่ด้วยกัน: ยืนยันแล้วเท่านั้น, ต้องมีทุกคน (Blueprint 11.7) */
+/** ลิงก์ค้นรูปที่ A และ B อยู่ด้วยกัน: ยืนยันแล้วเท่านั้น (ตรงกับตัวเลข "ปรากฏร่วม"), ต้องมีทุกคน (Blueprint 11.7) */
 export function coappearanceSearchPath(personA: Id, personB: Id, scope?: Pick<SearchFilters, 'eventIds'>): string {
-  const search = filtersToSearch({ ...DEFAULT_FILTERS, personIds: [personA, personB], personMode: 'all', eventIds: scope?.eventIds ?? [] });
+  const search = filtersToSearch({ ...DEFAULT_FILTERS, personIds: [personA, personB], personMode: 'all', eventIds: scope?.eventIds ?? [], includeAi: false });
   return `/search?${search.toString()}`;
 }
 

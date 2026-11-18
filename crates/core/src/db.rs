@@ -23,6 +23,13 @@ fn configure(conn: &Connection) -> Result<()> {
     if fk != 1 {
         return Err(AppError::internal("เปิดการบังคับ foreign key ไม่สำเร็จ"));
     }
+    // ใบหน้าที่ยังไม่มีคำยืนยัน → บุคคลที่ AI จัดให้ (review::ensure_matches เติม): คำนวณใหม่ได้เสมอ จึงไม่เก็บลงไฟล์คลัง
+    conn.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS ai_matches (
+           face_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, revision_id TEXT NOT NULL) WITHOUT ROWID;
+         CREATE INDEX IF NOT EXISTS temp.ix_ai_matches_revision ON ai_matches(revision_id, person_id);
+         CREATE INDEX IF NOT EXISTS temp.ix_ai_matches_person ON ai_matches(person_id, revision_id);",
+    )?;
     Ok(())
 }
 

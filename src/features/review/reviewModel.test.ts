@@ -9,7 +9,7 @@ const faces = [
 ];
 
 function overview(partial: Partial<ReviewOverview>): ReviewOverview {
-  return { reviewRevision: 1, unnamedFaceCount: 0, suggested: [], clusters: [], singleFaceCount: 0, photosPendingAnalysis: 0, ...partial };
+  return { reviewRevision: 1, unnamedFaceCount: 0, suggested: [], clusters: [], singleFaceCount: 0, unexaminedFaceCount: 0, photosPendingAnalysis: 0, ...partial };
 }
 
 describe('การเลือกใบหน้าในคิวตรวจ', () => {
@@ -51,9 +51,9 @@ describe('การเลื่อนไปกลุ่มถัดไป', () =
 });
 
 describe('คิวและแท็บ', () => {
-  const person = { id: 'person-1', displayName: 'ก', coverFaceId: null, coverAsset: null, nickname: null, confirmedPhotoCount: 3, pinned: false, groups: [], archived: false, recordVersion: 1 };
+  const person = { id: 'person-1', displayName: 'ก', coverFaceId: null, coverAsset: null, nickname: null, confirmedPhotoCount: 3, aiPhotoCount: 0, pinned: false, groups: [], archived: false, recordVersion: 1 };
   const data = overview({
-    suggested: [{ person, faceCount: 4, sampleFaceIds: ['f1'] }],
+    suggested: [{ person, faceCount: 4, photoCount: 4, sampleFaceIds: ['f1'] }],
     clusters: [{ clusterId: 'c1', faceCount: 2, sampleFaceIds: ['f2', 'f3'] }],
   });
   it('แปลงเป็นรายการคิวตามแท็บ โดยอ้างด้วย ID ไม่ใช่ชื่อ', () => {

@@ -322,7 +322,12 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
             ok(platform::reveal(Path::new(&folder))?)
         }
 
-        QueryPhotos(p) => ok(catalog::query_photos(&app.db(), &p)?),
+        QueryPhotos(p) => {
+            if p.include_suggested {
+                review::ensure_matches(app)?;
+            }
+            ok(catalog::query_photos(&app.db(), &p)?)
+        }
         GetPhotoDetails { photo_id } => ok(catalog::get_photo_details(app, &photo_id)?),
         RevealPhoto { photo_id } => {
             let path = catalog::photo_path(&app.db(), &photo_id)?;
@@ -334,16 +339,28 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         }
         SearchSuggestions { text, limit } => ok(catalog::suggestions(&app.db(), &text, limit)?),
 
-        ListPeople(a) => ok(people::list(&app.db(), &a)?),
-        GetPerson { person_id } => ok(people::get(&app.db(), &person_id)?),
+        ListPeople(a) => {
+            review::ensure_matches(app)?;
+            ok(people::list(&app.db(), &a)?)
+        }
+        GetPerson { person_id } => {
+            review::ensure_matches(app)?;
+            ok(people::get(&app.db(), &person_id)?)
+        }
         SavePerson(a) => ok(people::save(app, a)?),
         SetPersonArchived { person_id, archived } => ok(people::set_archived(app, &person_id, archived)?),
         SetPersonCover { person_id, face_id } => ok(people::set_cover(app, &person_id, &face_id)?),
-        ListHomePeople { limit } => ok(people::home_people(&app.db(), limit)?),
+        ListHomePeople { limit } => {
+            review::ensure_matches(app)?;
+            ok(people::home_people(&app.db(), limit)?)
+        }
         SetPersonPinned { person_id, pinned } => ok(people::set_pinned(app, &person_id, pinned)?),
         RecordPersonView { person_id } => ok(people::record_view(app, &person_id)?),
         SetHomePeopleTab { tab } => ok(people::set_home_tab(app, &tab)?),
-        GetPersonQuickView { person_id } => ok(people::quick_view(&app.db(), &person_id)?),
+        GetPersonQuickView { person_id } => {
+            review::ensure_matches(app)?;
+            ok(people::quick_view(&app.db(), &person_id)?)
+        }
         ListGroups {} => ok(people::list_groups(&app.db())?),
         CreateGroup { name } => ok(people::create_group(app, &name)?),
         DeleteGroup { group_id } => ok(people::delete_group(app, &group_id)?),

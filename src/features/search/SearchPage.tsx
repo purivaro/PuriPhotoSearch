@@ -184,6 +184,14 @@ export function SearchPage() {
             <option value="no_person">ยังไม่มีชื่อบุคคล</option>
           </Select>
 
+          <label
+            className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-full border border-line bg-surface px-3.5 text-sm font-medium text-ink"
+            title="นับรูปที่ระบบจับคู่ใบหน้าให้เองด้วย แม้ยังไม่มีคนตรวจ เอาเครื่องหมายออกเพื่อดูเฉพาะรูปที่ยืนยันแล้ว"
+          >
+            <input type="checkbox" className="size-4 accent-[var(--action)]" checked={filters.includeAi} onChange={(e) => update({ includeAi: e.target.checked })} data-testid="search-include-ai" />
+            รวมรูปที่ AI จัดให้
+          </label>
+
           {active && (
             <Button size="sm" variant="ghost" className="h-9" onClick={clearAll} data-testid="search-clear">
               ล้างตัวกรอง
@@ -206,7 +214,7 @@ export function SearchPage() {
             {meta.refreshing && <Spinner className="size-4" />}
             <p className="min-w-0 flex-1 text-[13.5px] text-muted" data-testid="search-coverage">
               {[
-                filters.personIds.length > 0 ? 'นับเฉพาะใบหน้าที่ยืนยันแล้ว' : null,
+                filters.personIds.length > 0 ? (filters.includeAi ? 'รวมรูปที่ AI จัดให้ซึ่งยังไม่มีคนตรวจ (มีรูปประกายกำกับ)' : 'นับเฉพาะใบหน้าที่ยืนยันแล้ว') : null,
                 // ค้นตามคนขณะที่ยังวิเคราะห์ใบหน้าไม่ครบ: บอกความครอบคลุมภายในขอบเขตที่ค้นอยู่ ไม่ใช่ทั้งคลัง
                 filters.personIds.length > 0 && meta.coverage && meta.coverage.facesPending > 0
                   ? `วิเคราะห์ใบหน้าแล้ว ${formatCount(meta.coverage.facesAnalyzed)} จาก ${formatCount(meta.coverage.eligiblePhotos)} รูปในขอบเขตนี้ ผลอาจยังไม่ครบ`

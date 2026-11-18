@@ -235,6 +235,8 @@ export interface SearchParams {
   cursor?: string;
   /** ค่าเริ่มต้น 100, เพดานฝั่ง Rust 200 */
   limit: number;
+  /** นับรูปที่ AI จัดให้บุคคลนั้นด้วย (ยังไม่มีคนยืนยัน); ผลบอกแยกใน `suggestedPeople` */
+  includeSuggested?: boolean;
 }
 
 export interface PersonRef {
@@ -264,6 +266,8 @@ export interface PhotoResult {
   /** ผลตรวจล่าสุดที่บันทึกไว้ว่าไฟล์ต้นฉบับอยู่หรือไม่ */
   available: boolean;
   confirmedPeople: PersonRef[];
+  /** บุคคลที่ AI จัดให้ในรูปนี้ พร้อมใบหน้าที่เป็นเหตุ (มีเมื่อค้นแบบ `includeSuggested`) */
+  suggestedPeople: { person: PersonRef; faceId: Id }[];
 }
 
 export interface Coverage {
@@ -334,6 +338,8 @@ export interface PersonSummary extends PersonRef {
   nickname: string | null;
   /** COUNT(DISTINCT photo) จากใบหน้าที่ยืนยันแล้วบน revision ปัจจุบัน */
   confirmedPhotoCount: number;
+  /** รูปที่ AI จัดให้คนนี้และยังไม่มีคำยืนยันของคนนี้ในรูปนั้น */
+  aiPhotoCount: number;
   pinned: boolean;
   groups: GroupRef[];
   archived: boolean;
@@ -430,6 +436,7 @@ export interface ReviewFace {
 export interface SuggestedGroup {
   person: PersonSummary;
   faceCount: number;
+  photoCount: number;
   /** ใบหน้าตัวอย่างของกลุ่ม (สูงสุด 8) */
   sampleFaceIds: Id[];
 }
@@ -452,6 +459,8 @@ export interface ReviewOverview {
   clusters: UnknownCluster[];
   /** ใบหน้าที่ยังไม่เข้ากลุ่มใด (ตั้งชื่อได้จากตัวดูภาพ) */
   singleFaceCount: number;
+  /** ใบหน้าที่ยังไม่ได้นำมาจัดกลุ่มรอบนี้ (คิวจัดกลุ่มครั้งละ 12,000 ใบที่ชัดที่สุด) */
+  unexaminedFaceCount: number;
   /** รูปในขอบเขตที่ยังไม่ได้วิเคราะห์ใบหน้า — คิวนี้อาจมีเพิ่มภายหลัง */
   photosPendingAnalysis: number;
 }
