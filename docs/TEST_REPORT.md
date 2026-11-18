@@ -128,11 +128,27 @@ debug build ฉีดสคริปต์เข้า WKWebView ของหน
 ข้อจำกัด: วัดรอบเดียว · เป็นการเทียบกับผลของรุ่นเดิม ไม่ใช่การวัดความแม่นยำกับชุดข้อมูลที่ติดป้ายแล้ว · "ใบหน้าอื่นในรูปเดียวกัน" อาจมีคนเดิมซ้ำได้บ้าง ·
 ทดสอบเฉพาะ JPEG จากโฟลเดอร์ที่ยังอยู่ (16% ของฐานเดิม)
 
+## ตัวติดตั้ง macOS ที่เซ็นแล้ว (`scripts/release-mac.sh`)
+
+รันบนเครื่องพัฒนาด้วยใบรับรอง Developer ID และโปรไฟล์ notarytool จาก keychain
+
+| ตรวจ | ผล |
+|---|---|
+| build | universal (`x86_64 arm64`), แอป 22 MB, DMG 13.2 MB |
+| ลายเซ็นแอป | `codesign --verify --deep --strict` ผ่าน; Developer ID Application, hardened runtime |
+| notarize | Apple ตอบ `Accepted`; staple และ `stapler validate` ผ่าน |
+| Gatekeeper | `spctl -a -t install` (DMG) และ `spctl -a -t exec` (แอป): `accepted, source=Notarized Developer ID` |
+| เนื้อหา | ไม่มี ONNX Runtime หรือไฟล์โมเดลในแอป |
+| เปิดแอป release | เปิดด้วย `HOME` ชี้โฟลเดอร์ชั่วคราว: หน้าต่างขึ้นหน้าเริ่มต้น ฟอนต์และภาพครบ คลังถูกสร้างในโฟลเดอร์ชั่วคราว (คลังจริงของเครื่องไม่ถูกสร้าง) |
+
+ยังไม่ได้ทำ: ติดตั้งจาก DMG ที่ดาวน์โหลดผ่านเบราว์เซอร์ (มี quarantine flag) บนเครื่องอื่น, Intel Mac, macOS รุ่นต่ำกว่า 26,
+และ e2e กับ release build (hook ทดสอบมีเฉพาะ debug build)
+
 ## ยังไม่ได้ทดสอบ
 
 - **แอปจริงกับคลังจริงของผู้ใช้** — ยังไม่เคยเปิดแอปโดยไม่ตั้ง `PURI_DATA_DIR`; คลังจริงยังไม่ถูกสร้าง
 - native folder picker, ลากโฟลเดอร์มาวาง, การเปิด Finder/โปรแกรมดูรูปจริง, สิทธิ์โฟลเดอร์ของ macOS (Desktop/Documents/ไดรฟ์ภายนอก)
-- release build, การเซ็น/notarize, เครื่องที่ไม่มีเครื่องมือพัฒนา, Intel Mac, Windows
+- เครื่องที่ไม่มีเครื่องมือพัฒนา, Intel Mac, macOS รุ่นเก่ากว่า 26, Windows
 - คลังขนาดใหญ่: ยังไม่เคยนำเข้าเกิน 292 รูปในครั้งเดียว; ไม่มี benchmark ของการค้นหาและ grid
 - kill process กลางงานจริง, ดิสก์เต็ม, ไดรฟ์ภายนอก/exFAT/network (รวม `renamex_np` บนระบบไฟล์ที่ไม่รองรับ)
 - ใน UI: PersonEditorDialog, แท็บข้อมูลกิจกรรม, ตรวจรูปใหม่, เปลี่ยนบุคคล/ไม่ใช่บุคคลนี้/ไม่ใช่ใบหน้า, พัก/ทำต่อ/ยกเลิกงาน,
