@@ -1,5 +1,5 @@
 import { forwardRef } from 'react';
-import { Eye, Pin } from 'lucide-react';
+import { Eye, Pin, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import type { PersonSummary } from '@/lib/ipc/types';
@@ -37,7 +37,7 @@ export const PersonCard = forwardRef<HTMLDivElement, PersonCardProps>(function P
       <button
         type="button"
         data-testid="person-card-open"
-        aria-label={`${person.displayName} ${formatCount(person.confirmedPhotoCount)} รูปที่ยืนยันแล้ว เปิดรายละเอียด (กด Space เพื่อดูเร็ว)`}
+        aria-label={`${person.displayName} ${formatCount(person.confirmedPhotoCount + person.aiPhotoCount)} รูป${person.aiPhotoCount > 0 ? ` (AI จัดให้ ${formatCount(person.aiPhotoCount)} รูป)` : ''} เปิดรายละเอียด (กด Space เพื่อดูเร็ว)`}
         onClick={() => onOpen(person)}
         onKeyDown={(event) => {
           if (event.key === ' ') {
@@ -50,8 +50,19 @@ export const PersonCard = forwardRef<HTMLDivElement, PersonCardProps>(function P
         <FaceAvatar asset={person.coverAsset} name={person.displayName} shape="square" decorative className="aspect-[1/1.08] w-full rounded-t-[13px] text-4xl" />
         <span className="block px-3 pt-2.5 pb-3">
           <span className="block truncate pr-8 text-[15.5px] font-bold text-ink">{person.displayName}</span>
-          <span className="block truncate text-[13.5px] text-muted">
-            {formatCount(person.confirmedPhotoCount)} รูป
+          <span
+            className="block truncate pr-7 text-[13.5px] text-muted"
+            title={person.aiPhotoCount > 0 ? `AI จัดให้ ${formatCount(person.aiPhotoCount)} รูป (ยังไม่มีคนตรวจ) · ยืนยันแล้ว ${formatCount(person.confirmedPhotoCount)} รูป` : undefined}
+          >
+            {/* ทุกรูปมาจาก AI: ใส่รูปประกายนำหน้าจำนวนเดียว; มีทั้งสองแบบ: บอกส่วนที่ AI จัดให้ต่อท้าย */}
+            {person.aiPhotoCount > 0 && person.confirmedPhotoCount === 0 && <Sparkles className="mr-1 inline size-3.5 align-[-2px] text-action" aria-hidden />}
+            {formatCount(person.confirmedPhotoCount + person.aiPhotoCount)} รูป
+            {person.aiPhotoCount > 0 && person.confirmedPhotoCount > 0 && (
+              <span className="ml-1.5 inline-flex items-center gap-0.5 font-semibold text-action" data-testid="person-ai-count">
+                <Sparkles className="size-3.5" aria-hidden />
+                {formatCount(person.aiPhotoCount)}
+              </span>
+            )}
             {person.nickname ? ` · ${person.nickname}` : ''}
             {person.archived ? ' · เก็บไว้' : ''}
           </span>

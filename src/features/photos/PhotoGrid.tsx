@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Check, CloudOff, Users } from 'lucide-react';
+import { Check, CloudOff, Sparkles, Users } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Feedback';
 import { cn } from '@/lib/cn';
@@ -7,6 +7,27 @@ import { formatCount } from '@/lib/format';
 import type { PhotoResult } from '@/lib/ipc/types';
 import { PhotoThumb } from './PhotoThumb';
 import { EMPTY_SELECTION, isSelected, selectLoaded, selectRange, selectionCount, toggle, type Selection } from './selection';
+
+/** ป้ายคนในรูป: คนที่ยืนยันแล้ว และคนที่ AI จัดให้ (มีรูปประกายบอกว่ายังไม่มีคนตรวจ) */
+function PeopleBadge({ photo }: { photo: PhotoResult }) {
+  const confirmed = photo.confirmedPeople.map((p) => p.displayName);
+  const byAi = [...new Set(photo.suggestedPeople.map((s) => s.person.displayName))].filter((name) => !confirmed.includes(name));
+  const names = [...confirmed, ...byAi];
+  if (names.length === 0) return null;
+  const title = [confirmed.length ? `ยืนยันแล้ว: ${confirmed.join(', ')}` : null, byAi.length ? `AI จัดให้ (ยังไม่มีคนตรวจ): ${byAi.join(', ')}` : null]
+    .filter(Boolean)
+    .join(' · ');
+  return (
+    <span
+      title={title}
+      data-ai={byAi.length > 0 || undefined}
+      className="absolute bottom-1.5 left-1.5 inline-flex max-w-[70%] items-center gap-1 rounded-md bg-black/65 px-1.5 py-0.5 text-[11.5px] font-medium text-white"
+    >
+      {byAi.length > 0 ? <Sparkles className="size-3 shrink-0 text-brand" aria-label="AI จัดให้" /> : <Users className="size-3 shrink-0" aria-hidden />}
+      <span className="truncate">{names.length === 1 ? names[0] : `${names.length} คน`}</span>
+    </span>
+  );
+}
 
 interface PhotoGridProps {
   items: PhotoResult[];
@@ -85,17 +106,7 @@ export function PhotoGrid({ items, label, selection, onSelectionChange, onOpen, 
                     <CloudOff className="size-3" aria-hidden /> ต้นฉบับไม่พร้อม
                   </span>
                 )}
-                {photo.confirmedPeople.length > 0 && (
-                  <span
-                    title={photo.confirmedPeople.map((p) => p.displayName).join(', ')}
-                    className="absolute bottom-1.5 left-1.5 inline-flex max-w-[70%] items-center gap-1 rounded-md bg-black/65 px-1.5 py-0.5 text-[11.5px] font-medium text-white"
-                  >
-                    <Users className="size-3 shrink-0" aria-hidden />
-                    <span className="truncate">
-                      {photo.confirmedPeople.length === 1 ? photo.confirmedPeople[0]?.displayName : `${photo.confirmedPeople.length} คน`}
-                    </span>
-                  </span>
-                )}
+                <PeopleBadge photo={photo} />
               </button>
               <button
                 type="button"

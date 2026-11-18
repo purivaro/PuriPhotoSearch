@@ -203,6 +203,62 @@ fn suggestions_are_never_confirmations_and_review_acts_only_on_selected_faces() 
 /// ระหว่างที่งานวิเคราะห์ยังวิ่ง (มีใบหน้าใหม่เข้ามาเรื่อย ๆ) รายการที่ผู้ใช้เปิดดูอยู่ต้องยังใช้ได้
 /// มีแต่การตัดสินของผู้ใช้ที่ทำให้รายการนั้นเก่า
 #[test]
+fn ai_matches_count_as_the_persons_photos_until_the_user_says_no() {
+    let lib = Lib::with_ai();
+    party(&lib);
+    lib.install_model();
+    let a1 = faces_of(&lib, "a1.jpg");
+    let named =
+        lib.call("assign_faces", json!({ "requestId": new_id(), "faceIds": [a1[0]["id"]], "newPersonName": "คุณกานต์" }));
+    let kan = named["createdPerson"]["id"].as_str().unwrap().to_string();
+
+    // หน้าบุคคล: รูปที่ AI จัดให้ถูกนับแยกจากรูปที่ยืนยันแล้ว
+    let person = lib.call("get_person", json!({ "personId": kan }));
+    assert_eq!((person["confirmedPhotoCount"].as_i64(), person["aiPhotoCount"].as_i64()), (Some(1), Some(2)));
+    assert_eq!(arr(&lib.call("list_people", json!({})))[0]["aiPhotoCount"], 2);
+
+    // ค้นหา: ไม่ขอรวม = เฉพาะที่ยืนยันแล้ว; ขอรวม = ได้รูปที่ AI จัดให้ด้วย และบอกว่าใบหน้าไหนเป็นเหตุ
+    assert_eq!(lib.filenames(json!({ "personIds": [kan] })), ["a1.jpg"]);
+    let with_ai = json!({ "personIds": [kan], "includeSuggested": true, "sort": "filename" });
+    let page = lib.query(with_ai.clone());
+    assert_eq!(names(&page), ["a1.jpg", "a2.jpg", "a3.jpg"]);
+    let items = arr(&page["items"]);
+    assert!(arr(&items[0]["suggestedPeople"]).is_empty(), "รูปที่ยืนยันแล้วไม่ถูกบอกว่าเป็นของ AI");
+    assert_eq!(items[0]["confirmedPeople"][0]["id"], kan.as_str());
+    assert_eq!(items[1]["suggestedPeople"][0]["person"]["id"], kan.as_str());
+    let a2_face = items[1]["suggestedPeople"][0]["faceId"].clone();
+    assert_eq!(a2_face, faces_of(&lib, "a2.jpg")[0]["id"]);
+    // พิมพ์ชื่อในช่องค้นหา และ "เลือกผลทั้งหมด" ใช้กติกาเดียวกัน
+    assert_eq!(lib.filenames(json!({ "text": "กานต์" })), ["a1.jpg"]);
+    assert_eq!(
+        lib.filenames(json!({ "text": "กานต์", "includeSuggested": true, "sort": "filename" })),
+        ["a1.jpg", "a2.jpg", "a3.jpg"]
+    );
+    assert_eq!(lib.call("create_selection", with_ai.clone())["count"], 3);
+    // คนอื่นในภาพเดียวกัน: ต้องมีทั้งคู่ (ยืนยันหรือ AI จัดให้) จึงจะเข้าผลแบบ "ทุกคนในภาพเดียวกัน"
+    let b1 = faces_of(&lib, "b1.jpg");
+    let other =
+        lib.call("assign_faces", json!({ "requestId": new_id(), "faceIds": [b1[0]["id"]], "newPersonName": "คุณเมย์" }));
+    let may = other["createdPerson"]["id"].as_str().unwrap().to_string();
+    assert_eq!(lib.query(json!({ "personIds": [kan, may], "includeSuggested": true }))["total"], 0);
+    assert_eq!(
+        lib.query(json!({ "personIds": [kan, may], "personMode": "any", "includeSuggested": true }))["total"],
+        5
+    );
+
+    // แจ้งว่าไม่ใช่: รูปนั้นหลุดจากรูปของคุณกานต์ทันทีและไม่กลับมา โดยไม่มีคำยืนยันใดถูกสร้างแทนผู้ใช้
+    lib.call("reject_suggestions", json!({ "faceIds": [a2_face], "personId": kan }));
+    assert_eq!(names(&lib.query(with_ai)), ["a1.jpg", "a3.jpg"]);
+    assert_eq!(lib.call("get_person", json!({ "personId": kan }))["aiPhotoCount"], 1);
+    assert_eq!(lib.count("SELECT COUNT(*) FROM face_assignments WHERE revoked_at IS NULL"), 2);
+
+    let overview = lib.call("get_review_overview", json!({}));
+    assert_eq!(overview["unexaminedFaceCount"], 0);
+    let kan_group = arr(&overview["suggested"]).iter().find(|g| g["person"]["id"] == kan.as_str()).unwrap();
+    assert_eq!((kan_group["faceCount"].as_i64(), kan_group["photoCount"].as_i64()), (Some(1), Some(1)));
+}
+
+#[test]
 fn review_list_stays_usable_while_analysis_adds_faces() {
     let lib = Lib::with_ai();
     party(&lib);

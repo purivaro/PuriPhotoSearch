@@ -64,6 +64,8 @@ pub struct App {
     pub(crate) worker: jobs::Worker,
     pub(crate) ai: Arc<ai::AiState>,
     pub(crate) review_cache: Mutex<Option<Arc<review::ReviewData>>>,
+    pub(crate) face_vectors: Mutex<review::VectorCache>,
+    pub(crate) match_state: Mutex<Option<review::MatchState>>,
     /// กันสอง process เปิดคลังเดียวกัน (Blueprint 8.4)
     _lock: File,
 }
@@ -99,6 +101,8 @@ impl App {
             worker: jobs::Worker::new(db_path, opts.cache_dir, opts.sink, ai.clone()),
             ai,
             review_cache: Mutex::new(None),
+            face_vectors: Mutex::new(HashMap::new()),
+            match_state: Mutex::new(None),
             _lock: lock,
         });
         if opts.start_worker {

@@ -159,7 +159,8 @@ function QuickViewContent({ personId, onClose }: { personId: Id; onClose: () => 
                   </StatusBadge>
                 )}
                 <p className="mt-1.5 text-sm text-muted">
-                  {formatCount(data.person.confirmedPhotoCount)} รูป · {formatCount(data.confirmedEventCount)} กิจกรรม
+                  {formatCount(data.person.confirmedPhotoCount + data.person.aiPhotoCount)} รูป
+                  {data.person.aiPhotoCount > 0 ? ` (AI จัดให้ ${formatCount(data.person.aiPhotoCount)})` : ''} · {formatCount(data.confirmedEventCount)} กิจกรรม
                 </p>
                 <Button size="sm" className="mt-2" icon={<Pencil className="size-3.5" aria-hidden />} onClick={() => setEditing(true)}>
                   แก้ไขข้อมูล
