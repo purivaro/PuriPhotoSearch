@@ -23,7 +23,13 @@ cleanup() {
     pkill -f "$ROOT/target/debug/puri-photo-search" 2>/dev/null || true
     lsof -ti tcp:1420 2>/dev/null | xargs kill 2>/dev/null || true
   fi
-  if [ "${KEEP:-0}" = 1 ]; then echo "  · โฟลเดอร์ทำงาน: $WORK"; else rm -rf "$WORK"; fi
+  if [ "${KEEP:-0}" = 1 ]; then
+    echo "  · โฟลเดอร์ทำงาน: $WORK"
+  else
+    # Windows: ไฟล์คลังยังถูกแอปถือไว้จนกว่า process จะจบจริง — รอให้จบ และไม่ให้การลบโฟลเดอร์ชั่วคราวทำให้เทสต์ที่ผ่านแล้วล้ม
+    if [ -n "${APP_PID:-}" ]; then wait "$APP_PID" 2>/dev/null || true; fi
+    rm -rf "$WORK" 2>/dev/null || { sleep 2; rm -rf "$WORK" 2>/dev/null || echo "  · ลบโฟลเดอร์ชั่วคราวไม่หมด: $WORK"; }
+  fi
 }
 trap cleanup EXIT
 
