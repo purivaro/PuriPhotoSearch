@@ -23,18 +23,34 @@ cleanup() {
     pkill -f "$ROOT/target/debug/puri-photo-search" 2>/dev/null || true
     lsof -ti tcp:1420 2>/dev/null | xargs kill 2>/dev/null || true
   fi
-  if [ "${KEEP:-0}" = 1 ]; then echo "  · โฟลเดอร์ทำงาน: $WORK"; else rm -rf "$WORK"; fi
+  if [ "${KEEP:-0}" = 1 ]; then
+    echo "  · โฟลเดอร์ทำงาน: $WORK"
+  else
+    # Windows: ไฟล์คลังยังถูกแอปถือไว้จนกว่า process จะจบจริง — รอให้จบ และไม่ให้การลบโฟลเดอร์ชั่วคราวทำให้เทสต์ที่ผ่านแล้วล้ม
+    if [ -n "${APP_PID:-}" ]; then wait "$APP_PID" 2>/dev/null || true; fi
+    rm -rf "$WORK" 2>/dev/null || { sleep 2; rm -rf "$WORK" 2>/dev/null || echo "  · ลบโฟลเดอร์ชั่วคราวไม่หมด: $WORK"; }
+  fi
 }
 trap cleanup EXIT
 
+# Windows (Git Bash): แอปต้องได้ path แบบของ Windows (C:\…) ส่วนคำสั่งใน shell ใช้ path แบบ POSIX ต่อไป
+native() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+# path สำหรับแทนลงในสคริปต์ JS ผ่าน sed: backslash หนึ่งตัวต้องกลายเป็นสองตัวในไฟล์ JS
+js_path() { native "$1" | sed 's/\\/\\\\\\\\/g'; }
+# เครื่องมือของ macOS (BSD) กับ Git Bash (GNU) ใช้ตัวเลือกต่างกัน
+if stat -f '%N' . >/dev/null 2>&1; then STAT=(stat -f '%N %m %z'); else STAT=(stat -c '%n %Y %s'); fi
+if command -v shasum >/dev/null 2>&1; then SHA=(shasum -a 256); else SHA=(sha256sum); fi
+
 echo "› สร้างโฟลเดอร์รูปทดสอบ"
-PHOTOS=$(cargo run -q -p puri-core --example make_fixtures -- "$WORK/photos")
+# make_fixtures สร้างโฟลเดอร์แม่ชื่อ 2569 ไว้ใต้ปลายทางที่ระบุ
+PHOTOS="$WORK/photos/2569"
+cargo run -q -p puri-core --example make_fixtures -- "$(native "$WORK/photos")" >/dev/null
 mkdir -p "$WORK/export"
 # สถานะของต้นฉบับก่อนเริ่ม: รายชื่อไฟล์ + SHA-256 + เวลาแก้ไข
-snapshot() { (cd "$PHOTOS" && find . -type f -print0 | sort -z | xargs -0 stat -f '%N %m %z' && find . -type f -print0 | sort -z | xargs -0 shasum -a 256); }
+snapshot() { (cd "$PHOTOS" && find . -type f -print0 | sort -z | xargs -0 "${STAT[@]}" && find . -type f -print0 | sort -z | xargs -0 "${SHA[@]}"); }
 snapshot >"$WORK/before.txt"
 
-sed -e "s|__PHOTOS__|$PHOTOS|g" -e "s|__EXPORT__|$WORK/export|g" "${SMOKE:-$ROOT/e2e/smoke.js}" >"$WORK/smoke.js"
+sed -e "s|__PHOTOS__|$(js_path "$PHOTOS")|g" -e "s|__EXPORT__|$(js_path "$WORK/export")|g" "${SMOKE:-$ROOT/e2e/smoke.js}" >"$WORK/smoke.js"
 if command -v node >/dev/null 2>&1; then
   node --check "$WORK/smoke.js" || { echo "✗ e2e/smoke.js มี syntax error"; exit 1; }
 fi
@@ -46,10 +62,11 @@ fi
 
 # native folder picker ขับด้วยสคริปต์ไม่ได้: debug build ตอบคำขอ pick_folder ตามลำดับนี้แทน
 # (1) โฟลเดอร์ที่จะเพิ่ม  (2) ปลายทางส่งออก  (3) ปลายทางส่งออกรอบสอง (ที่เดิม เพื่อทดสอบชื่อชน)
-export PURI_E2E_PICK="$PHOTOS
-$WORK/export
-$WORK/export"
-export PURI_DATA_DIR="$WORK/library" PURI_DISABLE_OPEN=1 PURI_DISABLE_FACE_ENGINE=1 PURI_E2E_SCRIPT="$WORK/smoke.js" PURI_E2E_REPORT="$REPORT"
+export PURI_E2E_PICK="$(native "$PHOTOS")
+$(native "$WORK/export")
+$(native "$WORK/export")"
+export PURI_DATA_DIR="$(native "$WORK/library")" PURI_DISABLE_OPEN=1 PURI_DISABLE_FACE_ENGINE=1
+export PURI_E2E_SCRIPT="$(native "$WORK/smoke.js")" PURI_E2E_REPORT="$(native "$REPORT")"
 if [ -n "${APP:-}" ]; then
   echo "› เปิด $APP"
   "$APP" >"$WORK/app.log" 2>&1 &
@@ -116,9 +133,9 @@ for f in "$WORK"/export/*; do
   original=$(printf '%s' "$name" | sed -E 's/ \([0-9]+\)(\.[^.]+)$/\1/')
   [ "$original" = "$name" ] || renamed=$((renamed + 1))
   # สำเนาต้องตรงทุก byte กับต้นฉบับไฟล์ใดไฟล์หนึ่งที่ชื่อนี้ (เก็บผลไว้ก่อน grep: pipefail + grep -q ทำให้ท่อแตกได้)
-  sums=$(find "$PHOTOS" -type f -name "$original" -exec shasum -a 256 {} +)
+  sums=$(find "$PHOTOS" -type f -name "$original" -exec "${SHA[@]}" {} +)
   [ -n "$sums" ] || fail "ไฟล์ส่งออก $name ไม่มีต้นฉบับชื่อ $original"
-  sum=$(shasum -a 256 "$f" | cut -d' ' -f1)
+  sum=$("${SHA[@]}" "$f" | cut -d' ' -f1)
   case "$sums" in *"$sum"*) ;; *) fail "ไฟล์ส่งออก $name ไม่ตรงกับต้นฉบับ" ;; esac
 done
 [ "$renamed" -ge 1 ] || fail "ไม่มีไฟล์ที่ถูกเติมเลขท้าย ทั้งที่ส่งออกชื่อซ้ำไปที่เดิม"
@@ -126,7 +143,12 @@ done
 echo "  · ส่งออก $exported ไฟล์ ตรงกับต้นฉบับทุก byte ($renamed ไฟล์ถูกเติมเลขท้ายแทนการเขียนทับ) ไม่เหลือไฟล์ชั่วคราว"
 
 db="$WORK/library/data/library/library.sqlite"
-q() { sqlite3 "file:$db?mode=ro" "$1"; }
+if command -v sqlite3 >/dev/null 2>&1; then
+  q() { sqlite3 "file:$db?mode=ro" "$1"; }
+else
+  # Windows runner ไม่มี sqlite3: ใช้โมดูลที่มากับ Python อ่านอย่างเดียวแทน
+  q() { python -c 'import sqlite3, sys; print(sqlite3.connect(sys.argv[1]).execute(sys.argv[2]).fetchone()[0])' "$(native "$db")" "$1"; }
+fi
 [ "$(q "SELECT COUNT(*) FROM events")" -ge 1 ] || fail "คลังไม่มีกิจกรรม"
 [ "$(q "SELECT COUNT(*) FROM face_assignments WHERE revoked_at IS NULL")" -ge 1 ] || fail "คลังไม่มีคำยืนยันใบหน้า"
 echo "  · คลัง: $(q "SELECT COUNT(*) FROM events") กิจกรรม, $(q "SELECT COUNT(*) FROM photos") รูป, $(q "SELECT COUNT(*) FROM persons") บุคคล, $(q "SELECT COUNT(*) FROM face_assignments WHERE revoked_at IS NULL") คำยืนยัน"

@@ -23,6 +23,17 @@
 
 รุ่นนี้เป็นคนละแอปกับ PuriPhotoSearch 1.x (Python): ติดตั้งคู่กันได้ และไม่แตะข้อมูลของรุ่นเดิม
 
+## ติดตั้ง (Windows) — ยังไม่เคยลองบนเครื่องจริง
+
+ตั้งแต่รุ่นถัดจาก 2.0.0-alpha.2 หน้า Releases จะมี `PuriPhotoSearch-windows-setup.exe` (Windows 10 รุ่น 1803 ขึ้นไป หรือ Windows 11, 64-bit)
+
+1. ดาวน์โหลดแล้วเปิดไฟล์ ตัวติดตั้ง**ไม่ได้เซ็น** (ยังไม่มีใบรับรองของ Windows) SmartScreen จะเตือนว่าไม่รู้จักผู้เผยแพร่ — กด "More info" แล้ว "Run anyway"
+2. ติดตั้งเฉพาะผู้ใช้ปัจจุบัน ไม่ต้องใช้สิทธิ์ผู้ดูแลเครื่อง ถ้าเครื่องยังไม่มี WebView2 ตัวติดตั้งจะดาวน์โหลดให้
+
+**หลักฐานทั้งหมดของรุ่น Windows มาจากเครื่อง runner ของ GitHub** (Windows Server 2025): เทสต์ Rust ทั้งชุด, เส้นทางหลักในหน้าต่าง WebView2 จริง
+และตัววิเคราะห์ใบหน้ากับโมเดลจริง ยังไม่มีใครติดตั้งและใช้บนเครื่อง Windows จริง — รายละเอียดใน [docs/TEST_REPORT.md](docs/TEST_REPORT.md)
+การนำรายชื่อจากรุ่น Python เข้ายังใช้ได้เฉพาะ macOS (ไม่ทราบตำแหน่งข้อมูลของรุ่นเดิมบน Windows)
+
 ## เอกสาร
 
 | ไฟล์ | เนื้อหา |
@@ -37,7 +48,7 @@
 
 ## สิ่งที่ต้องมีเพื่อพัฒนา
 
-- macOS (ทดสอบบน macOS 26.7, Apple Silicon เท่านั้น) พร้อม Xcode Command Line Tools
+- macOS (ทดสอบบน macOS 26.7, Apple Silicon เท่านั้น) พร้อม Xcode Command Line Tools — หรือ Windows พร้อม Visual Studio Build Tools (build และทดสอบผ่าน CI เท่านั้น)
 - Rust stable ≥ 1.89 (ทดสอบด้วย 1.99.1) — เครื่องนี้ติดตั้ง rustup ผ่าน Homebrew จึงต้อง
   `export PATH="/opt/homebrew/opt/rustup/bin:$PATH"`
 - Node ≥ 22 และ pnpm 10
@@ -91,6 +102,7 @@ workflow จะได้แอปที่เซ็นแบบ ad-hoc เท่
 |---|---|
 | คลัง (ชื่อคน, คำยืนยัน, กิจกรรม) | `~/Library/Application Support/com.purivaro.puriphotosearch2/library/` |
 | ภาพย่อและครอปใบหน้า (ลบได้ สร้างใหม่ได้) | `~/Library/Caches/com.purivaro.puriphotosearch2/` |
+| คลัง / ภาพย่อ บน Windows | `%APPDATA%\com.purivaro.puriphotosearch2\library\` / `%LOCALAPPDATA%\com.purivaro.puriphotosearch2\` |
 | รูปต้นฉบับ | โฟลเดอร์เดิมของผู้ใช้ — แอปอ่านอย่างเดียว |
 | ข้อมูลของรุ่น Python | `~/Library/Application Support/PuriPhotoSearch/` — รุ่นนี้ไม่เขียนลงที่นี่ |
 

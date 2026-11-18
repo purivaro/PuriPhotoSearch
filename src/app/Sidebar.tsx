@@ -4,6 +4,7 @@ import { Tooltip } from '@/components/ui/Overlay';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import { isTauri } from '@/lib/ipc/client';
+import { isMac } from '@/lib/platform';
 import { useSummary } from '@/lib/queries';
 import { useSettings } from '@/stores/settings';
 import { Wordmark } from './Logo';
@@ -43,7 +44,7 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
       )}
     >
       {/* แถบบนลากหน้าต่างได้ และเว้นที่ให้ปุ่มไฟจราจรของ macOS */}
-      <div data-tauri-drag-region className={cn('shrink-0', isTauri ? 'h-11' : 'h-4')} />
+      <div data-tauri-drag-region className={cn('shrink-0', isTauri && isMac ? 'h-11' : 'h-4')} />
       <div data-tauri-drag-region className={cn('flex shrink-0 items-center pb-5', collapsed ? 'justify-center px-2' : 'justify-between pr-2 pl-5')}>
         <Wordmark compact={collapsed} />
         {!collapsed && (

@@ -356,7 +356,7 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
     for b in &bindings {
         // โฟลเดอร์ย่อยที่ผูกกับกิจกรรมอื่นอยู่แล้วเป็นของกิจกรรมนั้น: หนึ่งตำแหน่งไฟล์มีหนึ่งกิจกรรมหลัก
         let folder_key = util::path_key(&b.folder);
-        let prefix = format!("{folder_key}/");
+        let prefix = format!("{folder_key}{}", std::path::MAIN_SEPARATOR);
         let other_dirs: Vec<String> = conn
             .prepare(
                 "SELECT folder_key FROM event_source_bindings

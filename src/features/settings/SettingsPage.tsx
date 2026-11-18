@@ -15,6 +15,7 @@ import { call } from '@/lib/ipc/client';
 import type { Capabilities, FaceAnalysisStatus, LegacyImportResult, LegacyReport } from '@/lib/ipc/types';
 import { invalidatePeopleData, useCapabilities, useSummary } from '@/lib/queries';
 import { useSettings, type ThemeChoice } from '@/stores/settings';
+import { MOD_KEY } from '@/lib/platform';
 
 type SettingsTab = 'general' | 'library' | 'ai' | 'migration';
 
@@ -66,14 +67,14 @@ const THEMES: { value: ThemeChoice; label: string; icon: typeof Sun }[] = [
 ];
 
 const SHORTCUTS: [string, string][] = [
-  ['⌘ K', 'ค้นหาคน กิจกรรม หรือชื่อไฟล์จากทุกหน้า'],
-  ['⌘ O', 'เพิ่มโฟลเดอร์กิจกรรม'],
-  ['⌘ F', 'ไปที่ช่องค้นหาของหน้าปัจจุบัน'],
+  [`${MOD_KEY} K`, 'ค้นหาคน กิจกรรม หรือชื่อไฟล์จากทุกหน้า'],
+  [`${MOD_KEY} O`, 'เพิ่มโฟลเดอร์กิจกรรม'],
+  [`${MOD_KEY} F`, 'ไปที่ช่องค้นหาของหน้าปัจจุบัน'],
   ['Space', 'บนการ์ดบุคคล: เปิด/ปิดดูเร็ว'],
   ['← / →', 'ในตัวดูภาพ: รูปก่อนหน้า / ถัดไป'],
   ['+ / − / 0', 'ในตัวดูภาพ: ขยาย / ย่อ / พอดีหน้าต่าง'],
   ['Shift + คลิก', 'ใน grid รูป: เลือกเป็นช่วง'],
-  ['⌘ A', 'ใน grid รูป: เลือกทุกรูปที่แสดงอยู่'],
+  [`${MOD_KEY} A`, 'ใน grid รูป: เลือกทุกรูปที่แสดงอยู่'],
   ['Esc', 'ปิดชั้นบนสุด หรือยกเลิกรูปที่เลือก (ไม่ยกเลิกงานเบื้องหลัง)'],
 ];
 

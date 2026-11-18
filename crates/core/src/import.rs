@@ -130,7 +130,7 @@ pub(crate) fn find_covering_event(
 }
 
 pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
-    let root = std::fs::canonicalize(path)?;
+    let root = util::canonical(path)?;
     if !root.is_dir() {
         return Err(AppError::invalid("กรุณาเลือกโฟลเดอร์ ไม่ใช่ไฟล์รูป"));
     }
@@ -141,7 +141,7 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
     // รายการที่อยู่ในคลังแล้วใต้โฟลเดอร์นี้ — โหลดครั้งเดียวก่อนเดินไฟล์ จะได้ไม่ถือฐานข้อมูลค้างระหว่างสแกน
     let known: HashSet<String> = {
         let conn = app.db();
-        let prefix = format!("{root_key}/");
+        let prefix = format!("{root_key}{}", std::path::MAIN_SEPARATOR);
         let mut stmt = conn.prepare("SELECT path_key FROM photo_locations WHERE substr(path_key, 1, ?1) = ?2")?;
         let rows = stmt.query_map(params![prefix.chars().count() as i64, prefix], |r| r.get::<_, String>(0))?;
         rows.collect::<rusqlite::Result<_>>()?

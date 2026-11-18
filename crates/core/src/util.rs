@@ -32,6 +32,23 @@ pub fn like_pattern(s: &str) -> String {
     out
 }
 
+/// `canonicalize` ที่คืน path แบบที่ผู้ใช้และโปรแกรมอื่นของระบบรู้จัก: บน Windows std คืนรูป verbatim (`\\?\C:\…`)
+/// ซึ่ง Explorer ไม่รับ และไม่ตรงกับ path ที่ตัวเลือกโฟลเดอร์ส่งมา
+pub fn canonical(path: impl AsRef<Path>) -> std::io::Result<std::path::PathBuf> {
+    let p = std::fs::canonicalize(path)?;
+    #[cfg(windows)]
+    {
+        let s = p.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            return Ok(format!(r"\\{rest}").into());
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            return Ok(rest.to_string().into());
+        }
+    }
+    Ok(p)
+}
+
 /// คีย์เทียบตำแหน่งไฟล์: ใช้ path ตามที่ระบบไฟล์รายงาน ไม่ lowercase และไม่ normalize ทับ (Blueprint 7.4)
 pub fn path_key(p: &Path) -> String {
     p.to_string_lossy().into_owned()

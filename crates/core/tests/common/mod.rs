@@ -53,6 +53,16 @@ fn sha(bytes: &[u8]) -> &'static str {
     Box::leak(puri_core::util::hex(&Sha256::digest(bytes)).into_boxed_str())
 }
 
+/// `file://` URL ที่ curl รับ: Windows ต้องเป็น `file:///C:/…`
+fn file_url(path: &Path) -> String {
+    let p = path.display().to_string().replace('\\', "/");
+    if p.starts_with('/') {
+        format!("file://{p}")
+    } else {
+        format!("file:///{p}")
+    }
+}
+
 /// ชุดโมเดลจำลอง: "ดาวน์โหลด" จากไฟล์ zip ในโฟลเดอร์ชั่วคราวผ่าน file:// ด้วย pipeline ติดตั้งตัวจริง
 fn fake_provider(base: &Path) -> FaceEngineProvider {
     let files: &'static [ModelFile] = Box::leak(Box::new([
@@ -65,7 +75,7 @@ fn fake_provider(base: &Path) -> FaceEngineProvider {
             display_name: "ชุดโมเดลทดสอบ",
             space: "fake-space-v1",
             files,
-            download_url: format!("file://{}", base.join("model-source/pack.zip").display()),
+            download_url: file_url(&base.join("model-source/pack.zip")),
             download_bytes: 2_000_000,
             download_source: "โฟลเดอร์ทดสอบ",
             license_note: "ใช้ในเทสต์เท่านั้น",
@@ -83,12 +93,21 @@ pub fn publish_fake_model(base: &Path, corrupt: bool) {
         std::fs::write(dir.join(name), if corrupt { b"tampered".as_slice() } else { bytes }).unwrap();
     }
     std::fs::write(dir.join("unrelated.onnx"), b"not needed by the app").unwrap();
-    let ok = std::process::Command::new("zip")
-        .current_dir(&dir)
-        .args(["-q", "pack.zip", "det.onnx", "rec.onnx", "unrelated.onnx"])
-        .status()
-        .unwrap()
-        .success();
+    // Windows ไม่มี `zip`: bsdtar ใน System32 สร้าง zip ได้ (`-a` เลือกรูปแบบจากนามสกุล)
+    #[cfg(not(windows))]
+    let mut zip = {
+        let mut c = std::process::Command::new("zip");
+        c.args(["-q", "pack.zip"]);
+        c
+    };
+    #[cfg(windows)]
+    let mut zip = {
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+        let mut c = std::process::Command::new(Path::new(&root).join("System32").join("tar.exe"));
+        c.args(["-a", "-cf", "pack.zip"]);
+        c
+    };
+    let ok = zip.current_dir(&dir).args(["det.onnx", "rec.onnx", "unrelated.onnx"]).status().unwrap().success();
     assert!(ok, "zip");
 }
 

@@ -15,6 +15,7 @@ import type { Id } from '@/lib/ipc/types';
 import { qk } from '@/lib/queries';
 import { ViewerInspector } from './ViewerInspector';
 import { ViewerStage, type ViewerStageHandle } from './ViewerStage';
+import { FILE_MANAGER } from '@/lib/platform';
 
 const FILMSTRIP_RADIUS = 7;
 
@@ -214,7 +215,7 @@ export function PhotoViewer() {
           </MenuTrigger>
           <MenuContent>
             <MenuItem icon={<FolderOpen />} disabled={!data?.originalAvailable} onSelect={() => reveal.mutate()}>
-              เปิดใน Finder
+              เปิดใน {FILE_MANAGER}
             </MenuItem>
             <MenuItem icon={<ExternalLink />} disabled={!data?.originalAvailable} onSelect={() => openOriginal.mutate()}>
               เปิดต้นฉบับด้วยแอปของระบบ

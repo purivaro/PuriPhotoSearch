@@ -15,6 +15,7 @@ import { errorMessage, formatCount, formatThaiDate, isErrorCode, middleEllipsis,
 import { assetUrl, call } from '@/lib/ipc/client';
 import type { EventDetail, SearchParams } from '@/lib/ipc/types';
 import { isJobActive, PHOTO_PAGE_SIZE, qk, useActiveJobs, useCapabilities, useEvent, type PhotoQuery } from '@/lib/queries';
+import { FILE_MANAGER } from '@/lib/platform';
 
 type EventTab = 'photos' | 'people' | 'info' | 'history';
 
@@ -153,7 +154,7 @@ export function EventDetailPage() {
         </div>
         <div className="flex shrink-0 items-center gap-2.5 self-center">
           <Button icon={<FolderOpen className="size-[18px]" aria-hidden />} onClick={() => reveal.mutate()} disabled={!data.sourceAvailable} busy={reveal.isPending} data-testid="event-reveal">
-            เปิดใน Finder
+            เปิดใน {FILE_MANAGER}
           </Button>
           <Button
             variant="primary"
