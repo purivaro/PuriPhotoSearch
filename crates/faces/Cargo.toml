@@ -1,0 +1,15 @@
+[package]
+name = "puri-faces"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+jpeg-decoder = { version = "0.3.2", default-features = false }
+kamadak-exif = "0.6.2"
+ort = "=2.0.0-rc.15"
+
+[dev-dependencies]
+rusqlite = { version = "0.43.0", features = ["bundled"] }

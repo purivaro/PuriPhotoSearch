@@ -115,7 +115,22 @@ JPEG ใช้ crate `jpeg-decoder` ถอดแบบย่อระหว่�
 | C. เปลี่ยนเป็นโมเดลที่สัญญาอนุญาตให้แจกได้ | แจกใน installer ได้ | ต้องหาและประเมินความแม่นยำใหม่; วิเคราะห์รูปใหม่ทั้งหมด |
 
 ชุดงานนี้ทำเส้นทาง "ระบุใบหน้าเอง" ให้ครบก่อน และ `get_capabilities` รายงาน `faceAnalysis.available = false` ตามจริง
-ONNX Runtime ผ่าน Rust binding (D07) **ยังไม่ได้ทดลอง**
+
+### ผลทดลอง ONNX Runtime ใน Rust (D07) — ทำแล้ว ยังไม่ต่อเข้าแอป
+
+crate `crates/faces` (ไม่ถูกอ้างจาก `src-tauri` จึงไม่อยู่ในแอปที่แจก) ใช้ `ort` 2.0.0-rc.15 ซึ่งดาวน์โหลด ONNX Runtime 1.31 แบบ static library
+ตอน build และอ่านไฟล์โมเดลจาก `~/.insightface/models/buffalo_sc/` ของเครื่องพัฒนา (ไม่ได้คัดลอกเข้า repo)
+
+- เวกเตอร์ที่ได้อยู่ใน space เดียวกับฐานของรุ่น Python: cosine มัธยฐาน 0.985 จาก 9,084 ใบหน้า — ตารางเต็มใน [LEGACY_AUDIT.md](LEGACY_AUDIT.md) หมวด 3.3
+- เร็วพอบน CPU: ตรวจใบหน้า 16 ms/รูป + 1.1 ms/ใบหน้า น้อยกว่าเวลาถอดรหัสรูป จึงยังไม่ต้องใช้ CoreML
+- `ort` ยังเป็น release candidate และ ONNX Runtime ไม่ใช่ pure Rust (เป็นไลบรารี C++ ที่ลิงก์แบบ static)
+- ต้องลิงก์ runtime ของ clang เอง (`crates/faces/build.rs`) เพราะโค้ด CoreML ใน static library อ้าง `__isPlatformVersionAtLeast`
+- static library นี้ build สำหรับ macOS 13.4 ขึ้นไป (linker เตือน) — เมื่อต่อเข้าแอป `minimumSystemVersion` ต้องขยับจาก 12.0 เป็นอย่างน้อย 13.4
+  หรือ build ONNX Runtime เอง
+- ขนาดไฟล์ทดลอง (release, รวม ORT + SQLite): 21.7 MB
+
+สิ่งที่ยังไม่ได้ทำ: ต่อเข้า pipeline ของแอป (ตาราง `face_analysis_runs` / `face_embeddings` / `match_candidates`), จัดกลุ่มใบหน้า, หน้าตรวจสอบ (S16),
+หน้าติดตั้งโมเดล (S21) และการตัดสินเรื่องสัญญาอนุญาตข้างบน
 
 ## 10. การทดสอบแอปจริง
 
