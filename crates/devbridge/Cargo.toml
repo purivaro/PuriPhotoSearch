@@ -6,7 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-puri-core = { version = "2.0.0-alpha.1", path = "../core" }
-puri-faces = { version = "2.0.0-alpha.1", path = "../faces" }
+puri-core = { version = "2.0.0-alpha.2", path = "../core" }
+puri-faces = { version = "2.0.0-alpha.2", path = "../faces" }
 serde_json = "1.0.154"
 tiny_http = "0.12.0"

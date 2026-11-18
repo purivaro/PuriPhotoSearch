@@ -12,7 +12,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
 puri-core = { path = "../crates/core" }
-puri-faces = { version = "2.0.0-alpha.1", path = "../crates/faces" }
+puri-faces = { version = "2.0.0-alpha.2", path = "../crates/faces" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tauri = { version = "2", features = [] }

@@ -13,7 +13,7 @@
 | Rust: คำสั่ง Tauri ครบทุกตัว | `cargo test -p puri-photo-search` | 1 ผ่าน |
 | Rust: lint | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` | ผ่าน ไม่มี warning |
 | Frontend | `pnpm typecheck`, `pnpm test`, `pnpm build` | typecheck ผ่าน (รวม `noUncheckedIndexedAccess`), vitest 41 ผ่านใน 6 ไฟล์, build ผ่าน (JS 762 kB / gzip 216 kB) |
-| แอปจริง | `e2e/run.sh` | ผ่าน 14 ขั้น ทั้ง `pnpm tauri dev` และ `.app` debug ที่ bundle แล้ว; รันซ้ำหลัง UI ชุดใบหน้าด้วย `pnpm tauri dev` ผ่าน 14 ขั้น (แบบ `.app` ยังไม่ได้รันซ้ำ) |
+| แอปจริง | `e2e/run.sh` | ผ่าน 14 ขั้น ทั้ง `pnpm tauri dev` และ `.app` debug ที่ bundle แล้ว; รันซ้ำหลัง UI ชุดใบหน้า ผ่าน 14 ขั้นทั้งสองแบบ (แบบ `.app` รันกับ bundle debug ที่เซ็นด้วย Developer ID + hardened runtime) |
 | ข้อมูลจริง | Rust core กับ `~/Photos/2569` และฐานของรุ่น Python (อ่านอย่างเดียว) | ดูหมวด "ข้อมูลจริง" |
 
 ## Rust: integration (`crates/core/tests/workflow.rs`)
@@ -168,7 +168,7 @@ debug build ฉีดสคริปต์เข้า WKWebView ของหน
 พบและแก้ระหว่างรอบนี้: ช่องเลือกบุคคลไม่ไฮไลต์รายการใดเมื่อคลังมีรายชื่ออยู่แล้วและผลค้นเปลี่ยน ทำให้พิมพ์ชื่อใหม่แล้วกด Enter ไม่เกิดอะไร
 (e2e ไม่เจอเพราะคลังทดสอบเริ่มจากไม่มีบุคคล) — แก้ให้รายการแรกที่แสดงอยู่ถูกเลือกเสมอ แล้วทดสอบซ้ำในหน้าจอผ่าน
 
-ยังไม่ได้ทดสอบ: ตัววิเคราะห์ใบหน้าใน release build ที่เซ็นแล้ว (ทดสอบในแอป debug และ dev bridge แบบ release), Mac Intel (compile ผ่านเท่านั้น),
+ยังไม่ได้ทดสอบ: ตัววิเคราะห์ใบหน้าใน release build ที่แจก (ทดสอบใน bundle debug ที่เซ็นแบบเดียวกัน และ dev bridge แบบ release — ดูหมวดตัวติดตั้ง), Mac Intel (compile ผ่านเท่านั้น),
 คลังใหญ่กว่า 292 รูปพร้อมวิเคราะห์ใบหน้า, การพักงานดาวน์โหลดโมเดล, เน็ตหลุดกลางทาง, หน้าตรวจสอบระหว่างที่งานวิเคราะห์กำลังวิ่งจริง
 (งาน 292 รูปจบใน 25 วินาทีก่อนเปิดหน้า — กติกานี้มีเทสต์อัตโนมัติยืนยันแทน)
 
@@ -213,6 +213,29 @@ debug build ฉีดสคริปต์เข้า WKWebView ของหน
 
 ยังไม่ได้ทำ: ติดตั้งจาก DMG ที่ดาวน์โหลดผ่านเบราว์เซอร์ (มี quarantine flag) บนเครื่องอื่น, Intel Mac, macOS รุ่นต่ำกว่า 26,
 และ e2e กับ release build (hook ทดสอบมีเฉพาะ debug build)
+
+### รุ่น 2.0.0-alpha.2 (workflow `Release` บน GitHub Actions)
+
+ตั้งแต่รุ่นนี้ตัวติดตั้งที่เผยแพร่สร้างบน GitHub Actions ไม่ใช่เครื่องพัฒนา ก่อนติด tag ตรวจสองทาง (18 พ.ย. 2569):
+
+**bundle debug ที่เซ็นแบบเดียวกับตัวที่แจก** (`pnpm tauri build --debug` ด้วย Developer ID, hardened runtime, ไม่มี entitlement — มี hook ทดสอบ)
+
+| ตรวจ | ผล |
+|---|---|
+| ตัววิเคราะห์ใบหน้าจริง (ONNX Runtime + `buffalo_l`) | ติดตั้งโมเดลจาก zip ในเครื่อง 5.9 วินาที → เพิ่มโฟลเดอร์จริง 24 รูป → 30 ใบหน้า (9 กลุ่ม + 1 ใบเดี่ยว เท่ากับผลใน `pnpm tauri dev`), ครอปใบหน้า 256×256 แสดงผ่าน `puri://` |
+| `e2e/run.sh` (`APP=…`) | ผ่าน 14 ขั้น ต้นฉบับไม่เปลี่ยน |
+
+**ตัวติดตั้งรอบซ้อมจาก workflow** (`workflow_dispatch` บน branch ของรุ่น — build + เซ็น + notarize แต่ไม่เผยแพร่)
+
+| ตรวจ | ผล |
+|---|---|
+| notarize | Apple ตอบ `Accepted`; `stapler validate` ผ่านทั้งบน runner และบนเครื่องนี้ |
+| Gatekeeper | `spctl` รับทั้ง DMG (`-t install`) และแอปข้างใน (`-t exec`): `Notarized Developer ID` |
+| ลายเซ็นแอป | `codesign --verify --deep --strict` ผ่าน; hardened runtime; ไม่มี entitlement |
+| เนื้อหา | `x86_64 arm64`, รุ่น 2.0.0-alpha.2, ขั้นต่ำ macOS 13.4, แอป 40 MB, DMG 18.9 MB; ONNX Runtime ลิงก์อยู่ในส่วน arm64 เท่านั้น; ไม่มีไฟล์โมเดล |
+| เปิดแอป release | เปิดด้วย `HOME` ชี้โฟลเดอร์ชั่วคราว: ขึ้นหน้าเริ่มต้นพร้อมโลโก้ใหม่และการ์ดดาวน์โหลดตัววิเคราะห์ใบหน้า คลังถูกสร้างในโฟลเดอร์ชั่วคราว (คลังจริงของเครื่องไม่ถูกสร้าง) |
+
+ไม่ได้ทำ: กดดาวน์โหลดโมเดลและวิเคราะห์ใบหน้าในแอป release เอง (ไม่มี hook ทดสอบใน release — ยืนยันผ่าน bundle debug ที่เซ็นแบบเดียวกันแทน)
 
 ## ยังไม่ได้ทดสอบ
 
