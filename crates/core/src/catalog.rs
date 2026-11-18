@@ -36,6 +36,8 @@ pub const PERSON_COVER_SQL: &str = "COALESCE(\
 /// เงื่อนไข "รูปนี้มีใบหน้าที่ยืนยันแล้วของ …" เมื่อมองจากแถวรูป (ความหมายเดียวกับ view v_confirmed)
 const CONFIRMED_ON_PHOTO: &str = "FROM faces f JOIN face_assignments a ON a.face_id = f.id AND a.revoked_at IS NULL \
                                   WHERE f.photo_revision_id = r.id AND f.status = 'active'";
+/// เงื่อนไข "รูปนี้มีใบหน้าที่ AI จัดให้ …" (ตารางชั่วคราวที่ `review::ensure_matches` เติม)
+const AI_ON_PHOTO: &str = "FROM temp.ai_matches m WHERE m.revision_id = r.id";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -299,6 +301,16 @@ pub struct SearchParams {
     pub sort: Option<String>,
     pub cursor: Option<String>,
     pub limit: Option<i64>,
+    /// นับรูปที่ AI จัดให้บุคคลนั้นด้วย (ยังไม่มีคนยืนยัน); ผู้เรียกต้องเรียก `review::ensure_matches` ก่อน
+    pub include_suggested: bool,
+}
+
+/// บุคคลที่อยู่ในรูปตามที่ AI จัดให้ พร้อมใบหน้าที่เป็นเหตุ (ใช้แจ้งว่า "ไม่ใช่คนนี้")
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestedPerson {
+    pub person: PersonRef,
+    pub face_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -316,6 +328,8 @@ pub struct PhotoResult {
     pub thumb_status: String,
     pub available: bool,
     pub confirmed_people: Vec<PersonRef>,
+    /// บุคคลที่ AI จัดให้ในรูปนี้ (มีเมื่อค้นแบบรวมรูปที่ AI จัดให้)
+    pub suggested_people: Vec<SuggestedPerson>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -377,6 +391,7 @@ fn photo_from_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoResult> {
         thumb_status: r.get(9)?,
         available: r.get(10)?,
         confirmed_people: vec![],
+        suggested_people: vec![],
     })
 }
 
@@ -409,11 +424,18 @@ fn build_filter(p: &SearchParams) -> Result<Filter> {
     if let Some(text) = p.text.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
         // ข้อความดิบค้นแบบ substring จากชื่อไฟล์ ชื่อกิจกรรม และชื่อ/ชื่ออื่นของคนที่ยืนยันแล้ว — ไม่ตีความเป็นคำสั่ง
         let pat = f.arg(util::like_pattern(text));
+        let named = format!(
+            "SELECT pe.id FROM persons pe WHERE pe.name_key LIKE {pat} ESCAPE '\\' OR pe.nickname LIKE {pat} ESCAPE '\\'
+             UNION SELECT pa.person_id FROM person_aliases pa WHERE pa.alias_key LIKE {pat} ESCAPE '\\'"
+        );
+        let by_ai = if p.include_suggested {
+            format!(" OR EXISTS (SELECT 1 {AI_ON_PHOTO} AND m.person_id IN ({named}))")
+        } else {
+            String::new()
+        };
         f.sql.push_str(&format!(
-            " AND (l.filename_key LIKE {pat} ESCAPE '\\' OR e.title_key LIKE {pat} ESCAPE '\\' OR EXISTS (
-                SELECT 1 {CONFIRMED_ON_PHOTO} AND a.person_id IN (
-                  SELECT pe.id FROM persons pe WHERE pe.name_key LIKE {pat} ESCAPE '\\' OR pe.nickname LIKE {pat} ESCAPE '\\'
-                  UNION SELECT pa.person_id FROM person_aliases pa WHERE pa.alias_key LIKE {pat} ESCAPE '\\')))"
+            " AND (l.filename_key LIKE {pat} ESCAPE '\\' OR e.title_key LIKE {pat} ESCAPE '\\'
+               OR EXISTS (SELECT 1 {CONFIRMED_ON_PHOTO} AND a.person_id IN ({named})){by_ai})"
         ));
     }
 
@@ -422,18 +444,25 @@ fn build_filter(p: &SearchParams) -> Result<Filter> {
         return Err(AppError::invalid("เลือกบุคคลได้ไม่เกิน 20 คนต่อการค้นหา"));
     }
     if !persons.is_empty() {
+        // "รูปนี้มีคนในกลุ่มนี้": ยืนยันแล้ว หรือ (เมื่อขอรวม) AI จัดให้
+        let has_any = |f: &mut Filter, group: &[String]| {
+            let list = group.iter().map(|id| f.arg(id.clone())).collect::<Vec<_>>().join(", ");
+            let confirmed = format!("EXISTS (SELECT 1 {CONFIRMED_ON_PHOTO} AND a.person_id IN ({list}))");
+            if p.include_suggested {
+                format!("({confirmed} OR EXISTS (SELECT 1 {AI_ON_PHOTO} AND m.person_id IN ({list})))")
+            } else {
+                confirmed
+            }
+        };
         if p.person_mode.as_deref() == Some("any") {
             // มีคนใดคนหนึ่ง: P ∩ C(photo) ≠ ∅
-            let list: Vec<String> = persons.iter().map(|id| f.arg(id.clone())).collect();
-            f.sql.push_str(&format!(
-                " AND EXISTS (SELECT 1 {CONFIRMED_ON_PHOTO} AND a.person_id IN ({}))",
-                list.join(", ")
-            ));
+            let cond = has_any(&mut f, &persons);
+            f.sql.push_str(&format!(" AND {cond}"));
         } else {
             // มีทุกคนในภาพเดียวกัน: P ⊆ C(photo)
             for id in &persons {
-                let arg = f.arg(id.clone());
-                f.sql.push_str(&format!(" AND EXISTS (SELECT 1 {CONFIRMED_ON_PHOTO} AND a.person_id = {arg})"));
+                let cond = has_any(&mut f, std::slice::from_ref(id));
+                f.sql.push_str(&format!(" AND {cond}"));
             }
         }
     }
@@ -518,6 +547,35 @@ fn attach_people(conn: &Connection, items: &mut [PhotoResult]) -> Result<()> {
     Ok(())
 }
 
+/// ใส่ว่าในรูปมีใครตามที่ AI จัดให้ (ไม่ใช่คำยืนยัน)
+fn attach_suggested(conn: &Connection, items: &mut [PhotoResult]) -> Result<()> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let marks = vec!["?"; items.len()].join(", ");
+    let sql = format!(
+        "SELECT m.revision_id, m.face_id, pe.id, pe.display_name, {PERSON_COVER_SQL}
+         FROM temp.ai_matches m JOIN persons pe ON pe.id = m.person_id
+         WHERE m.revision_id IN ({marks}) ORDER BY pe.name_key, pe.id, m.face_id"
+    );
+    let mut by_rev: HashMap<String, Vec<SuggestedPerson>> = HashMap::new();
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(items.iter().map(|i| i.revision_id.clone())), |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            SuggestedPerson { face_id: r.get(1)?, person: PersonRef::new(r.get(2)?, r.get(3)?, r.get(4)?) },
+        ))
+    })?;
+    for row in rows {
+        let (revision, suggested) = row?;
+        by_rev.entry(revision).or_default().push(suggested);
+    }
+    for item in items {
+        item.suggested_people = by_rev.remove(&item.revision_id).unwrap_or_default();
+    }
+    Ok(())
+}
+
 pub fn query_photos(conn: &Connection, p: &SearchParams) -> Result<PhotoPage> {
     let f = build_filter(p)?;
     let order = order_sql(p.sort.as_deref())?;
@@ -555,6 +613,9 @@ pub fn query_photos(conn: &Connection, p: &SearchParams) -> Result<PhotoPage> {
     let mut items: Vec<PhotoResult> =
         conn.prepare(&sql)?.query_map(params_from_iter(args), photo_from_row)?.collect::<rusqlite::Result<_>>()?;
     attach_people(conn, &mut items)?;
+    if p.include_suggested {
+        attach_suggested(conn, &mut items)?;
+    }
 
     let total = coverage.eligible_photos;
     let next = offset + items.len() as i64;
@@ -578,6 +639,9 @@ pub struct SelectionSnapshot {
 /// "เลือกผลค้นหาทั้งหมด": แช่แข็ง photo ID + revision ของผลทั้งหมด ณ ตอนนี้ (Blueprint 11.5)
 /// รูปที่สแกนเพิ่มภายหลังจะไม่เข้าชุดนี้เอง
 pub fn create_selection(app: &App, p: &SearchParams) -> Result<SelectionSnapshot> {
+    if p.include_suggested {
+        crate::review::ensure_matches(app)?;
+    }
     let f = build_filter(p)?;
     let order = order_sql(p.sort.as_deref())?;
     let mut conn = app.db();

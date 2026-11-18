@@ -3,7 +3,7 @@ import { toast } from 'sonner';
 import { useViewer } from '@/app/navigation';
 import { ErrorState, LoadingBlock } from '@/components/ui/Feedback';
 import { ExportDialog } from '@/features/export/ExportDialog';
-import type { Coverage } from '@/lib/ipc/types';
+import type { Coverage, PhotoResult } from '@/lib/ipc/types';
 import { usePhotoList, type PhotoQuery } from '@/lib/queries';
 import { PhotoGrid } from './PhotoGrid';
 import { SelectionBar } from './SelectionBar';
@@ -30,13 +30,15 @@ interface PhotoResultsProps {
   empty: ReactNode;
   /** แถวสรุปเหนือ grid (จำนวนผล, ความครบถ้วน) */
   summary?: (meta: PhotoResultsMeta) => ReactNode;
+  /** ปุ่มเพิ่มในแถบเลือกหลายรูป; `photos` คือรูปที่ติ๊กเลือกเอง หรือ null เมื่อเลือกแบบ "ผลทั้งหมด" (ไม่ได้โหลดครบ) */
+  selectionActions?: (ctx: { photos: PhotoResult[] | null; clear: () => void }) => ReactNode;
 }
 
 /**
  * ผลรูปหนึ่งชุด: โหลด/ผิดพลาด/ว่าง → grid → แถบเลือกหลายรูป → ส่งออก → เปิดตัวดูภาพตามลำดับผลเดิม
  * ใช้ร่วมกันในหน้ากิจกรรม บุคคล และค้นหา เพื่อให้พฤติกรรมการเลือกและเปิดรูปตรงกันทุกหน้า
  */
-export function PhotoResults({ query, label, originLabel, showEvent, selectionKey, empty, summary }: PhotoResultsProps) {
+export function PhotoResults({ query, label, originLabel, showEvent, selectionKey, empty, summary, selectionActions }: PhotoResultsProps) {
   const list = usePhotoList(query);
   const viewer = useViewer();
   const [selection, setSelection] = useState<Selection>(EMPTY_SELECTION);
@@ -114,7 +116,18 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
         total={list.total}
       />
       {list.isError && <ErrorState compact error={list.error} title="โหลดรูปเพิ่มไม่สำเร็จ" onRetry={() => void list.fetchNextPage()} />}
-      <SelectionBar selection={selection} onSelectionChange={setSelection} loadedIds={ids} total={list.total} query={query} onExport={() => setExporting(true)} />
+      <SelectionBar
+        selection={selection}
+        onSelectionChange={setSelection}
+        loadedIds={ids}
+        total={list.total}
+        query={query}
+        onExport={() => setExporting(true)}
+        actions={selectionActions?.({
+          photos: selection.kind === 'explicit' ? list.items.filter((p) => selection.ids.has(p.id)) : null,
+          clear: () => setSelection(EMPTY_SELECTION),
+        })}
+      />
       <ExportDialog open={exporting} onOpenChange={setExporting} selection={toSelectionSpec(selection)} count={count} />
     </>
   );

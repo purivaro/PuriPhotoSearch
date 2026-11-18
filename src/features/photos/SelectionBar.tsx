@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Upload, X } from 'lucide-react';
@@ -17,10 +18,12 @@ interface SelectionBarProps {
   /** เงื่อนไขที่ใช้สร้าง snapshot ของ "ผลทั้งหมด" */
   query: PhotoQuery;
   onExport: () => void;
+  /** ปุ่มเฉพาะหน้า วางก่อนปุ่มส่งออก */
+  actions?: ReactNode;
 }
 
 /** แถบเลือกหลายรูป: บอกจำนวนและขอบเขตตลอดเวลา อยู่ท้าย grid โดยไม่บังแถวสุดท้าย */
-export function SelectionBar({ selection, onSelectionChange, loadedIds, total, query, onExport }: SelectionBarProps) {
+export function SelectionBar({ selection, onSelectionChange, loadedIds, total, query, onExport, actions }: SelectionBarProps) {
   const count = selectionCount(selection);
   const snapshot = useMutation({
     mutationFn: () => call('create_selection', query),
@@ -61,6 +64,7 @@ export function SelectionBar({ selection, onSelectionChange, loadedIds, total, q
         <Button size="sm" icon={<X className="size-4" aria-hidden />} onClick={() => onSelectionChange(EMPTY_SELECTION)} data-testid="selection-clear">
           ล้างที่เลือก
         </Button>
+        {actions}
         <Button variant="primary" icon={<Upload className="size-4" aria-hidden />} onClick={onExport} data-testid="export-button">
           ส่งออกสำเนา
         </Button>
