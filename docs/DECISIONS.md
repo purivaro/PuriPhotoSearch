@@ -195,6 +195,14 @@ WKWebView ไม่มี WebDriver จึงใช้วิธีของ Puri
 ให้ UI ที่รันด้วย `pnpm dev` ในเบราว์เซอร์ทำงานกับ Rust และคลังทดสอบจริง จึงไม่ต้องมี mock data ฝั่ง UI
 เป็น binary แยกที่ `src-tauri` ไม่ได้อ้างถึง จึงไม่อยู่ในแอปที่แจก ในโหมดนี้ไม่มี native picker: UI ใช้ช่องพิมพ์ path ที่ติดป้าย "โหมดพัฒนา"
 
+วิธีใช้กับตัววิเคราะห์ใบหน้า (สิ่งที่เคยทำให้เสียเวลา):
+
+- **วัดความเร็วด้วย release เท่านั้น** — `cargo build --release -p puri-devbridge` แล้วรัน `target/release/puri-devbridge`; debug ช้ากว่าราว 5 เท่าในขั้นใบหน้า
+- ตั้ง `PURI_DATA_DIR=<โฟลเดอร์ทิ้งได้> PURI_DISABLE_OPEN=1` เสมอ; อย่าเปิดกับคลังจริงของผู้ใช้
+- ไม่ให้ดาวน์โหลดโมเดล 289 MB ทุกรอบ: เก็บ `buffalo_l.zip` (release v0.7 ของ InsightFace, 288,621,354 bytes) ไว้ในเครื่อง แล้วตั้ง `PURI_MODEL_URL=file:///path/buffalo_l.zip`
+- port 1421 ตายตัว: `pkill -f puri-devbridge` ตัวเก่าและรอให้ port ว่างก่อนเปิดตัวใหม่ ไม่งั้นตัวใหม่ panic ตอน bind
+- ทดสอบตัววิเคราะห์จริงในหน้าต่าง Tauri: ตั้ง `PURI_E2E_SCRIPT` เป็นสคริปต์ของตัวเองแล้วรัน `pnpm tauri dev` (อย่าตั้ง `PURI_DISABLE_FACE_ENGINE` ซึ่ง `e2e/run.sh` ตั้งไว้)
+
 ## 12. แพลตฟอร์ม
 
 build และทดสอบบน macOS 26.7 / Apple M4 (arm64) / Rust 1.99.1 เท่านั้น
