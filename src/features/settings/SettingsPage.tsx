@@ -1,15 +1,19 @@
-import { useMutation } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router';
-import { CircleCheck, CircleX, DatabaseBackup, HardDrive, Info, Monitor, Moon, ScanFace, Sun, TriangleAlert } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link, useSearchParams } from 'react-router';
+import { toast } from 'sonner';
+import { CircleCheck, CircleX, DatabaseBackup, Download, HardDrive, Info, Monitor, Moon, ScanFace, Sun, TriangleAlert, UsersRound } from 'lucide-react';
 import { Page, PageHeader, useDocumentTitle } from '@/app/PageLayout';
 import { Button } from '@/components/ui/Button';
+import { ConfirmDialog } from '@/components/ui/Dialog';
 import { ErrorState, InlineNotice, LoadingBlock, StatusBadge } from '@/components/ui/Feedback';
 import { Tabs } from '@/components/ui/Form';
+import { FaceModelNotice } from '@/features/faces/FaceModelNotice';
 import { cn } from '@/lib/cn';
-import { errorMessage, formatCount } from '@/lib/format';
+import { errorMessage, formatCount, newRequestId } from '@/lib/format';
 import { call } from '@/lib/ipc/client';
-import type { Capabilities, LegacyReport } from '@/lib/ipc/types';
-import { useCapabilities, useSummary } from '@/lib/queries';
+import type { Capabilities, FaceAnalysisStatus, LegacyImportResult, LegacyReport } from '@/lib/ipc/types';
+import { invalidatePeopleData, useCapabilities, useSummary } from '@/lib/queries';
 import { useSettings, type ThemeChoice } from '@/stores/settings';
 
 type SettingsTab = 'general' | 'library' | 'ai' | 'migration';
@@ -180,34 +184,74 @@ function LibraryTab({ capabilities }: { capabilities: Capabilities }) {
   );
 }
 
+const FACE_STATE_BADGE: Record<FaceAnalysisStatus['state'], { tone: 'ok' | 'brand' | 'warn' | 'neutral'; label: string; icon: typeof CircleCheck }> = {
+  ready: { tone: 'ok', label: 'พร้อมใช้', icon: CircleCheck },
+  installing: { tone: 'brand', label: 'กำลังดาวน์โหลด', icon: Download },
+  not_installed: { tone: 'warn', label: 'ยังไม่ได้ติดตั้ง', icon: CircleX },
+  unsupported: { tone: 'neutral', label: 'เครื่องนี้ยังใช้ไม่ได้', icon: CircleX },
+};
+
+/** S21 (ขั้นพื้นฐาน) — สถานะตัววิเคราะห์ใบหน้าตามที่ตรวจพบจริง ติดตั้งได้ด้วยปุ่มเดียว */
 function AiTab({ capabilities }: { capabilities: Capabilities }) {
+  const qc = useQueryClient();
   const ai = capabilities.faceAnalysis;
+  const badge = FACE_STATE_BADGE[ai.state];
+  const analyze = useMutation({
+    mutationFn: () => call('analyze_faces', {}),
+    onSuccess: (result) => {
+      void qc.invalidateQueries({ queryKey: ['jobs'] });
+      void qc.invalidateQueries({ queryKey: ['events'] });
+      toast.success(
+        result.jobIds.length > 0
+          ? `เริ่มวิเคราะห์ใบหน้าเบื้องหลังแล้ว ${formatCount(result.jobIds.length)} งาน ชื่อที่ยืนยันไว้ไม่เปลี่ยน`
+          : 'รูปในคลังวิเคราะห์ใบหน้าครบแล้ว ไม่มีงานเพิ่ม',
+      );
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
   return (
     <>
-      <section className={CARD}>
+      <section className={CARD} data-testid="settings-face-analysis">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="flex items-center gap-2 text-lg font-bold text-ink">
             <ScanFace className="size-5 text-muted" aria-hidden /> การวิเคราะห์ใบหน้า
           </h2>
-          {ai.available ? (
-            <StatusBadge tone="ok" icon={<CircleCheck aria-hidden />}>
-              พร้อมใช้
-            </StatusBadge>
-          ) : (
-            <StatusBadge tone="warn" icon={<CircleX aria-hidden />}>
-              ยังไม่พร้อมในรุ่นนี้
-            </StatusBadge>
-          )}
+          <StatusBadge tone={badge.tone} icon={<badge.icon aria-hidden />}>
+            {badge.label}
+          </StatusBadge>
         </div>
-        <p className="mt-2 text-sm text-ink">{ai.reason || (ai.available ? 'ตรวจใบหน้าและเสนอชื่อในเครื่องนี้' : 'รุ่นนี้ยังไม่มีการวิเคราะห์ใบหน้าอัตโนมัติ')}</p>
+        {ai.reason && <p className="mt-2 text-sm text-ink">{ai.reason}</p>}
+        <FaceModelNotice className="mt-4 shadow-none" />
+        <InfoRows
+          rows={[
+            ['ชุดโมเดล', ai.modelName],
+            ['ที่มาของไฟล์', ai.downloadSource],
+            ['ขนาดที่ดาวน์โหลด', `${formatCount(ai.downloadSizeMb)} MB (ครั้งเดียว)`],
+            ['ที่เก็บในเครื่อง', ai.modelPath],
+            ['เงื่อนไขการใช้', ai.licenseNote],
+          ]}
+        />
+        {ai.available && (
+          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-4">
+            <Button icon={<ScanFace className="size-[18px]" aria-hidden />} busy={analyze.isPending} onClick={() => analyze.mutate()} data-testid="settings-analyze-faces">
+              วิเคราะห์ใบหน้าของรูปที่ยังไม่ได้วิเคราะห์
+            </Button>
+            <Link to="/review" className="text-sm font-semibold text-action hover:underline">
+              ไปหน้าตรวจสอบใบหน้า
+            </Link>
+            <p className="w-full text-[13px] text-muted">รูปที่เพิ่มใหม่ถูกวิเคราะห์เองอยู่แล้ว ปุ่มนี้ใช้เมื่อมีรูปที่เพิ่มไว้ก่อนติดตั้งตัววิเคราะห์ ชื่อที่ยืนยันไว้จะไม่ถูกเขียนทับ</p>
+          </div>
+        )}
         {!ai.available && (
-          <p className="mt-2 text-sm text-muted">การเพิ่มโฟลเดอร์ ดูรูป ค้นจากชื่อไฟล์/กิจกรรม และการระบุใบหน้าเองในตัวดูภาพใช้ได้ตามปกติ ชื่อที่ระบุเองค้นได้ทันที</p>
+          <p className="mt-3 text-sm text-muted">ระหว่างนี้การเพิ่มโฟลเดอร์ ดูรูป ค้นจากชื่อไฟล์/กิจกรรม และการระบุใบหน้าเองในตัวดูภาพใช้ได้ตามปกติ ชื่อที่ระบุเองค้นได้ทันที</p>
         )}
       </section>
       <section className={CARD}>
         <h2 className="text-lg font-bold text-ink">ความเป็นส่วนตัว</h2>
         <ul className="mt-2 list-disc space-y-1.5 pl-5 text-sm text-ink">
-          <li>รูป ชื่อบุคคล และข้อมูลใบหน้าประมวลผลและเก็บในเครื่องนี้เท่านั้น ไม่มีบัญชีผู้ใช้และไม่มีการส่งข้อมูลออกทางอินเทอร์เน็ต</li>
+          <li>รูป ชื่อบุคคล และข้อมูลใบหน้าประมวลผลและเก็บในเครื่องนี้เท่านั้น ไม่มีบัญชีผู้ใช้ และไม่มีการส่งรูปหรือชื่อออกทางอินเทอร์เน็ต</li>
+          <li>แอปต่ออินเทอร์เน็ตเฉพาะตอนที่คุณกดดาวน์โหลดตัววิเคราะห์ใบหน้า เพื่อรับไฟล์โมเดลเข้ามาในเครื่อง หลังจากนั้นใช้งานได้โดยไม่ต้องต่ออินเทอร์เน็ต</li>
+          <li>ข้อเสนอชื่อของ AI เป็นเพียงข้อเสนอ จะนับเป็นรูปของบุคคลก็ต่อเมื่อคุณกดยืนยัน และไม่เขียนทับชื่อที่ยืนยันไว้แล้ว</li>
           <li>ข้อมูลในเครื่องไม่ได้ถูกเข้ารหัสเพิ่มโดยแอป ความปลอดภัยขึ้นกับการตั้งค่าของเครื่อง</li>
           <li>แอปไม่ย้าย ไม่เปลี่ยนชื่อ ไม่แก้ไข และไม่ลบไฟล์รูปต้นฉบับ</li>
         </ul>
@@ -222,11 +266,11 @@ function MigrationTab() {
     <>
       <section className={CARD}>
         <h2 className="flex items-center gap-2 text-lg font-bold text-ink">
-          <DatabaseBackup className="size-5 text-muted" aria-hidden /> ตรวจข้อมูลจากเวอร์ชัน Python เดิม
+          <DatabaseBackup className="size-5 text-muted" aria-hidden /> ข้อมูลจากเวอร์ชัน Python เดิม
         </h2>
-        <p className="mt-1.5 text-sm text-ink">ตรวจฐานข้อมูลของ Puri Photo Search รุ่นเดิมในเครื่องนี้แบบอ่านอย่างเดียว เพื่อดูว่ามีข้อมูลอะไรบ้าง ฐานเดิมไม่ถูกแก้ไข</p>
-        <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />} className="mt-3">
-          รุ่นนี้ทำได้เฉพาะการตรวจและรายงาน (dry-run) ยังนำข้อมูลเข้าคลังใหม่ไม่ได้ รายชื่อและข้อมูลในรุ่นเดิมยังอยู่ครบและเปิดด้วยโปรแกรมเดิมได้ตามปกติ
+        <p className="mt-1.5 text-sm text-ink">ขั้นแรก ตรวจฐานข้อมูลของ Puri Photo Search รุ่นเดิมในเครื่องนี้แบบอ่านอย่างเดียว เพื่อดูว่ามีข้อมูลอะไรบ้าง จากนั้นเลือกนำรายชื่อเข้าคลังนี้ได้ ฐานเดิมไม่ถูกแก้ไขทั้งสองขั้น</p>
+        <InlineNotice tone="info" icon={<Info aria-hidden />} className="mt-3">
+          นำเข้าได้เฉพาะ <span className="font-semibold">รายชื่อบุคคล กลุ่ม และใบหน้าตัวอย่าง</span> — รูปและกิจกรรมของรุ่นเดิมไม่ถูกย้ายมา ให้เพิ่มโฟลเดอร์กิจกรรมในแอปนี้เอง แล้วแอปจะเสนอชื่อจากใบหน้าตัวอย่างให้ตรวจ
         </InlineNotice>
         <Button variant="primary" className="mt-4" busy={inspect.isPending} onClick={() => inspect.mutate()} data-testid="legacy-inspect">
           {inspect.data ? 'ตรวจอีกครั้ง' : 'ตรวจข้อมูลเดิม (อ่านอย่างเดียว)'}
@@ -238,7 +282,91 @@ function MigrationTab() {
         )}
       </section>
       {inspect.data && <LegacyReportView report={inspect.data} />}
+      {inspect.data?.recognized && <LegacyPeopleImport report={inspect.data} />}
     </>
+  );
+}
+
+/** นำรายชื่อ กลุ่ม และใบหน้าตัวอย่างเข้าคลัง: ยืนยันก่อนทำ, รันซ้ำไม่สร้างคนซ้ำ, แสดงผลจริงจาก Rust */
+function LegacyPeopleImport({ report }: { report: LegacyReport }) {
+  const qc = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  // requestId เดียวต่อการกดยืนยันหนึ่งครั้ง (ลองใหม่หลังผิดพลาดใช้ค่าเดิม); สำเร็จแล้วจึงเริ่มค่าใหม่
+  const requestId = useRef<string | null>(null);
+  const run = useMutation({
+    mutationFn: () => {
+      requestId.current ??= newRequestId();
+      return call('import_legacy_people', { requestId: requestId.current });
+    },
+    onSuccess: () => {
+      requestId.current = null;
+      invalidatePeopleData(qc);
+    },
+    onSettled: () => setConfirming(false),
+  });
+  const nothing = report.persons === 0;
+  return (
+    <section className={CARD} data-testid="legacy-import">
+      <h2 className="flex items-center gap-2 text-lg font-bold text-ink">
+        <UsersRound className="size-5 text-muted" aria-hidden /> นำรายชื่อเข้าคลังนี้
+      </h2>
+      <p className="mt-1.5 text-sm text-ink">
+        สร้างบุคคล {formatCount(report.persons)} คน พร้อมกลุ่ม {formatCount(report.groups)} กลุ่ม และใบหน้าตัวอย่าง {formatCount(report.referenceSamples)} ใบในคลังนี้ คนชื่อซ้ำยังเป็นคนละคนเหมือนเดิม
+        และถ้าเคยนำเข้าแล้ว บุคคลเดิมจะไม่ถูกสร้างซ้ำ
+      </p>
+      <Button variant="primary" className="mt-4" icon={<UsersRound className="size-[18px]" aria-hidden />} disabled={nothing} busy={run.isPending} onClick={() => setConfirming(true)} data-testid="legacy-import-run">
+        {run.data ? 'นำเข้าอีกครั้ง' : 'นำรายชื่อและใบหน้าตัวอย่างเข้าคลัง'}
+      </Button>
+      {nothing && <p className="mt-2 text-[13px] text-muted">ฐานเดิมไม่มีบุคคลให้นำเข้า</p>}
+      {run.isError && (
+        <InlineNotice tone="danger" icon={<TriangleAlert aria-hidden />} className="mt-3">
+          นำเข้าไม่สำเร็จ: {errorMessage(run.error)} — ข้อมูลในฐานเดิมไม่ถูกแก้ไข กดปุ่มเพื่อลองใหม่ได้
+        </InlineNotice>
+      )}
+      {run.data && <LegacyImportResultView result={run.data} />}
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={(open) => !run.isPending && setConfirming(open)}
+        title={`นำ ${formatCount(report.persons)} บุคคลจากรุ่นเดิมเข้าคลังนี้?`}
+        description="จะสร้างรายชื่อบุคคล กลุ่ม และใบหน้าตัวอย่างในคลังนี้ ฐานข้อมูลของรุ่นเดิมไม่ถูกแก้ไข และรูปของรุ่นเดิมไม่ถูกย้ายมา"
+        confirmLabel="นำเข้า"
+        busy={run.isPending}
+        onConfirm={() => run.mutate()}
+      />
+    </section>
+  );
+}
+
+function LegacyImportResultView({ result }: { result: LegacyImportResult }) {
+  const stats: [string, number, string?][] = [
+    ['บุคคลที่สร้างใหม่', result.personsCreated],
+    ['มีอยู่แล้ว (ไม่สร้างซ้ำ)', result.personsSkipped],
+    ['กลุ่มที่สร้างใหม่', result.groupsCreated],
+    ['ใบหน้าตัวอย่างที่นำเข้า', result.samplesImported, result.samplesPendingEmbedding > 0 ? `รอเตรียมด้วยตัววิเคราะห์ใบหน้า ${formatCount(result.samplesPendingEmbedding)} ใบ` : undefined],
+  ];
+  return (
+    <div className="mt-4 border-t border-line pt-4" data-testid="legacy-import-result">
+      <p className="flex items-center gap-2 text-sm font-bold text-ok">
+        <CircleCheck className="size-[18px]" aria-hidden />
+        นำเข้าเสร็จแล้ว
+      </p>
+      <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+        {stats.map(([label, value, note]) => (
+          <div key={label}>
+            <dt className="text-[13px] text-muted">{label}</dt>
+            <dd className="text-xl font-bold text-ink">{formatCount(value)}</dd>
+            {note && <dd className="text-[12.5px] text-warn">{note}</dd>}
+          </div>
+        ))}
+      </dl>
+      {result.samplesPendingEmbedding > 0 && (
+        <p className="mt-3 text-[13px] text-muted">ใบหน้าตัวอย่างที่ยังรอ จะถูกเตรียมเองเมื่อตัววิเคราะห์ใบหน้าพร้อม ระหว่างนี้รายชื่อและภาพตัวแทนใช้ได้แล้ว แต่ยังไม่มีการเสนอชื่อจากตัวอย่างเหล่านั้น</p>
+      )}
+      <NotesList notes={result.notes} />
+      <Link to="/people" className="mt-3 inline-flex h-9 items-center rounded-lg border border-line-strong bg-surface px-3.5 text-sm font-semibold text-ink shadow-card hover:bg-sunken" data-testid="legacy-import-open-people">
+        เปิดหน้าบุคคล
+      </Link>
+    </div>
   );
 }
 
@@ -268,7 +396,7 @@ function LegacyReportView({ report }: { report: LegacyReport }) {
     <section className={CARD} data-testid="legacy-report">
       <div className="flex flex-wrap items-center gap-2.5">
         <h2 className="text-lg font-bold text-ink">ผลการตรวจ</h2>
-        <StatusBadge tone="info">อ่านอย่างเดียว · ยังไม่ได้นำเข้า</StatusBadge>
+        <StatusBadge tone="info">อ่านอย่างเดียว</StatusBadge>
       </div>
       <p className="mt-1 text-[13px] break-all text-muted select-text" data-selectable>
         {report.path}

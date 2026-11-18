@@ -171,7 +171,8 @@ fn decode_jpeg_scaled(bytes: &[u8], min_edge: u32) -> Option<(DynamicImage, (u32
     if (full.width as u64) * (full.height as u64) > MAX_PIXELS {
         return None;
     }
-    // ขอขนาดที่ด้านสั้นไม่เล็กกว่า min_edge ตัวถอดรหัสจะเลือกสเกล 1/1, 1/2, 1/4 หรือ 1/8 ที่ยังใหญ่พอ
+    // ตัวถอดรหัสเลือกสเกลเล็กสุดจาก 1/8, 1/4, 1/2, 1/1 ที่ด้านใดด้านหนึ่งถึงค่าที่ขอ — ขอค่าเดียวกันสองด้าน
+    // จึงเท่ากับกำหนดด้านยาว
     let want = min_edge.min(u16::MAX as u32) as u16;
     decoder.scale(want.min(full.width), want.min(full.height)).ok()?;
     let pixels = decoder.decode().ok()?;
@@ -183,6 +184,16 @@ fn decode_jpeg_scaled(bytes: &[u8], min_edge: u32) -> Option<(DynamicImage, (u32
         _ => return None,
     };
     Some((img, (full.width as u32, full.height as u32)))
+}
+
+/// ขนาดเต็ม (ก่อนหมุน) ของไฟล์ JPEG จาก header; None เมื่อไม่ใช่ JPEG
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if !bytes.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let mut decoder = jpeg_decoder::Decoder::new(Cursor::new(bytes));
+    decoder.read_info().ok()?;
+    decoder.info().map(|i| (i.width as u32, i.height as u32))
 }
 
 /// ขั้น "เตรียมข้อมูลรูป": hash เนื้อหา, EXIF, ขนาด และภาพย่อที่หมุนถูกทิศ
@@ -212,23 +223,56 @@ pub fn thumbnail_only(bytes: &[u8], edge: u32) -> Result<Vec<u8>> {
     encode_jpeg(&thumb, 80)
 }
 
-/// ครอปใบหน้าจากภาพ; `bbox` เป็นสัดส่วนบนภาพที่หมุนตาม EXIF แล้ว (transform เดียวกับตัวดูภาพ)
-/// `already_upright` = true เมื่อ `bytes` เป็นภาพย่อของแอปซึ่งหมุนไว้แล้ว
-pub fn face_crop(bytes: &[u8], bbox: (f64, f64, f64, f64), already_upright: bool) -> Result<Vec<u8>> {
-    let mut img = decode(bytes)?;
-    if !already_upright {
-        orient(&mut img, read_exif(bytes).orientation);
-    }
-    let (iw, ih) = (img.width() as f64, img.height() as f64);
+/// ด้านของภาพครอปใบหน้าที่เก็บใน cache
+const FACE_CROP_EDGE: u32 = 256;
+/// ครอปที่ได้อย่างน้อยเท่านี้จากการถอดแบบย่อครึ่งหนึ่งถือว่าคมพอ ไม่ต้องถอดรหัสรูปเต็มทุกพิกเซลเพื่อใบหน้าเล็ก
+const FACE_CROP_ENOUGH: f64 = 96.0;
+
+/// กรอบครอปของใบหน้า: สี่เหลี่ยมจัตุรัสรอบกรอบใบหน้าพร้อมขอบ 25% เพื่อให้เห็นบริบทของหน้า
+/// คืน (ซ้าย, บน, ด้าน) เป็นพิกเซลของภาพขนาด `iw`×`ih`
+fn crop_square(bbox: (f64, f64, f64, f64), iw: f64, ih: f64) -> (f64, f64, f64) {
     let (x, y, w, h) = bbox;
-    // ขยายกรอบเป็นสี่เหลี่ยมจัตุรัสพร้อมขอบ 25% เพื่อให้เห็นบริบทของหน้า
-    let side = (w * iw).max(h * ih) * 1.5;
+    let side = ((w * iw).max(h * ih) * 1.5).min(iw).min(ih).max(1.0);
     let (cx, cy) = ((x + w / 2.0) * iw, (y + h / 2.0) * ih);
-    let side = side.min(iw).min(ih).max(1.0);
-    let left = (cx - side / 2.0).clamp(0.0, iw - side);
-    let top = (cy - side / 2.0).clamp(0.0, ih - side);
-    let crop = img.crop_imm(left as u32, top as u32, side as u32, side as u32).thumbnail(256, 256);
-    encode_jpeg(&crop, 85)
+    ((cx - side / 2.0).clamp(0.0, iw - side), (cy - side / 2.0).clamp(0.0, ih - side), side)
+}
+
+/// ครอปใบหน้าหลายใบจากการถอดรหัสรูปครั้งเดียว; `bboxes` เป็นสัดส่วนบนภาพที่หมุนตาม EXIF แล้ว
+/// (transform เดียวกับตัวดูภาพ) `already_upright` = true เมื่อ `bytes` เป็นภาพย่อของแอปซึ่งหมุนไว้แล้ว
+///
+/// JPEG ถูกถอดแบบย่อระหว่างถอดเท่าที่ใบหน้าที่เล็กที่สุดต้องการ: ใบหน้าใหญ่ไม่ต้องถอดทุกพิกเซลของรูปหลายสิบล้านพิกเซล
+pub fn face_crops(bytes: &[u8], bboxes: &[(f64, f64, f64, f64)], already_upright: bool) -> Result<Vec<Vec<u8>>> {
+    if bboxes.is_empty() {
+        return Ok(vec![]);
+    }
+    let orientation = if already_upright { 1 } else { read_exif(bytes).orientation };
+    let scaled = jpeg_dimensions(bytes).and_then(|(raw_w, raw_h)| {
+        let (fw, fh) = if orientation >= 5 { (raw_h, raw_w) } else { (raw_w, raw_h) };
+        let smallest = bboxes.iter().map(|b| crop_square(*b, fw as f64, fh as f64).2).fold(f64::MAX, f64::min).max(1.0);
+        // ย่อได้เท่าที่ครอปของใบเล็กสุดยังได้ FACE_CROP_EDGE; ถ้าต้องถอดเต็มแต่ครึ่งหนึ่งก็คมพอ ใช้ครึ่งหนึ่ง
+        let wanted = (FACE_CROP_EDGE as f64 / smallest).min(1.0);
+        let ratio = if wanted > 0.5 && smallest * 0.5 >= FACE_CROP_ENOUGH { 0.5 } else { wanted };
+        let long_edge = (raw_w.max(raw_h) as f64 * ratio).ceil() as u32;
+        decode_jpeg_scaled(bytes, long_edge.max(1))
+    });
+    let mut img = match scaled {
+        Some((img, _)) => img,
+        None => decode(bytes)?,
+    };
+    orient(&mut img, orientation);
+    let (iw, ih) = (img.width() as f64, img.height() as f64);
+    bboxes
+        .iter()
+        .map(|bbox| {
+            let (left, top, side) = crop_square(*bbox, iw, ih);
+            let crop = img.crop_imm(left as u32, top as u32, side as u32, side as u32);
+            encode_jpeg(&crop.thumbnail(FACE_CROP_EDGE, FACE_CROP_EDGE), 85)
+        })
+        .collect()
+}
+
+pub fn face_crop(bytes: &[u8], bbox: (f64, f64, f64, f64), already_upright: bool) -> Result<Vec<u8>> {
+    Ok(face_crops(bytes, &[bbox], already_upright)?.remove(0))
 }
 
 /// เขียนไฟล์ cache แบบ atomic (เขียนไฟล์ชั่วคราวแล้ว rename) — ใช้กับโฟลเดอร์ cache ของแอปเท่านั้น
@@ -252,6 +296,35 @@ mod tests {
         assert_eq!(parse_exif_datetime("0000:00:00 00:00:00"), None);
         assert_eq!(parse_exif_datetime("2026:02:30 10:20:30"), None);
         assert_eq!(parse_exif_datetime("garbage"), None);
+    }
+
+    /// ครอปจากการถอดแบบย่อต้องได้บริเวณเดียวกับการถอดเต็ม (ใบหน้าใหญ่ = ย่อ 1/4, ใบหน้าเล็ก = ถอดเต็ม)
+    #[test]
+    fn face_crops_pick_the_same_region_at_any_decode_scale() {
+        // ครึ่งซ้ายแดง ครึ่งขวาน้ำเงิน มีจุดเขียว 40×40 ที่ (1500, 300)
+        let img = image::RgbImage::from_fn(2048, 1536, |x, y| {
+            if (1500..1540).contains(&x) && (300..340).contains(&y) {
+                image::Rgb([0, 255, 0])
+            } else if x < 1024 {
+                image::Rgb([255, 0, 0])
+            } else {
+                image::Rgb([0, 0, 255])
+            }
+        });
+        let bytes = encode_jpeg(&DynamicImage::ImageRgb8(img), 90).unwrap();
+        let big = (0.05, 0.2, 0.3, 0.5); // ใบหน้าใหญ่ในครึ่งซ้าย
+        let dot = (1500.0 / 2048.0, 300.0 / 1536.0, 40.0 / 2048.0, 40.0 / 1536.0);
+        let center = |jpeg: &[u8]| {
+            let c = image::load_from_memory(jpeg).unwrap().to_rgb8();
+            assert_eq!((c.width(), c.height()), (FACE_CROP_EDGE, FACE_CROP_EDGE));
+            let p = c.get_pixel(c.width() / 2, c.height() / 2).0;
+            (p[0] > 200, p[1] > 200, p[2] > 200)
+        };
+        assert_eq!(center(&face_crops(&bytes, &[big], false).unwrap()[0]), (true, false, false));
+        let both = face_crops(&bytes, &[big, dot], false).unwrap();
+        assert_eq!((center(&both[0]), center(&both[1])), ((true, false, false), (false, true, false)));
+        let widths = [300, 512, 800, 1536].map(|edge| decode_jpeg_scaled(&bytes, edge).unwrap().0.width());
+        assert_eq!(widths, [512, 512, 1024, 2048], "ทางลัดย่อระหว่างถอดถูกใช้จริง");
     }
 
     #[test]

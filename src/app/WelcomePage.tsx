@@ -1,7 +1,8 @@
 import { Link } from 'react-router';
-import { DatabaseBackup, FolderPlus, HardDrive, Info, ScanFace, Search, UserRoundPen } from 'lucide-react';
+import { DatabaseBackup, FolderPlus, HardDrive, Info, Search, UserRoundPen } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { InlineNotice } from '@/components/ui/Feedback';
+import { FaceModelNotice } from '@/features/faces/FaceModelNotice';
 import { useCapabilities, useSummary } from '@/lib/queries';
 import { LogoMark } from './Logo';
 import { useDocumentTitle } from './PageLayout';
@@ -9,7 +10,7 @@ import { useStartImport } from './navigation';
 
 const STEPS = [
   { icon: FolderPlus, title: 'เพิ่มโฟลเดอร์กิจกรรม', text: 'เลือกโฟลเดอร์งานที่เก็บรูปไว้อยู่แล้ว ไม่ต้องย้ายหรือจัดไฟล์ใหม่' },
-  { icon: UserRoundPen, title: 'ตั้งชื่อคนในรูป', text: 'บอกว่าใบหน้าในรูปเป็นใคร ครั้งเดียวใช้ได้กับทุกกิจกรรม' },
+  { icon: UserRoundPen, title: 'ตั้งชื่อคนในรูป', text: 'แอปหาใบหน้าและจัดกลุ่มให้ บอกครั้งเดียวว่าเป็นใคร ใช้ได้กับทุกกิจกรรม' },
   { icon: Search, title: 'ค้นรูปจากชื่อ', text: 'พิมพ์ชื่อแล้วเห็นรูปจากทุกงาน เปิดต้นฉบับหรือส่งออกสำเนาได้ทันที' },
 ];
 
@@ -68,11 +69,8 @@ export function WelcomePage() {
           )}
         </div>
 
-        {capabilities.data && !capabilities.data.faceAnalysis.available && (
-          <InlineNotice tone="info" icon={<ScanFace aria-hidden />} className="mt-7 max-w-[620px] text-left">
-            เพิ่มและดูรูปได้แล้ว รุ่นนี้ยังไม่มีการวิเคราะห์ใบหน้าอัตโนมัติ — ระบุใบหน้าเองได้จากตัวดูภาพ แล้วค้นจากชื่อได้ทันที
-          </InlineNotice>
-        )}
+        {/* ยังไม่ติดตั้งตัววิเคราะห์ใบหน้า: กดปุ่มเดียวให้แอปดาวน์โหลดเอง (เพิ่มโฟลเดอร์และดูรูปได้โดยไม่ต้องรอ) */}
+        <FaceModelNotice className="mt-7 w-full max-w-[680px]" />
         {capabilities.isError && (
           <InlineNotice tone="warn" icon={<Info aria-hidden />} className="mt-7 max-w-[620px] text-left">
             ยังเชื่อมต่อส่วนประมวลผลของแอปไม่ได้ ปุ่มเพิ่มโฟลเดอร์อาจใช้ไม่ได้จนกว่าจะเชื่อมต่อสำเร็จ

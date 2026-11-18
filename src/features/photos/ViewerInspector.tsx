@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { toast } from 'sonner';
 import { ArrowLeftRight, Calendar, CircleAlert, CircleCheck, CloudOff, Copy, EllipsisVertical, ExternalLink, FolderOpen, Image as ImageIcon, ScanFace, UserRound, UserRoundPen, X } from 'lucide-react';
+import { LevelBadge } from '@/features/faces/LevelBadge';
 import { Button, IconButton } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
 import { InlineNotice, StatusBadge } from '@/components/ui/Feedback';
@@ -124,7 +125,7 @@ export function ViewerInspector({ details, selectedFaceId, onSelectFace, drawMod
           คนในรูป ({formatCount(details.faces.length)})
         </h2>
         {details.faces.length === 0 ? (
-          <p className="mb-3 text-[13.5px] text-muted">ยังไม่มีใบหน้าที่ระบุไว้ในรูปนี้ กด “เพิ่มกรอบใบหน้า” แล้วลากกรอบรอบใบหน้าเพื่อบอกว่าเป็นใคร</p>
+          <p className="mb-3 text-[13.5px] text-muted">ยังไม่มีใบหน้าในรูปนี้ ถ้ามีใบหน้าที่ระบบไม่พบ กด “เพิ่มกรอบใบหน้า” แล้วลากกรอบรอบใบหน้าเพื่อบอกว่าเป็นใคร</p>
         ) : (
           <ul className="mb-3 space-y-1.5">
             {details.faces.map((face) => (
@@ -148,12 +149,14 @@ export function ViewerInspector({ details, selectedFaceId, onSelectFace, drawMod
 }
 
 function FaceRow({ face, photoId, selected, onSelect }: { face: FaceBox; photoId: Id; selected: boolean; onSelect: () => void }) {
-  const { assign, unassign, ignore, setPersonCover } = useFaceMutations(photoId);
+  const { assign, confirmSuggestion, rejectSuggestion, unassign, ignore, setPersonCover } = useFaceMutations(photoId);
   const [picking, setPicking] = useState(false);
   const [confirmIgnore, setConfirmIgnore] = useState(false);
   const rowRef = useRef<HTMLLIElement>(null);
   const person = face.person;
-  const busy = assign.isPending || unassign.isPending || ignore.isPending;
+  // ข้อเสนอของ AI แสดงเฉพาะเมื่อยังไม่มีคนที่ผู้ใช้ยืนยัน
+  const suggestion = person ? null : face.suggestion;
+  const busy = assign.isPending || unassign.isPending || ignore.isPending || confirmSuggestion.isPending || rejectSuggestion.isPending;
 
   useEffect(() => {
     if (selected) rowRef.current?.scrollIntoView({ block: 'nearest' });
@@ -164,17 +167,25 @@ function FaceRow({ face, photoId, selected, onSelect }: { face: FaceBox; photoId
       ref={rowRef}
       data-testid="face-row"
       data-face-id={face.id}
+      data-face-state={face.person ? 'confirmed' : face.suggestion ? 'suggested' : 'unknown'}
       className={cn('rounded-xl border transition-colors', selected ? 'border-brand-line bg-brand-soft' : 'border-transparent hover:bg-sunken')}
     >
       <button type="button" onClick={onSelect} aria-expanded={selected} className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left">
         {/* ครอปของใบหน้านี้เอง ไม่ใช่ภาพตัวแทนของบุคคล */}
-        <FaceAvatar faceId={face.id} name={person?.displayName ?? ''} decorative className="size-11" />
+        <FaceAvatar asset={`face/${face.id}`} name={person?.displayName ?? ''} decorative className="size-11" />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[15px] font-bold text-ink">{person ? person.displayName : 'ยังไม่ทราบชื่อ'}</span>
+          <span className="block truncate text-[15px] font-bold text-ink">{person ? person.displayName : suggestion ? `อาจเป็น “${suggestion.person.displayName}”` : 'ยังไม่ทราบชื่อ'}</span>
           {person ? (
             <StatusBadge tone="ok" icon={<CircleCheck aria-hidden />}>
               ยืนยันแล้ว
             </StatusBadge>
+          ) : suggestion ? (
+            <span className="flex flex-wrap items-center gap-1">
+              <StatusBadge tone="neutral" icon={<ScanFace aria-hidden />}>
+                AI เสนอ · รอตรวจสอบ
+              </StatusBadge>
+              <LevelBadge level={suggestion.level} />
+            </span>
           ) : (
             <StatusBadge tone="neutral" icon={<ScanFace aria-hidden />}>
               รอระบุชื่อ
@@ -193,16 +204,26 @@ function FaceRow({ face, photoId, selected, onSelect }: { face: FaceBox; photoId
               <UserRound className="size-3.5" aria-hidden /> ดูบุคคล
             </Link>
           )}
+          {suggestion && (
+            <>
+              <Button size="sm" variant="primary" icon={<CircleCheck className="size-3.5" aria-hidden />} busy={confirmSuggestion.isPending} disabled={busy} onClick={() => confirmSuggestion.mutate(face)} data-testid="face-suggestion-accept">
+                ใช่
+              </Button>
+              <Button size="sm" variant="danger" icon={<X className="size-3.5" aria-hidden />} busy={rejectSuggestion.isPending} disabled={busy} onClick={() => rejectSuggestion.mutate(face)} data-testid="face-suggestion-reject">
+                ไม่ใช่
+              </Button>
+            </>
+          )}
           <Popover open={picking} onOpenChange={setPicking}>
             <PopoverTrigger asChild>
               <Button size="sm" icon={person ? <ArrowLeftRight className="size-3.5" aria-hidden /> : <UserRoundPen className="size-3.5" aria-hidden />} disabled={busy} data-testid="face-assign">
-                {person ? 'เปลี่ยนบุคคล' : 'ระบุชื่อ'}
+                {person ? 'เปลี่ยนบุคคล' : suggestion ? 'คนอื่น…' : 'ระบุชื่อ'}
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" aria-label={person ? 'เปลี่ยนบุคคลของใบหน้านี้' : 'ระบุชื่อใบหน้านี้'}>
               <PersonPicker
                 busy={assign.isPending}
-                excludeIds={person ? [person.id] : []}
+                excludeIds={person ? [person.id] : suggestion ? [suggestion.person.id] : []}
                 onPick={(choice) => assign.mutate({ faceId: face.id, choice }, { onSuccess: () => setPicking(false) })}
               />
             </PopoverContent>

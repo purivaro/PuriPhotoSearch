@@ -42,6 +42,7 @@ pub(crate) struct Inner {
     db_path: PathBuf,
     cache_dir: PathBuf,
     sink: Arc<dyn EventSink>,
+    ai: Arc<crate::ai::AiState>,
     stop: AtomicBool,
     wake: Mutex<bool>,
     cv: Condvar,
@@ -69,6 +70,10 @@ pub(crate) struct JobCtx<'a> {
 }
 
 impl JobCtx<'_> {
+    pub fn ai(&self) -> &crate::ai::AiState {
+        &self.inner.ai
+    }
+
     pub fn control(&self) -> Result<Control> {
         if self.inner.stop.load(Ordering::SeqCst) {
             return Ok(Control::Stop);
@@ -118,12 +123,13 @@ impl JobCtx<'_> {
 }
 
 impl Worker {
-    pub fn new(db_path: PathBuf, cache_dir: PathBuf, sink: Arc<dyn EventSink>) -> Self {
+    pub fn new(db_path: PathBuf, cache_dir: PathBuf, sink: Arc<dyn EventSink>, ai: Arc<crate::ai::AiState>) -> Self {
         Self {
             inner: Arc::new(Inner {
                 db_path,
                 cache_dir,
                 sink,
+                ai,
                 stop: AtomicBool::new(false),
                 wake: Mutex::new(false),
                 cv: Condvar::new(),
@@ -145,7 +151,11 @@ impl Worker {
                 while !inner.stop.load(Ordering::SeqCst) {
                     match run_next(&inner, &conn) {
                         Ok(true) => continue,
-                        Ok(false) => {}
+                        Ok(false) => {
+                            if maintenance(&inner, &conn).unwrap_or(false) {
+                                continue;
+                            }
+                        }
                         Err(e) => eprintln!("puri-jobs: {e}"),
                     }
                     let mut woken = inner.wake.lock().unwrap_or_else(|e| e.into_inner());
@@ -178,7 +188,7 @@ impl Worker {
     /// ทำงานที่รอคิวจนหมดบน thread ผู้เรียก — สำหรับเทสต์และเครื่องมือที่ต้องการผลแน่นอน
     pub fn run_pending(&self) -> Result<()> {
         let conn = db::connect(&self.inner.db_path)?;
-        while run_next(&self.inner, &conn)? {}
+        while run_next(&self.inner, &conn)? || maintenance(&self.inner, &conn)? {}
         Ok(())
     }
 }
@@ -243,6 +253,7 @@ fn run_next(inner: &Inner, conn: &Connection) -> Result<bool> {
     let outcome = match job.kind.as_str() {
         "catalog" => run_catalog(&ctx),
         "export" => crate::export::run(&ctx),
+        "model" => crate::ai::run_install(&ctx),
         other => Err(AppError::internal(format!("ไม่รู้จักชนิดงาน {other}"))),
     };
     let now = util::now();
@@ -312,6 +323,8 @@ struct Binding {
 }
 
 struct ThumbItem {
+    need_thumb: bool,
+    need_faces: bool,
     revision_id: String,
     photo_id: String,
     path: PathBuf,
@@ -402,20 +415,27 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
         params![event_id, scan_stamp],
     )?;
 
-    // ── ขั้นเตรียมข้อมูลรูป: ทำเฉพาะ revision ที่ยังค้าง จึงทำต่อจากเดิมได้โดยไม่ประมวลผลซ้ำ
+    // ── ขั้นเตรียมข้อมูลรูป (+ วิเคราะห์ใบหน้าเมื่อโมเดลพร้อม): ทำเฉพาะ revision ที่ยังค้าง จึงทำต่อจากเดิมได้โดยไม่ประมวลผลซ้ำ
+    // ไม่มีโมเดล = ทำเฉพาะข้อมูลรูป; รูปยังดูและค้นได้ และจะถูกวิเคราะห์เมื่อโมเดลพร้อม
+    let analyzer = ctx.ai().analyzer();
+    let space = ctx.ai().space().unwrap_or_default();
     ctx.stage("thumbnail")?;
     let items: Vec<ThumbItem> = conn
         .prepare(
-            "SELECT r.id, p.id, l.os_path, l.filename, r.size, r.mtime_ns
+            "SELECT r.id, p.id, l.os_path, l.filename, r.size, r.mtime_ns, r.thumbnail_status = 'pending',
+                    ?2 AND r.face_status = 'not_analyzed'
              FROM event_photos ep
              JOIN photos p ON p.id = ep.photo_id
              JOIN photo_revisions r ON r.id = p.current_revision_id
              JOIN photo_locations l ON l.photo_id = p.id
-             WHERE ep.event_id = ?1 AND r.thumbnail_status = 'pending' AND l.available = 1
+             WHERE ep.event_id = ?1 AND l.available = 1 AND (r.thumbnail_status = 'pending'
+                    OR (?2 AND r.face_status = 'not_analyzed' AND r.thumbnail_status = 'ready'))
              ORDER BY l.filename_key",
         )?
-        .query_map([&event_id], |r| {
+        .query_map(params![event_id, analyzer.is_some()], |r| {
             Ok(ThumbItem {
+                need_thumb: r.get(6)?,
+                need_faces: r.get(7)?,
                 revision_id: r.get(0)?,
                 photo_id: r.get(1)?,
                 path: PathBuf::from(r.get::<_, String>(2)?),
@@ -441,17 +461,39 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
     let mut first_error: Option<AppError> = None;
     let mut last_flush = Instant::now();
 
+    // งานท้ายของทุกรายการ: ส่งความคืบหน้าเป็นช่วง และตรวจคำขอพัก/ยกเลิก
+    let finish = |conn: &Connection,
+                  last_flush: &mut Instant,
+                  interrupted: &mut Option<Control>,
+                  done: i64,
+                  failed: i64|
+     -> Result<()> {
+        if last_flush.elapsed() >= FLUSH_EVERY {
+            *last_flush = Instant::now();
+            set_cover_if_missing(conn, &event_id)?;
+            ctx.progress(total, done, failed, skipped, true)?;
+        }
+        if interrupted.is_none() {
+            let c = ctx.control()?;
+            if c != Control::Continue {
+                *interrupted = Some(c);
+                halt.store(true, Ordering::SeqCst);
+            }
+        }
+        Ok(())
+    };
+
     std::thread::scope(|s| {
-        let (tx, rx) = mpsc::channel::<(ThumbItem, Result<media::Processed>)>();
+        let (tx, rx) = mpsc::channel::<(ThumbItem, Result<Prepared>)>();
         for _ in 0..threads {
             let tx = tx.clone();
-            let (queue, halt) = (&queue, &halt);
+            let (queue, halt, analyzer) = (&queue, &halt, &analyzer);
             s.spawn(move || loop {
                 if halt.load(Ordering::SeqCst) {
                     break;
                 }
                 let Some(item) = queue.lock().unwrap_or_else(|e| e.into_inner()).next() else { break };
-                let result = prepare_photo(&item, cache_dir);
+                let result = prepare_photo(&item, cache_dir, analyzer.as_deref());
                 if tx.send((item, result)).is_err() {
                     break;
                 }
@@ -462,9 +504,39 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
         for (item, result) in rx {
             let saved = (|| -> Result<()> {
                 match &result {
-                    Ok(p) => {
+                    Ok(prepared) => {
                         // เขียนเฉพาะเมื่อ revision ยังเป็นรุ่นเดียวกับที่อ่าน: ผลที่มาช้าไม่ทับรุ่นใหม่
-                        let n = conn.execute(
+                        let current: bool = conn.query_row(
+                            "SELECT EXISTS(SELECT 1 FROM photo_revisions WHERE id = ?1 AND size = ?2 AND mtime_ns = ?3)",
+                            params![item.revision_id, item.stamp.size as i64, item.stamp.mtime_ns],
+                            |r| r.get(0),
+                        )?;
+                        if current {
+                            done += 1;
+                        }
+                        match &prepared.faces {
+                            Some(Ok(found)) if current => crate::ai::save_analysis(
+                                conn,
+                                cache_dir,
+                                &item.revision_id,
+                                space,
+                                found,
+                                &prepared.crops,
+                            )?,
+                            Some(Err(e)) if current => {
+                                // วิเคราะห์ใบหน้าไม่สำเร็จ ≠ ไม่มีใบหน้า: บันทึกเป็นข้อผิดพลาด รูปยังดูได้ตามปกติ
+                                conn.execute(
+                                    "UPDATE photo_revisions SET face_status = 'failed' WHERE id = ?1",
+                                    [&item.revision_id],
+                                )?;
+                                ctx.error(Some(&item.photo_id), &item.filename, e)?;
+                            }
+                            _ => {}
+                        }
+                        let Some(p) = &prepared.processed else {
+                            return finish(conn, &mut last_flush, &mut interrupted, done, failed);
+                        };
+                        conn.execute(
                             "UPDATE photo_revisions SET sha256 = ?2, width = ?3, height = ?4, orientation = ?5,
                                taken_at_local = ?6, tz_offset = ?7, date_source = ?8, thumbnail_status = 'ready',
                                decode_error_code = NULL, decode_error = NULL
@@ -482,9 +554,6 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
                                 item.stamp.mtime_ns
                             ],
                         )?;
-                        if n == 1 {
-                            done += 1;
-                        }
                     }
                     Err(e) => {
                         failed += 1;
@@ -502,19 +571,7 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
                         }
                     }
                 }
-                if last_flush.elapsed() >= FLUSH_EVERY {
-                    last_flush = Instant::now();
-                    set_cover_if_missing(conn, &event_id)?;
-                    ctx.progress(total, done, failed, skipped, true)?;
-                }
-                if interrupted.is_none() {
-                    let c = ctx.control()?;
-                    if c != Control::Continue {
-                        interrupted = Some(c);
-                        halt.store(true, Ordering::SeqCst);
-                    }
-                }
-                Ok(())
+                finish(conn, &mut last_flush, &mut interrupted, done, failed)
             })();
             if let Err(e) = saved {
                 halt.store(true, Ordering::SeqCst);
@@ -650,18 +707,63 @@ fn register_file(
 }
 
 /// อ่านไฟล์หนึ่งรูปและสร้างภาพย่อ; ตรวจ size/mtime ก่อนและหลังอ่าน เพื่อไม่บันทึกผลของไฟล์ที่กำลังถูกเขียน
-fn prepare_photo(item: &ThumbItem, cache_dir: &Path) -> Result<media::Processed> {
+/// ผลของการเตรียมหนึ่งรูป: ข้อมูลรูป (เมื่อยังไม่มีภาพย่อ) และผลวิเคราะห์ใบหน้า (เมื่อโมเดลพร้อมและยังไม่เคยวิเคราะห์)
+struct Prepared {
+    processed: Option<media::Processed>,
+    faces: Option<Result<Vec<crate::ai::DetectedFace>>>,
+    /// ภาพครอปของ `faces` ตามลำดับ; ว่างเมื่อไม่พบใบหน้าหรือทำครอปไม่ได้
+    crops: Vec<Vec<u8>>,
+}
+
+/// อ่านไฟล์หนึ่งรูปครั้งเดียว แล้วสร้างภาพย่อและ/หรือวิเคราะห์ใบหน้า;
+/// ตรวจ size/mtime ก่อนและหลังอ่าน เพื่อไม่บันทึกผลของไฟล์ที่กำลังถูกเขียน
+fn prepare_photo(
+    item: &ThumbItem,
+    cache_dir: &Path,
+    analyzer: Option<&dyn crate::ai::FaceAnalyzer>,
+) -> Result<Prepared> {
     let changed = || AppError::new("REVISION_CHANGED", "ไฟล์นี้เปลี่ยนระหว่างเตรียมข้อมูล สั่ง “ตรวจรูปใหม่” อีกครั้ง").retryable();
     if media::stamp(&item.path)? != item.stamp {
         return Err(changed());
     }
     let bytes = media::read_file(&item.path)?;
-    let processed = media::process(&bytes)?;
+    let processed = if item.need_thumb { Some(media::process(&bytes)?) } else { None };
     if media::stamp(&item.path)? != item.stamp {
         return Err(changed());
     }
-    media::write_cache_file(&crate::thumb_path(cache_dir, &item.revision_id), &processed.thumbnail_jpeg)?;
-    Ok(processed)
+    if let Some(p) = &processed {
+        media::write_cache_file(&crate::thumb_path(cache_dir, &item.revision_id), &p.thumbnail_jpeg)?;
+    }
+    let faces = match analyzer {
+        Some(a) if item.need_faces => Some(a.analyze(&bytes)),
+        _ => None,
+    };
+    // ทำครอปตอนที่ไฟล์ยังอยู่ในมือ (ถอดรหัสครั้งเดียวต่อรูป): คิวตรวจสอบใบหน้าไม่ต้องเปิดต้นฉบับทีละใบอีก
+    let crops = match &faces {
+        Some(Ok(found)) => {
+            let boxes: Vec<_> = found.iter().map(|f| (f.bbox.x, f.bbox.y, f.bbox.w, f.bbox.h)).collect();
+            media::face_crops(&bytes, &boxes, false).unwrap_or_default()
+        }
+        _ => vec![],
+    };
+    Ok(Prepared { processed, faces, crops })
+}
+
+/// งานเบา ๆ ตอน worker ว่าง: สร้างเวกเตอร์ให้ใบหน้าตัวอย่างที่นำเข้าไว้ เมื่อโมเดลพร้อม; คืน true ถ้ายังมีงานเหลือ
+fn maintenance(inner: &Inner, conn: &Connection) -> Result<bool> {
+    let Some(space) = inner.ai.space() else { return Ok(false) };
+    let pending: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM person_reference_samples WHERE (vector IS NULL OR space <> ?1) AND attempts < 2",
+        [space],
+        |r| r.get(0),
+    )?;
+    if pending == 0 || inner.stop.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+    let Some(analyzer) = inner.ai.analyzer() else { return Ok(false) };
+    crate::review::embed_pending_samples(conn, analyzer.as_ref(), space, 16)?;
+    inner.sink.data_changed(db::data_revision(conn)?, &["people"]);
+    Ok(true)
 }
 
 fn set_cover_if_missing(conn: &Connection, event_id: &str) -> Result<()> {

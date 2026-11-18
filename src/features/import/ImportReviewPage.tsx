@@ -12,7 +12,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/Overlay
 import { cn } from '@/lib/cn';
 import { errorMessage, formatCount, formatThaiDate, isErrorCode, middleEllipsis, newRequestId } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
-import type { EventDraft, ImportPreview, SourceMode } from '@/lib/ipc/types';
+import type { EventDraft, FaceAnalysisStatus, ImportPreview, SourceMode } from '@/lib/ipc/types';
+import { FaceModelNotice } from '@/features/faces/FaceModelNotice';
 import { invalidateCatalog, useCapabilities } from '@/lib/queries';
 import { buildCommit, draftsForMode, initialEdits, isSelectable, summarize, type DraftEdit, type DraftEdits } from './importModel';
 
@@ -157,7 +158,7 @@ function ReviewStep({ path, nonce }: { path: string; nonce: string }) {
       ) : (
         <ReviewForm
           preview={preview.data}
-          faceAnalysisAvailable={capabilities.data?.faceAnalysis.available ?? false}
+          faceState={capabilities.data?.faceAnalysis.state ?? null}
           faceAnalysisReason={capabilities.data?.faceAnalysis.reason ?? ''}
           folderWatchAvailable={capabilities.data?.folderWatch.available ?? false}
           folderWatchReason={capabilities.data?.folderWatch.reason ?? ''}
@@ -178,7 +179,8 @@ function ReviewStep({ path, nonce }: { path: string; nonce: string }) {
 
 interface ReviewFormProps {
   preview: ImportPreview;
-  faceAnalysisAvailable: boolean;
+  /** สถานะตัววิเคราะห์ใบหน้าจาก Rust; null = ยังไม่ทราบ */
+  faceState: FaceAnalysisStatus['state'] | null;
   faceAnalysisReason: string;
   folderWatchAvailable: boolean;
   folderWatchReason: string;
@@ -189,7 +191,7 @@ interface ReviewFormProps {
 
 function ReviewForm({
   preview,
-  faceAnalysisAvailable,
+  faceState,
   faceAnalysisReason,
   folderWatchAvailable,
   folderWatchReason,
@@ -200,6 +202,8 @@ function ReviewForm({
   const [mode, setMode] = useState<SourceMode>(preview.suggestedMode);
   const [edits, setEdits] = useState<DraftEdits>(() => initialEdits(preview));
   const [analyzeFaces, setAnalyzeFaces] = useState(true);
+  // เปิดสวิตช์ได้เมื่อพร้อมใช้ หรือกำลังดาวน์โหลดอยู่ (ดาวน์โหลดเสร็จแล้วแอปจะวิเคราะห์รูปในคลังต่อเอง)
+  const faceAnalysisAvailable = faceState === 'ready' || faceState === 'installing';
   const [watch, setWatch] = useState(true);
   const [showTitleErrors, setShowTitleErrors] = useState(false);
   // requestId เดียวต่อการยืนยันชุดเดิม: กดซ้ำ/ลองใหม่ไม่สร้างกิจกรรมซ้ำ; แก้รายการแล้วจึงเป็นคำขอใหม่
@@ -334,7 +338,15 @@ function ReviewForm({
           disabled={!faceAnalysisAvailable}
           testId="import-analyze-faces"
           label="วิเคราะห์ใบหน้าเมื่อเพิ่มเสร็จ"
-          description={faceAnalysisAvailable ? 'ทำเบื้องหลัง ใช้รูปที่พร้อมได้ระหว่างรอ' : faceAnalysisReason || 'รุ่นนี้ยังไม่มีการวิเคราะห์ใบหน้าอัตโนมัติ ระบุใบหน้าเองได้จากตัวดูภาพ'}
+          description={
+            faceState === 'ready'
+              ? 'ทำเบื้องหลัง ใช้รูปที่พร้อมได้ระหว่างรอ'
+              : faceState === 'installing'
+                ? 'จะเริ่มเองเมื่อดาวน์โหลดตัววิเคราะห์ใบหน้าเสร็จ'
+                : faceState === 'not_installed'
+                  ? 'ยังไม่ได้ดาวน์โหลดตัววิเคราะห์ใบหน้า — กดดาวน์โหลดด้านล่างได้เลย เพิ่มกิจกรรมได้โดยไม่ต้องรอ'
+                  : faceAnalysisReason || 'เครื่องนี้ยังวิเคราะห์ใบหน้าอัตโนมัติไม่ได้ ระบุใบหน้าเองได้จากตัวดูภาพ'
+          }
         />
         <Switch
           checked={watch && folderWatchAvailable}
@@ -349,6 +361,7 @@ function ReviewForm({
           โฟลเดอร์งานใหม่ภายหลัง ต้องเลือกเพิ่มกิจกรรมเอง
         </p>
       </div>
+      {(faceState === 'not_installed' || faceState === 'installing') && <FaceModelNotice variant="bar" className="mt-3" />}
 
       {commit.isError && (
         <InlineNotice

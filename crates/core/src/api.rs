@@ -5,7 +5,7 @@
 //! dev bridge ใช้ dispatch ตัวเดียวกัน จึงไม่มีพฤติกรรมสองชุด
 
 use crate::error::{AppError, Result};
-use crate::{assets, catalog, db, export, faces, import, jobs, legacy, media, people, platform, App};
+use crate::{ai, assets, catalog, db, export, faces, import, jobs, legacy, media, people, platform, review, App};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
@@ -174,6 +174,33 @@ enum Command {
     PreviewLegacyImport {
         path: Option<String>,
     },
+    #[serde(rename_all = "camelCase")]
+    ImportLegacyPeople {
+        path: Option<String>,
+        request_id: String,
+    },
+
+    InstallFaceModel {},
+    #[serde(rename_all = "camelCase")]
+    AnalyzeFaces {
+        event_id: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    GetReviewOverview {
+        event_id: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    GetReviewFaces {
+        kind: String,
+        id: String,
+        event_id: Option<String>,
+        review_revision: i64,
+    },
+    #[serde(rename_all = "camelCase")]
+    RejectSuggestions {
+        face_ids: Vec<String>,
+        person_id: String,
+    },
 }
 
 /// ชื่อคำสั่งทั้งหมด — ต้องตรงกับ `Commands` ใน `src/lib/ipc/types.ts` (มีเทสต์ตรวจ)
@@ -224,6 +251,12 @@ pub const COMMAND_NAMES: &[&str] = &[
     "get_export_report",
     "reveal_export_destination",
     "preview_legacy_import",
+    "import_legacy_people",
+    "install_face_model",
+    "analyze_faces",
+    "get_review_overview",
+    "get_review_faces",
+    "reject_suggestions",
 ];
 
 #[derive(Serialize)]
@@ -241,7 +274,7 @@ struct Capabilities {
     schema_version: i64,
     platform: &'static str,
     image_formats: &'static [&'static str],
-    face_analysis: Availability,
+    face_analysis: ai::FaceAnalysisStatus,
     folder_picker: &'static str,
     library_path: String,
     cache_path: String,
@@ -261,11 +294,7 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
             schema_version: db::latest_version(),
             platform: std::env::consts::OS,
             image_formats: media::SUPPORTED_EXTS,
-            // ชุดงานนี้ยังไม่มีตัววิเคราะห์ใบหน้าอัตโนมัติ: บอกตามจริง ไม่แสดงผลจำลอง
-            face_analysis: Availability {
-                available: false,
-                reason: "รุ่นนี้ยังไม่มีการวิเคราะห์ใบหน้าอัตโนมัติ ระบุใบหน้าเองได้จากตัวดูภาพ",
-            },
+            face_analysis: ai::status(app)?,
             folder_watch: Availability {
                 available: false,
                 reason: "รุ่นนี้ยังไม่ติดตามรูปใหม่อัตโนมัติ กด “ตรวจรูปใหม่” ที่กิจกรรมเมื่อเพิ่มรูปในโฟลเดอร์",
@@ -294,7 +323,7 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         }
 
         QueryPhotos(p) => ok(catalog::query_photos(&app.db(), &p)?),
-        GetPhotoDetails { photo_id } => ok(catalog::get_photo_details(&app.db(), &photo_id)?),
+        GetPhotoDetails { photo_id } => ok(catalog::get_photo_details(app, &photo_id)?),
         RevealPhoto { photo_id } => {
             let path = catalog::photo_path(&app.db(), &photo_id)?;
             ok(platform::reveal(Path::new(&path))?)
@@ -344,6 +373,17 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         }
 
         PreviewLegacyImport { path } => ok(legacy::dry_run(path.as_deref())?),
+        ImportLegacyPeople { path, request_id } => ok(legacy::import_people(app, path.as_deref(), &request_id)?),
+
+        InstallFaceModel {} => ok(ai::install(app)?),
+        AnalyzeFaces { event_id } => ok(serde_json::json!({ "jobIds": ai::analyze(app, event_id.as_deref())? })),
+        GetReviewOverview { event_id } => ok(review::overview(app, event_id.as_deref())?),
+        GetReviewFaces { kind, id, event_id, review_revision } => {
+            ok(review::group_faces(app, &kind, &id, event_id.as_deref(), review_revision)?)
+        }
+        RejectSuggestions { face_ids, person_id } => {
+            ok(serde_json::json!({ "dataRevision": review::reject(app, &face_ids, &person_id)? }))
+        }
     }
 }
 

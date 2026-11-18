@@ -43,6 +43,32 @@ export function useFaceMutations(photoId: Id) {
     onError,
   });
 
+  /** "ใช่" ต่อข้อเสนอของ AI: กลายเป็นคำยืนยันของผู้ใช้เฉพาะใบหน้านี้ */
+  const confirmSuggestion = useMutation({
+    mutationFn: (face: FaceBox) => {
+      if (!face.suggestion) throw new Error('ใบหน้านี้ไม่มีข้อเสนอให้ยืนยัน');
+      return call('assign_faces', { requestId: newRequestId(), faceIds: [face.id], personId: face.suggestion.person.id });
+    },
+    onSuccess: (_result, face) => {
+      refresh();
+      toast.success(`ยืนยันว่าใบหน้านี้คือ ${face.suggestion?.person.displayName ?? 'บุคคลที่เสนอ'} แล้ว`);
+    },
+    onError,
+  });
+
+  /** "ไม่ใช่" ต่อข้อเสนอของ AI: จำไว้ไม่เสนอคู่นี้ซ้ำ ใบหน้ายังอยู่ให้ตั้งชื่อเป็นคนอื่น */
+  const rejectSuggestion = useMutation({
+    mutationFn: (face: FaceBox) => {
+      if (!face.suggestion) throw new Error('ใบหน้านี้ไม่มีข้อเสนอให้ปฏิเสธ');
+      return call('reject_suggestions', { faceIds: [face.id], personId: face.suggestion.person.id });
+    },
+    onSuccess: (_result, face) => {
+      refresh();
+      toast.success(`จะไม่เสนอ ${face.suggestion?.person.displayName ?? 'บุคคลนี้'} ให้ใบหน้านี้อีก ตั้งชื่อเป็นคนอื่นได้`);
+    },
+    onError,
+  });
+
   const unassign = useMutation({
     mutationFn: (face: FaceBox) => call('unassign_faces', { faceIds: [face.id] }),
     onSuccess: (_result, face) => {
@@ -86,5 +112,5 @@ export function useFaceMutations(photoId: Id) {
     onError,
   });
 
-  return { createManual, assign, unassign, ignore, setPersonCover };
+  return { createManual, assign, confirmSuggestion, rejectSuggestion, unassign, ignore, setPersonCover };
 }

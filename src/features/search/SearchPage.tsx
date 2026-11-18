@@ -80,7 +80,7 @@ export function SearchPage() {
             const person = personById.get(id);
             return (
               <span key={id} className={cn(CHIP, 'pl-1')} data-testid="search-person-chip" data-person-id={id}>
-                <FaceAvatar faceId={person?.coverFaceId ?? null} name={person?.displayName ?? ''} decorative className="size-7 text-xs" />
+                <FaceAvatar asset={person?.coverAsset ?? null} name={person?.displayName ?? ''} decorative className="size-7 text-xs" />
                 <span className="max-w-[160px] truncate">{person?.displayName ?? (people.isPending ? 'กำลังโหลด…' : 'บุคคลที่ไม่พบในคลัง')}</span>
                 <button
                   type="button"
@@ -204,11 +204,19 @@ export function SearchPage() {
               {meta.refreshing && meta.total === 0 ? 'กำลังค้นหา…' : `${active ? 'พบ' : 'รูปทั้งหมดในคลัง'} ${formatCount(meta.total)} รูป`}
             </p>
             {meta.refreshing && <Spinner className="size-4" />}
-            <p className="min-w-0 flex-1 text-[13.5px] text-muted">
-              {filters.personIds.length > 0 && 'นับเฉพาะใบหน้าที่ยืนยันแล้ว'}
-              {meta.coverage && meta.coverage.thumbnailsPending > 0
-                ? `${filters.personIds.length > 0 ? ' · ' : ''}ข้อมูลรูปพร้อม ${formatCount(meta.coverage.thumbnailsReady)} จาก ${formatCount(meta.coverage.eligiblePhotos)} รูปในขอบเขตนี้ ผลอาจยังไม่ครบ`
-                : ''}
+            <p className="min-w-0 flex-1 text-[13.5px] text-muted" data-testid="search-coverage">
+              {[
+                filters.personIds.length > 0 ? 'นับเฉพาะใบหน้าที่ยืนยันแล้ว' : null,
+                // ค้นตามคนขณะที่ยังวิเคราะห์ใบหน้าไม่ครบ: บอกความครอบคลุมภายในขอบเขตที่ค้นอยู่ ไม่ใช่ทั้งคลัง
+                filters.personIds.length > 0 && meta.coverage && meta.coverage.facesPending > 0
+                  ? `วิเคราะห์ใบหน้าแล้ว ${formatCount(meta.coverage.facesAnalyzed)} จาก ${formatCount(meta.coverage.eligiblePhotos)} รูปในขอบเขตนี้ ผลอาจยังไม่ครบ`
+                  : null,
+                meta.coverage && meta.coverage.thumbnailsPending > 0
+                  ? `ข้อมูลรูปพร้อม ${formatCount(meta.coverage.thumbnailsReady)} จาก ${formatCount(meta.coverage.eligiblePhotos)} รูปในขอบเขตนี้ ผลอาจยังไม่ครบ`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
             </p>
             <label className="flex items-center gap-2 text-sm text-muted">
               เรียงตาม

@@ -76,6 +76,12 @@ export function assetUrl(kind: AssetKind, id: string, version?: string | number)
   return `${base}/${kind}/${id}${q}`;
 }
 
+/** URL จาก path ของ asset ที่ Rust ส่งมาแล้ว เช่น `PersonRef.coverAsset` = "face/{id}" หรือ "sample/{id}" */
+export function assetPath(path: string, version?: string | number): string {
+  const [kind, ...rest] = path.split('/');
+  return assetUrl(kind as AssetKind, rest.join('/'), version);
+}
+
 /** เปิด native folder picker (เฉพาะในแอป Tauri); คืน null เมื่อผู้ใช้ยกเลิก */
 export async function pickFolder(title: string): Promise<string | null> {
   if (!isTauri) throw new Error('pickFolder ใช้ได้เฉพาะในแอป');

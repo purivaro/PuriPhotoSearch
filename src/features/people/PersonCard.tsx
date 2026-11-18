@@ -47,7 +47,7 @@ export const PersonCard = forwardRef<HTMLDivElement, PersonCardProps>(function P
         }}
         className="block w-full rounded-card text-left"
       >
-        <FaceAvatar faceId={person.coverFaceId} name={person.displayName} shape="square" decorative className="aspect-[1/1.08] w-full rounded-t-[13px] text-4xl" />
+        <FaceAvatar asset={person.coverAsset} name={person.displayName} shape="square" decorative className="aspect-[1/1.08] w-full rounded-t-[13px] text-4xl" />
         <span className="block px-3 pt-2.5 pb-3">
           <span className="block truncate pr-8 text-[15.5px] font-bold text-ink">{person.displayName}</span>
           <span className="block truncate text-[13.5px] text-muted">

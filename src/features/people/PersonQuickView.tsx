@@ -149,7 +149,7 @@ function QuickViewContent({ personId, onClose }: { personId: Id; onClose: () => 
         ) : (
           <div className="space-y-5">
             <div className="flex gap-4">
-              <FaceAvatar faceId={data.person.coverFaceId} name={data.person.displayName} shape="rounded" className="size-[112px] text-4xl" />
+              <FaceAvatar asset={data.person.coverAsset} name={data.person.displayName} shape="rounded" className="size-[112px] text-4xl" />
               <div className="min-w-0 flex-1">
                 <h3 className="truncate text-xl font-bold text-ink">{data.person.displayName}</h3>
                 {data.person.nickname && <p className="truncate text-[13.5px] text-muted">{data.person.nickname}</p>}

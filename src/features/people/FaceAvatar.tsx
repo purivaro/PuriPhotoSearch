@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { UserRound } from 'lucide-react';
 import { cn } from '@/lib/cn';
-import { assetUrl } from '@/lib/ipc/client';
-import type { Id } from '@/lib/ipc/types';
+import { assetPath } from '@/lib/ipc/client';
 
 interface FaceAvatarProps {
-  faceId: Id | null;
+  /** path ของ asset จาก Rust เช่น `PersonRef.coverAsset` ("face/{id}" หรือ "sample/{id}"); null = ยังไม่มีภาพ */
+  asset: string | null;
   /** ใช้เป็น alt และตัวอักษรแทนเมื่อยังไม่มีภาพตัวแทน */
   name: string;
   className?: string;
@@ -14,12 +14,12 @@ interface FaceAvatarProps {
   decorative?: boolean;
 }
 
-/** ภาพใบหน้าตัวแทนของบุคคล (ครอปจากใบหน้าที่ผู้ใช้ยืนยัน) หรือสัญลักษณ์แทนเมื่อยังไม่มี */
-export function FaceAvatar({ faceId, name, className, shape = 'circle', decorative }: FaceAvatarProps) {
-  const [failedFor, setFailedFor] = useState<Id | null>(null);
+/** ภาพใบหน้า: ภาพตัวแทนของบุคคล (ใบหน้าที่ยืนยัน หรือใบหน้าตัวอย่างที่นำเข้าจากรุ่นเดิม) หรือครอปของใบหน้าหนึ่งใบ; ไม่มีภาพ → ตัวอักษรย่อ */
+export function FaceAvatar({ asset, name, className, shape = 'circle', decorative }: FaceAvatarProps) {
+  const [failedFor, setFailedFor] = useState<string | null>(null);
   const radius = shape === 'circle' ? 'rounded-full' : shape === 'rounded' ? 'rounded-xl' : '';
   const initial = name.trim().charAt(0);
-  if (!faceId || failedFor === faceId) {
+  if (!asset || failedFor === asset) {
     return (
       <span
         role={decorative ? undefined : 'img'}
@@ -33,11 +33,11 @@ export function FaceAvatar({ faceId, name, className, shape = 'circle', decorati
   }
   return (
     <img
-      src={assetUrl('face', faceId)}
+      src={assetPath(asset)}
       alt={decorative ? '' : name}
       loading="lazy"
       decoding="async"
-      onError={() => setFailedFor(faceId)}
+      onError={() => setFailedFor(asset)}
       className={cn('shrink-0 bg-sunken object-cover', radius, className)}
     />
   );

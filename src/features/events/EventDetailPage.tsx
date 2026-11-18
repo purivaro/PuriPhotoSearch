@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
-import { CircleCheck, CloudOff, Copy, FolderOpen, Image as ImageIcon, ImageOff, RefreshCw, TriangleAlert, UserRoundSearch } from 'lucide-react';
+import { CircleCheck, CloudOff, Copy, FolderOpen, Image as ImageIcon, ImageOff, RefreshCw, ScanFace, TriangleAlert, UserRoundSearch } from 'lucide-react';
 import { Page, PageHeader, useDocumentTitle } from '@/app/PageLayout';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState, ErrorState, InlineNotice, LoadingBlock, StatusBadge } from '@/components/ui/Feedback';
@@ -24,6 +24,7 @@ export function EventDetailPage() {
   const [params, setParams] = useSearchParams();
   const event = useEvent(eventId);
   const activeJobs = useActiveJobs();
+  const capabilities = useCapabilities();
   const qc = useQueryClient();
   useDocumentTitle(event.data?.title);
 
@@ -51,6 +52,16 @@ export function EventDetailPage() {
       void qc.invalidateQueries({ queryKey: ['jobs'] });
       void qc.invalidateQueries({ queryKey: ['events'] });
       toast.success('เริ่มตรวจรูปใหม่แล้ว จะเพิ่มเฉพาะรูปที่ยังไม่มีในคลัง ชื่อบุคคลที่ยืนยันไว้ไม่เปลี่ยน');
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+
+  const analyze = useMutation({
+    mutationFn: () => call('analyze_faces', { eventId }),
+    onSuccess: (result) => {
+      void qc.invalidateQueries({ queryKey: ['jobs'] });
+      void qc.invalidateQueries({ queryKey: ['events'] });
+      toast.success(result.jobIds.length > 0 ? 'เริ่มวิเคราะห์ใบหน้าเบื้องหลังแล้ว ชื่อที่ยืนยันไว้ไม่เปลี่ยน' : 'ไม่มีรูปที่ต้องวิเคราะห์เพิ่มในงานนี้');
     },
     onError: (error) => toast.error(errorMessage(error)),
   });
@@ -84,6 +95,8 @@ export function EventDetailPage() {
   const data = event.data;
   const job = (activeJobs.data ?? []).find((j) => j.eventId === data.id && (isJobActive(j) || j.state === 'paused')) ?? data.jobs.find((j) => isJobActive(j) || j.state === 'paused');
   const date = formatThaiDate(data.eventDate);
+  const faceReady = capabilities.data?.faceAnalysis.available ?? false;
+  const facesComplete = data.faceAnalyzedCount >= data.photoCount;
 
   return (
     <Page>
@@ -121,6 +134,22 @@ export function EventDetailPage() {
               {middleEllipsis(data.folderPath, 64)}
             </span>
           </div>
+          {faceReady && data.photoCount > 0 && (
+            <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
+              <span className="inline-flex items-center gap-1.5 text-muted" data-testid="event-face-progress">
+                <ScanFace className="size-4" aria-hidden />
+                {facesComplete ? 'วิเคราะห์ใบหน้าครบแล้ว' : `วิเคราะห์ใบหน้า ${formatCount(data.faceAnalyzedCount)}/${formatCount(data.photoCount)}`}
+              </span>
+              {!facesComplete && !job && (
+                <Button size="sm" busy={analyze.isPending} disabled={!data.sourceAvailable} onClick={() => analyze.mutate()} data-testid="event-analyze-faces">
+                  วิเคราะห์ใบหน้าที่เหลือ
+                </Button>
+              )}
+              <Link to={`/review?event=${data.id}`} className="font-semibold text-action hover:underline" data-testid="event-review-link">
+                ตรวจสอบใบหน้าของงานนี้
+              </Link>
+            </div>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-2.5 self-center">
           <Button icon={<FolderOpen className="size-[18px]" aria-hidden />} onClick={() => reveal.mutate()} disabled={!data.sourceAvailable} busy={reveal.isPending} data-testid="event-reveal">
@@ -203,7 +232,7 @@ function PhotosTab({ event, personId, onPersonChange, scanning }: { event: Event
               onClick={() => onPersonChange(personId === item.person.id ? null : item.person.id)}
               label={item.person.displayName}
               count={item.photoCount}
-              faceId={item.person.coverFaceId}
+              asset={item.person.coverAsset}
               testId="event-person-chip"
             />
           ))}
@@ -262,7 +291,7 @@ function PhotosTab({ event, personId, onPersonChange, scanning }: { event: Event
   );
 }
 
-function PersonChip({ active, onClick, label, count, faceId, testId }: { active: boolean; onClick: () => void; label: string; count?: number; faceId?: string | null; testId: string }) {
+function PersonChip({ active, onClick, label, count, asset, testId }: { active: boolean; onClick: () => void; label: string; count?: number; asset?: string | null; testId: string }) {
   return (
     <button
       type="button"
@@ -271,11 +300,11 @@ function PersonChip({ active, onClick, label, count, faceId, testId }: { active:
       data-testid={testId}
       className={cn(
         'inline-flex h-10 max-w-[220px] items-center gap-2 rounded-control border text-sm font-semibold transition-colors',
-        faceId !== undefined ? 'pr-3.5 pl-1.5' : 'px-4',
+        asset !== undefined ? 'pr-3.5 pl-1.5' : 'px-4',
         active ? 'border-brand-line bg-brand-soft text-action' : 'border-line-strong bg-surface text-ink hover:bg-sunken',
       )}
     >
-      {faceId !== undefined && <FaceAvatar faceId={faceId} name={label} decorative className="size-7 text-xs" />}
+      {asset !== undefined && <FaceAvatar asset={asset} name={label} decorative className="size-7 text-xs" />}
       <span className="truncate">{label}</span>
       {count !== undefined && <span className="shrink-0 text-[12.5px] font-normal text-muted">{formatCount(count)}</span>}
     </button>
@@ -291,7 +320,7 @@ function PeopleTab({ event, onShowPhotos }: { event: EventDetail; onShowPhotos: 
         title="ยังไม่มีบุคคลที่ยืนยันในงานนี้"
         description={
           capabilities.data?.faceAnalysis.available
-            ? 'เมื่อวิเคราะห์ใบหน้าเสร็จ ตั้งชื่อใบหน้าได้จากหน้าตรวจสอบใบหน้า'
+            ? 'ตั้งชื่อใบหน้าของงานนี้ได้จากหน้าตรวจสอบใบหน้า หรือคลิกกรอบใบหน้าในตัวดูภาพ รายชื่อจะปรากฏที่นี่'
             : 'เปิดรูปในแท็บรูปภาพ แล้วกด “เพิ่มกรอบใบหน้า” เพื่อบอกว่าเป็นใคร รายชื่อจะปรากฏที่นี่'
         }
       />
@@ -303,7 +332,7 @@ function PeopleTab({ event, onShowPhotos }: { event: EventDetail; onShowPhotos: 
       <ul className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
         {event.people.map((item) => (
           <li key={item.person.id} className="flex items-center gap-3 rounded-card border border-line bg-surface p-3 shadow-card">
-            <FaceAvatar faceId={item.person.coverFaceId} name={item.person.displayName} shape="rounded" decorative className="size-14 text-xl" />
+            <FaceAvatar asset={item.person.coverAsset} name={item.person.displayName} shape="rounded" decorative className="size-14 text-xl" />
             <div className="min-w-0 flex-1">
               <Link to={`/people/${item.person.id}`} className="block truncate text-[15.5px] font-bold text-ink hover:text-action hover:underline">
                 {item.person.displayName}

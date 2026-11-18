@@ -90,6 +90,12 @@ domain_commands!(
     get_export_report,
     reveal_export_destination,
     preview_legacy_import,
+    import_legacy_people,
+    install_face_model,
+    analyze_faces,
+    get_review_overview,
+    get_review_faces,
+    reject_suggestions,
 );
 
 /// เปิด native folder picker; คืน path ที่ผู้ใช้เลือกเอง (หรือ None เมื่อยกเลิก)
@@ -160,6 +166,13 @@ pub fn run() {
                 sink: Arc::new(TauriSink(app.handle().clone())),
                 folder_picker: "native",
                 start_worker: true,
+                // เทสต์ e2e ปิดตัววิเคราะห์ใบหน้าได้ เพื่อให้ผลไม่ขึ้นกับการมีไฟล์โมเดลในเครื่อง
+                face_engine: if std::env::var_os("PURI_DISABLE_FACE_ENGINE").is_some() {
+                    None
+                } else {
+                    puri_faces::app::provider()
+                },
+                face_engine_unavailable: puri_faces::app::UNAVAILABLE,
             });
             match opened {
                 Ok(core) => {

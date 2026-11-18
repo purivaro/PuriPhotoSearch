@@ -1,6 +1,7 @@
 # แบบจำลองข้อมูล
 
-Schema รุ่น 1 — ต้นฉบับคือ [`crates/core/migrations/0001_init.sql`](../crates/core/migrations/0001_init.sql)
+Schema รุ่น 2 — ต้นฉบับคือ [`0001_init.sql`](../crates/core/migrations/0001_init.sql) และ [`0002_faces.sql`](../crates/core/migrations/0002_faces.sql)
+คลังของรุ่น 2.0.0-alpha.1 (schema 1) ถูกอัปเกรดในที่เมื่อเปิดด้วยรุ่นใหม่ (มีเทสต์ `library_from_v1_upgrades_in_place`)
 เอกสารนี้อธิบายกติกาที่ schema บังคับ และส่วนของ Blueprint หมวด 8 ที่ยังไม่มีในรุ่นนี้
 
 ## ที่เก็บ
@@ -11,6 +12,7 @@ Schema รุ่น 1 — ต้นฉบับคือ [`crates/core/migration
 | ไฟล์ lock | `…/library/library.lock` | — |
 | ภาพย่อ | `~/Library/Caches/com.purivaro.puriphotosearch2/thumbs/<2 ตัวท้ายของ ID>/<revision id>.jpg` | ได้ เมื่อต้นทางพร้อม |
 | ครอปใบหน้า | `~/Library/Caches/com.purivaro.puriphotosearch2/faces/<face id>.jpg` | ได้ เมื่อต้นทางพร้อม |
+| ไฟล์โมเดลใบหน้า | `~/Library/Application Support/com.purivaro.puriphotosearch2/library/models/buffalo_l/` (`det_10g.onnx`, `w600k_r50.onnx`, `verified`) | ได้ — ดาวน์โหลดใหม่ |
 | ไฟล์รูปต้นฉบับ | อยู่ที่เดิมของผู้ใช้ แอปอ่านอย่างเดียว | — |
 
 แยกจากข้อมูลของรุ่น Python (`~/Library/Application Support/PuriPhotoSearch/`) ทั้งสองรุ่นไม่เขียนไฟล์เดียวกัน
@@ -31,7 +33,11 @@ debug build ที่ตั้ง `PURI_DATA_DIR` จะใช้โฟลเด
 | | `source_photos` | รูปนี้เข้าถึงได้ผ่านแหล่งใด |
 | ใบหน้า | `faces` | กรอบบน revision หนึ่ง, `origin` (`manual`/`detector`/`legacy`), `status` (`active`/`ignored`/`superseded`) |
 | | `face_assignments` | คำยืนยัน ใบหน้า → บุคคล พร้อม `operation_id`; เพิกถอนด้วย `revoked_at` ไม่ลบแถว |
+| | `face_embeddings` (v2) | เวกเตอร์ของใบหน้า + `space`; เทียบได้เฉพาะ space เดียวกัน |
+| | `face_rejections` (v2) | "ไม่ใช่บุคคลนี้" ต่อข้อเสนอของ AI: คู่ ใบหน้า–บุคคล ที่ไม่ให้เสนอซ้ำ |
 | บุคคล | `persons`, `person_aliases` | ชื่อแสดง, ชื่อเล่น, ชื่ออื่น, หมายเหตุ, ปก, เก็บ/ไม่เก็บ |
+| | `person_reference_samples` (v2) | ภาพครอปใบหน้าตัวอย่างที่นำเข้าจากรุ่น Python + เวกเตอร์ที่สร้างใหม่; ไม่นับเป็นรูปกิจกรรม |
+| | `legacy_id_map` (v2) | ระเบียนของรุ่นเดิม → ID ใหม่ กันนำเข้าซ้ำ |
 | | `groups`, `person_groups` | กลุ่มที่ผู้ใช้ตั้ง; คนหนึ่งอยู่ได้หลายกลุ่ม |
 | | `pinned_persons`, `recent_person_views`, `ui_preferences` | ปักหมุด, เปิดล่าสุด, แท็บหน้าหลัก |
 | งาน | `jobs`, `job_errors` | คิวถาวร, ตัวนับ, ข้อผิดพลาดรายไฟล์ |
@@ -63,6 +69,7 @@ debug build ที่ตั้ง `PURI_DATA_DIR` จะใช้โฟลเด
 
 - **จำนวนรูปของบุคคล** = `COUNT(DISTINCT photo_id)` จาก `v_confirmed` — คนเดียวหลายหน้าในภาพเดียวนับครั้งเดียว
 - **จำนวนกิจกรรมของบุคคล** = `COUNT(DISTINCT event_id)` จาก `v_confirmed`
+- **ใบหน้ารอตรวจสอบ** = ใบหน้า `active` บน revision ปัจจุบันที่ไม่มีคำยืนยัน — ข้อเสนอของ AI ไม่ถูกนับเป็นรูปของบุคคลในทุกกรณี
 - **ปรากฏร่วมในภาพ** = `COUNT(DISTINCT photo_id)` ที่ A และ B อยู่ใน `v_confirmed` ของรูปเดียวกัน ไม่รวม A เองและคนที่เก็บไว้
 - **จำนวนรูปของคลัง/กิจกรรม** = file instances ที่ `catalog_state = 'active'`
 
@@ -81,10 +88,9 @@ debug build ที่ตั้ง `PURI_DATA_DIR` จะใช้โฟลเด
 
 ## ส่วนของ Blueprint หมวด 8 ที่ยังไม่มีใน schema นี้
 
-`libraries` (หลายคลัง) · `source_exclusions` · `catalog_suppressions` · `face_analysis_runs` · `embedding_spaces` ·
-`face_embeddings` · `person_redirects` · `person_samples` · `person_reference_assets` · `reference_asset_embeddings` ·
-`match_candidates` · `face_rejections` · `face_clusters` · `cluster_constraints` · `tags` · `job_items` · `operation_items` ·
-`model_manifests` · `index_manifests` · `migration_runs` · `legacy_id_map` · `legacy_identity_claims` · `photo_relocations`
+`libraries` (หลายคลัง) · `source_exclusions` · `catalog_suppressions` · `face_analysis_runs` · `embedding_spaces` (ตอนนี้เป็นคอลัมน์ `space`) ·
+`person_redirects` · `person_samples` · `match_candidates` · `face_clusters` · `cluster_constraints` (ข้อเสนอและกลุ่มคำนวณตอนเปิดหน้าตรวจสอบ ไม่เก็บลงตาราง) ·
+`tags` · `job_items` · `operation_items` · `model_manifests` · `index_manifests` · `migration_runs` · `legacy_identity_claims` · `photo_relocations`
 
 จะเพิ่มเป็น migration ถัดไปเมื่อถึงงานที่ใช้ (AI, รวม/แยกบุคคล, relink, archive, ย้ายข้อมูลเดิม) ไม่สร้างตารางเปล่าไว้ล่วงหน้า
 

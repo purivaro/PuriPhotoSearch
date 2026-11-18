@@ -94,7 +94,7 @@ export function CommandPalette() {
           <Command.Group heading="บุคคล" className={GROUP}>
             {data.people.map((person) => (
               <Command.Item key={person.id} value={`person:${person.id}`} onSelect={run(() => navigate(personSearchPath(person.id)))} className={ITEM} data-testid="palette-person">
-                <FaceAvatar faceId={person.coverFaceId} name={person.displayName} decorative className="size-9" />
+                <FaceAvatar asset={person.coverAsset} name={person.displayName} decorative className="size-9" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-semibold">{person.displayName}</span>
                   <span className="block truncate text-[12.5px] text-muted">

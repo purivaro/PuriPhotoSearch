@@ -65,6 +65,8 @@ fn main() {
         sink: Arc::new(NoopSink),
         folder_picker: "dev_path_input",
         start_worker: true,
+        face_engine: puri_faces::app::provider(),
+        face_engine_unavailable: puri_faces::app::UNAVAILABLE,
     })
     .unwrap_or_else(|e| panic!("เปิดคลังทดสอบไม่ได้: {e}"));
     let server = Arc::new(Server::http("127.0.0.1:1421").expect("bind 127.0.0.1:1421"));

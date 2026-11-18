@@ -105,7 +105,7 @@ fn person_select() -> String {
 
 fn person_from_row(r: &rusqlite::Row) -> rusqlite::Result<PersonSummary> {
     Ok(PersonSummary {
-        person: PersonRef { id: r.get(0)?, display_name: r.get(1)?, cover_face_id: r.get(2)? },
+        person: PersonRef::new(r.get(0)?, r.get(1)?, r.get(2)?),
         nickname: r.get(3)?,
         confirmed_photo_count: r.get(4)?,
         pinned: r.get(5)?,
@@ -386,7 +386,8 @@ pub fn set_archived(app: &App, person_id: &str, archived: bool) -> Result<Person
             "UPDATE persons SET catalog_state = ?2, record_version = record_version + 1 WHERE id = ?1",
             params![person_id, if archived { "archived" } else { "active" }],
         )?;
-        Ok(())
+        // บุคคลที่เก็บแล้วต้องไม่ถูกเสนอชื่อ: คิวตรวจสอบที่ออกไปแล้วใช้ไม่ได้
+        db::bump_decision(conn)
     })
 }
 

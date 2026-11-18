@@ -82,7 +82,7 @@ export function PersonDetailPage() {
       <PageHeader breadcrumb={[{ label: 'บุคคล', to: '/people' }, { label: data.displayName }]} />
 
       <div className="mb-5 flex flex-wrap items-start gap-5">
-        <FaceAvatar faceId={data.coverFaceId} name={data.displayName} shape="rounded" className="size-[128px] rounded-2xl text-5xl" />
+        <FaceAvatar asset={data.coverAsset} name={data.displayName} shape="rounded" className="size-[128px] rounded-2xl text-5xl" />
         <div className="min-w-[240px] flex-1">
           <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="text-[30px] leading-tight font-extrabold tracking-tight text-ink" data-testid="person-name">

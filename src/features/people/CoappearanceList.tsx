@@ -22,7 +22,7 @@ export function CoappearanceList({ personId, items, layout = 'row' }: { personId
               data-testid="coappearance-item"
               className="flex items-center gap-3 rounded-xl px-2 py-1.5 hover:bg-sunken"
             >
-              <FaceAvatar faceId={item.person.coverFaceId} name={item.person.displayName} decorative className="size-10" />
+              <FaceAvatar asset={item.person.coverAsset} name={item.person.displayName} decorative className="size-10" />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-semibold text-ink">{item.person.displayName}</span>
                 <span className="block text-[13px] text-muted">อยู่ร่วมกัน {formatCount(item.sharedPhotoCount)} รูป</span>
@@ -43,7 +43,7 @@ export function CoappearanceList({ personId, items, layout = 'row' }: { personId
             title={`ค้นรูปที่อยู่ร่วมกับ ${item.person.displayName}`}
             className="flex flex-col items-center gap-1 rounded-xl px-1 py-2 text-center hover:bg-sunken"
           >
-            <FaceAvatar faceId={item.person.coverFaceId} name={item.person.displayName} decorative className="size-16 text-xl" />
+            <FaceAvatar asset={item.person.coverAsset} name={item.person.displayName} decorative className="size-16 text-xl" />
             <span className="w-full truncate text-[13.5px] font-semibold text-ink">{item.person.displayName}</span>
             <span className="text-[12.5px] leading-tight text-muted">อยู่ร่วมกัน {formatCount(item.sharedPhotoCount)} รูป</span>
           </Link>

@@ -1,6 +1,8 @@
 //! ตัวช่วยของ integration tests: คลังชั่วคราว + โฟลเดอร์รูปที่สร้างขึ้นจริงบนดิสก์
 #![allow(dead_code)]
 
+use puri_core::ai::{DetectedFace, FaceAnalyzer, FaceEngineProvider, ModelFile, ModelSpec};
+use puri_core::faces::BBox;
 use puri_core::{api, App, AppError, NoopSink, Options};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -12,34 +14,138 @@ use tempfile::TempDir;
 pub struct Lib {
     pub tmp: TempDir,
     pub app: Arc<App>,
+    ai: bool,
 }
 
-fn open(base: &Path) -> Arc<App> {
+/// ตัววิเคราะห์จำลองสำหรับเทสต์เท่านั้น (ไม่มีในแอป): "บุคคล" ของรูปคือค่าสีแดงของภาพ ÷ 20
+/// รูปที่สีแดงใกล้ 0 = ไม่มีใบหน้า; ค่าสีเดียวกัน = เวกเตอร์เดียวกัน; ต่างค่า = ตั้งฉากกัน
+/// ค่าสีแดงที่เกินหลักยี่สิบขึ้นไป 4 หรือมากกว่า (เช่น 47) = คนเดิมแต่ตัวตรวจไม่มั่นใจ (คะแนน 0.55)
+pub struct FakeAnalyzer;
+
+fn fake_face(image_bytes: &[u8]) -> Option<(Vec<f32>, f32)> {
+    let img = image::load_from_memory(image_bytes).ok()?.to_rgb8();
+    let red = img.get_pixel(img.width() / 2, img.height() / 2)[0] as f32;
+    let person = (red / 20.0).round() as usize;
+    if person == 0 {
+        return None;
+    }
+    let mut v = vec![0.0f32; 512];
+    v[person % 512] = 3.0; // ไม่ normalize เหมือนเวกเตอร์ดิบของโมเดลจริง
+    Some((v, if red - person as f32 * 20.0 >= 4.0 { 0.55 } else { 0.9 }))
+}
+
+impl FaceAnalyzer for FakeAnalyzer {
+    fn analyze(&self, image_bytes: &[u8]) -> Result<Vec<DetectedFace>, AppError> {
+        Ok(fake_face(image_bytes)
+            .map(|(embedding, score)| DetectedFace { bbox: BBox { x: 0.3, y: 0.2, w: 0.25, h: 0.4 }, score, embedding })
+            .into_iter()
+            .collect())
+    }
+    fn embed_crop(&self, image_bytes: &[u8]) -> Result<Option<Vec<f32>>, AppError> {
+        Ok(fake_face(image_bytes).map(|f| f.0))
+    }
+}
+
+pub const FAKE_MODEL_FILES: [(&str, &[u8]); 2] =
+    [("det.onnx", b"fake detector weights"), ("rec.onnx", b"fake recognizer weights")];
+
+fn sha(bytes: &[u8]) -> &'static str {
+    Box::leak(puri_core::util::hex(&Sha256::digest(bytes)).into_boxed_str())
+}
+
+/// ชุดโมเดลจำลอง: "ดาวน์โหลด" จากไฟล์ zip ในโฟลเดอร์ชั่วคราวผ่าน file:// ด้วย pipeline ติดตั้งตัวจริง
+fn fake_provider(base: &Path) -> FaceEngineProvider {
+    let files: &'static [ModelFile] = Box::leak(Box::new([
+        ModelFile { name: FAKE_MODEL_FILES[0].0, sha256: sha(FAKE_MODEL_FILES[0].1) },
+        ModelFile { name: FAKE_MODEL_FILES[1].0, sha256: sha(FAKE_MODEL_FILES[1].1) },
+    ]));
+    FaceEngineProvider {
+        spec: ModelSpec {
+            id: "fake-pack",
+            display_name: "ชุดโมเดลทดสอบ",
+            space: "fake-space-v1",
+            files,
+            download_url: format!("file://{}", base.join("model-source/pack.zip").display()),
+            download_bytes: 2_000_000,
+            download_source: "โฟลเดอร์ทดสอบ",
+            license_note: "ใช้ในเทสต์เท่านั้น",
+        },
+        factory: Arc::new(|_| Ok(Arc::new(FakeAnalyzer) as Arc<dyn FaceAnalyzer>)),
+    }
+}
+
+/// สร้างไฟล์ zip ของชุดโมเดลจำลองไว้ให้งานติดตั้ง "ดาวน์โหลด"; `corrupt` = เนื้อไฟล์ไม่ตรง checksum
+pub fn publish_fake_model(base: &Path, corrupt: bool) {
+    let dir = base.join("model-source");
+    std::fs::create_dir_all(&dir).unwrap();
+    let _ = std::fs::remove_file(dir.join("pack.zip"));
+    for (name, bytes) in FAKE_MODEL_FILES {
+        std::fs::write(dir.join(name), if corrupt { b"tampered".as_slice() } else { bytes }).unwrap();
+    }
+    std::fs::write(dir.join("unrelated.onnx"), b"not needed by the app").unwrap();
+    let ok = std::process::Command::new("zip")
+        .current_dir(&dir)
+        .args(["-q", "pack.zip", "det.onnx", "rec.onnx", "unrelated.onnx"])
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "zip");
+}
+
+fn open(base: &Path, ai: bool) -> Arc<App> {
     std::env::set_var("PURI_DISABLE_OPEN", "1");
-    App::open(Options {
-        data_dir: base.join("data"),
-        cache_dir: base.join("cache"),
-        sink: Arc::new(NoopSink),
-        folder_picker: "dev_path_input",
-        start_worker: false,
-    })
-    .expect("open library")
+    // เทสต์รันขนานใน process เดียว: ช่วงที่เทสต์อื่นกำลัง fork ตัว zip/curl/unzip ลูกที่ยังไม่ exec ถือสำเนา fd ของ
+    // library.lock อยู่ชั่วครู่ การเปิดคลังซ้ำทันที (`reopen`) จึงเจอ LIBRARY_LOCKED ได้เป็นบางครั้ง
+    // lock หลุดเองเมื่อลูก exec (fd เป็น close-on-exec) — รอแล้วลองใหม่ ข้อผิดพลาดอื่นถือว่าเทสต์ล้ม
+    let started = std::time::Instant::now();
+    loop {
+        let opened = App::open(Options {
+            data_dir: base.join("data"),
+            cache_dir: base.join("cache"),
+            sink: Arc::new(NoopSink),
+            folder_picker: "dev_path_input",
+            start_worker: false,
+            face_engine: ai.then(|| fake_provider(base)),
+            face_engine_unavailable: "build ทดสอบนี้ไม่มีตัววิเคราะห์ใบหน้า",
+        });
+        match opened {
+            Ok(app) => return app,
+            Err(e) if e.code == "LIBRARY_LOCKED" && started.elapsed() < std::time::Duration::from_secs(5) => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => panic!("open library: {e:?}"),
+        }
+    }
 }
 
 impl Lib {
     pub fn new() -> Self {
         let tmp = TempDir::new().unwrap();
-        let app = open(tmp.path());
-        Lib { tmp, app }
+        let app = open(tmp.path(), false);
+        Lib { tmp, app, ai: false }
+    }
+
+    /// คลังที่ build มีตัววิเคราะห์ใบหน้า (ยังไม่ติดตั้งโมเดลจนกว่าจะเรียก `install_model`)
+    pub fn with_ai() -> Self {
+        let tmp = TempDir::new().unwrap();
+        publish_fake_model(tmp.path(), false);
+        let app = open(tmp.path(), true);
+        Lib { tmp, app, ai: true }
+    }
+
+    pub fn install_model(&self) -> Value {
+        let job = self.call("install_face_model", json!({}));
+        self.run_jobs();
+        self.call("get_job", json!({ "jobId": job["id"] }))
     }
 
     /// ปิดแล้วเปิดคลังเดิมใหม่ (จำลอง restart)
     pub fn reopen(self) -> Self {
-        let Lib { tmp, app } = self;
+        let Lib { tmp, app, ai } = self;
         app.shutdown();
         drop(app);
-        let app = open(tmp.path());
-        Lib { tmp, app }
+        let app = open(tmp.path(), ai);
+        Lib { tmp, app, ai }
     }
 
     /// โฟลเดอร์สำหรับวางรูปทดสอบ (canonical path เหมือนที่แอปเห็น)

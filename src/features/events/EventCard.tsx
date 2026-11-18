@@ -1,14 +1,24 @@
 import { Link } from 'react-router';
-import { Calendar, CircleCheck, CloudOff, Image as ImageIcon, TriangleAlert } from 'lucide-react';
+import { Calendar, CircleCheck, CloudOff, Image as ImageIcon, ScanFace, TriangleAlert } from 'lucide-react';
 import { Spinner, StatusBadge } from '@/components/ui/Feedback';
 import { cn } from '@/lib/cn';
 import { formatCount, formatThaiDate } from '@/lib/format';
 import { assetUrl } from '@/lib/ipc/client';
 import type { EventSummary } from '@/lib/ipc/types';
+import { useCapabilities } from '@/lib/queries';
 
 /** สถานะ "ข้อมูลรูปพร้อม" ของกิจกรรม — แยกจากความพร้อมของโฟลเดอร์ต้นทาง */
 export function EventStatus({ event }: { event: EventSummary }) {
+  const faceReady = useCapabilities().data?.faceAnalysis.available ?? false;
   if (event.activeJobId) {
+    // ภาพย่อครบแล้วแต่งานยังเดิน = กำลังวิเคราะห์ใบหน้า (เป็นคนละสถานะกับ "ข้อมูลรูปพร้อม")
+    if (faceReady && event.photoCount > 0 && event.thumbReadyCount >= event.photoCount && event.faceAnalyzedCount < event.photoCount) {
+      return (
+        <StatusBadge tone="brand" icon={<Spinner className="size-3.5" />}>
+          กำลังวิเคราะห์ใบหน้า {formatCount(event.faceAnalyzedCount)}/{formatCount(event.photoCount)}
+        </StatusBadge>
+      );
+    }
     return (
       <StatusBadge tone="brand" icon={<Spinner className="size-3.5" />}>
         กำลังเตรียมรูป {formatCount(event.thumbReadyCount)}/{formatCount(event.photoCount)}
@@ -39,6 +49,9 @@ export function EventStatus({ event }: { event: EventSummary }) {
 
 export function EventCard({ event, highlighted }: { event: EventSummary; highlighted?: boolean }) {
   const date = formatThaiDate(event.eventDate);
+  // แสดงเฉพาะเมื่อวิเคราะห์ได้จริงและยังไม่ครบ: "ข้อมูลรูปพร้อม" ไม่ได้แปลว่าวิเคราะห์ใบหน้าแล้ว
+  const faceReady = useCapabilities().data?.faceAnalysis.available ?? false;
+  const facePending = faceReady && event.photoCount > 0 && event.faceAnalyzedCount < event.photoCount;
   return (
     <Link
       to={`/events/${event.id}`}
@@ -83,6 +96,12 @@ export function EventCard({ event, highlighted }: { event: EventSummary; highlig
             {formatCount(event.photoCount)} รูป
           </span>
         </p>
+        {facePending && (
+          <p className="mt-1 flex items-center gap-1.5 text-[13px] text-muted" data-testid="event-face-progress">
+            <ScanFace className="size-4" aria-hidden />
+            วิเคราะห์ใบหน้า {formatCount(event.faceAnalyzedCount)}/{formatCount(event.photoCount)}
+          </p>
+        )}
       </div>
     </Link>
   );
