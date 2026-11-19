@@ -49,10 +49,13 @@ echo "› เปิดแอป $FROM แล้วรอให้พบรุ่
 (HOME="$WORK/home" nohup "$bin" >"$WORK/app.log" 2>&1 &)
 started=$(date +%s)
 clicked=""
+skipped=""
 for _ in $(seq 1 180); do
   sleep 1
   p=$(pid) || true
   [ -n "${p:-}" ] || continue
+  # รุ่นที่มีหน้าต่าง "เตรียมแอปให้พร้อมใช้" เปิดมันทับ toast ตอนเปิดครั้งแรก: ปิดก่อน ไม่งั้น Accessibility ไม่เห็นปุ่มของ toast
+  if [ -z "$skipped" ] && press "$p" "ข้ามไปก่อน" >/dev/null 2>&1; then skipped=1; echo "  · ปิดหน้าต่าง “เตรียมแอปให้พร้อมใช้” (ข้ามไปก่อน)"; fi
   if press "$p" "อัปเดต" >/dev/null 2>&1; then clicked=1; break; fi
 done
 [ -n "$clicked" ] || { seen | tail -15; fail "ไม่พบปุ่ม “อัปเดต” ของ toast ภายใน 3 นาที"; }

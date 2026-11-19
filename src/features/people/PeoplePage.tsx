@@ -1,6 +1,6 @@
 import { useDeferredValue, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Pin, ScanFace, Search, SearchX, UserPlus, Users } from 'lucide-react';
+import { DatabaseBackup, Pin, ScanFace, Search, SearchX, UserPlus, Users } from 'lucide-react';
 import { Page, PageHeader, useDocumentTitle } from '@/app/PageLayout';
 import { Button } from '@/components/ui/Button';
 import { EmptyState, ErrorState, LoadingBlock } from '@/components/ui/Feedback';
@@ -8,7 +8,8 @@ import { Select, TextInput } from '@/components/ui/Form';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import type { PersonSummary } from '@/lib/ipc/types';
-import { useGroups, usePeople } from '@/lib/queries';
+import { useGroups, usePeople, useSetupState } from '@/lib/queries';
+import { useUi } from '@/stores/ui';
 import { PERSON_GRID, PersonCard } from './PersonCard';
 import { PersonEditorDialog } from './PersonEditorDialog';
 import { PersonQuickViewHost, useQuickView } from './PersonQuickView';
@@ -48,6 +49,9 @@ export function PeoplePage() {
   const everyone = usePeople({ includeArchived: true });
   const groups = useGroups();
   const libraryEmpty = everyone.data?.length === 0;
+  // รายชื่อจากรุ่น Python บนเครื่องนี้ที่ยังไม่ได้นำเข้า: เป็นทางที่เร็วที่สุดเมื่อคลังยังไม่มีบุคคล
+  const legacyPending = useSetupState().data?.legacyPending ?? 0;
+  const openSetup = useUi((s) => s.setSetupOpen);
   const filtered = Boolean(term || groupId || pinnedOnly);
   const sorted = useMemo(() => sortPeople(people.data ?? [], sort), [people.data, sort]);
 
@@ -119,7 +123,18 @@ export function PeoplePage() {
           description="เปิดรูปในกิจกรรม กด “เพิ่มกรอบใบหน้า” แล้วบอกว่าเป็นใคร — หรือเพิ่มบุคคลไว้ก่อนแล้วค่อยเชื่อมกับรูปภายหลัง"
           action={
             <>
-              <Link to="/events" className="inline-flex h-10 items-center rounded-control bg-action px-4 text-sm font-semibold text-on-action hover:bg-action-hover">
+              {legacyPending > 0 && (
+                <Button variant="primary" icon={<DatabaseBackup className="size-[18px]" aria-hidden />} onClick={() => openSetup(true)} data-testid="people-legacy">
+                  นำรายชื่อจากรุ่นเดิม ({formatCount(legacyPending)} คน)
+                </Button>
+              )}
+              <Link
+                to="/events"
+                className={cn(
+                  'inline-flex h-10 items-center rounded-control px-4 text-sm font-semibold',
+                  legacyPending > 0 ? 'border border-line-strong bg-surface text-ink shadow-card hover:bg-sunken' : 'bg-action text-on-action hover:bg-action-hover',
+                )}
+              >
                 เปิดกิจกรรมเพื่อระบุใบหน้า
               </Link>
               <Button icon={<UserPlus className="size-[18px]" aria-hidden />} onClick={() => setCreating(true)}>

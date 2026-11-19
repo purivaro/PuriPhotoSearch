@@ -429,9 +429,18 @@ fn legacy_people_import_is_read_only_idempotent_and_only_suggests() {
     legacy_db(&legacy);
     let before = std::fs::read(&legacy).unwrap();
 
+    // ข้อเสนอตอนเปิดแอปครั้งแรก: นับคนที่ยังไม่ได้นำเข้า และจำว่าผู้ใช้ปิดข้อเสนอแล้ว
+    let pending = |lib: &Lib| puri_core::legacy::pending_people(&lib.app, legacy.to_str()).unwrap();
+    assert_eq!(pending(&lib), 3);
+    assert_eq!(lib.call("get_setup_state", json!({}))["dismissed"], false);
+    lib.call("dismiss_setup", json!({}));
+    lib.call("dismiss_setup", json!({}));
+    assert_eq!(lib.call("get_setup_state", json!({}))["dismissed"], true);
+
     let req = new_id();
     let args = json!({ "path": legacy, "requestId": req });
     let result = lib.call("import_legacy_people", args.clone());
+    assert_eq!(pending(&lib), 0, "นำเข้าแล้วไม่เหลือให้เสนอ");
     assert_eq!(
         (result["personsCreated"].as_i64(), result["groupsCreated"].as_i64(), result["samplesImported"].as_i64()),
         (Some(3), Some(1), Some(4))

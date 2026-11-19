@@ -6,7 +6,8 @@
 
 use crate::error::{AppError, Result};
 use crate::{
-    ai, assets, backup, catalog, db, export, faces, import, jobs, legacy, media, people, platform, relink, review, App,
+    ai, assets, backup, catalog, db, export, faces, import, jobs, legacy, media, people, platform, relink, review,
+    setup, App,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -181,6 +182,8 @@ enum Command {
         path: Option<String>,
         request_id: String,
     },
+    GetSetupState {},
+    DismissSetup {},
 
     #[serde(rename_all = "camelCase")]
     PreviewRelink {
@@ -284,6 +287,8 @@ pub const COMMAND_NAMES: &[&str] = &[
     "reveal_export_destination",
     "preview_legacy_import",
     "import_legacy_people",
+    "get_setup_state",
+    "dismiss_setup",
     "preview_relink",
     "commit_relink",
     "get_backup_status",
@@ -431,6 +436,8 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
 
         PreviewLegacyImport { path } => ok(legacy::dry_run(path.as_deref())?),
         ImportLegacyPeople { path, request_id } => ok(legacy::import_people(app, path.as_deref(), &request_id)?),
+        GetSetupState {} => ok(setup::state(app)?),
+        DismissSetup {} => ok(setup::dismiss(app)?),
 
         PreviewRelink { event_id, new_folder } => ok(relink::preview(app, &event_id, &new_folder)?),
         CommitRelink { event_id, new_folder, include_siblings } => {

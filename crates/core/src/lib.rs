@@ -20,6 +20,7 @@ pub mod people;
 pub mod platform;
 pub mod relink;
 pub mod review;
+pub mod setup;
 pub mod util;
 
 pub use error::{AppError, Result};

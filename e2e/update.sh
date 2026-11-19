@@ -133,6 +133,8 @@ node --check "$WORK/update.js" || fail "e2e/update.js มี syntax error"
 
 echo "› เปิดแอปรุ่น $OLD ที่ติดตั้งไว้"
 export PURI_DATA_DIR="$(native "$WORK/library")" PURI_DISABLE_OPEN=1 PURI_DISABLE_FACE_ENGINE=1
+# ไม่ให้ฐานของรุ่น Python บนเครื่องผู้พัฒนาทำให้หน้าต่าง "เตรียมแอปให้พร้อมใช้" เปิดขึ้นกลางเทสต์
+export PURI_LEGACY_DB="$(native "$WORK/no-legacy.db")"
 export PURI_E2E_SCRIPT="$(native "$WORK/update.js")" PURI_E2E_REPORT="$(native "$REPORT")"
 export PURI_UPDATE_ENDPOINT="$ENDPOINT"
 # release build (แอปรอบสองของ LIVE) ไม่รับ PURI_DATA_DIR: ให้โฟลเดอร์ข้อมูลของมันไปอยู่ใต้ HOME ชั่วคราวแทนคลังจริง

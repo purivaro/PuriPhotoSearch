@@ -31,6 +31,7 @@
 ไม่ต้องติดตั้ง Python, Node หรือ Rust ตรวจไฟล์ที่ดาวน์โหลดได้ด้วย `shasum -a 256 PuriPhotoSearch-mac.dmg` เทียบกับ `SHA256SUMS.txt`
 
 รุ่นนี้เป็นคนละแอปกับ PuriPhotoSearch 1.x (Python): ติดตั้งคู่กันได้ และไม่แตะข้อมูลของรุ่นเดิม
+ถ้าเครื่องมีข้อมูลของรุ่น 1.x (macOS) แอปจะเสนอให้นำรายชื่อบุคคลเข้าตอนเปิดครั้งแรก พร้อมกับเสนอดาวน์โหลดตัววิเคราะห์ใบหน้า
 
 ## อัปเดต
 
@@ -102,6 +103,7 @@ cargo run -p puri-core --example make_fixtures -- /tmp/puri-photos
 ```sh
 pnpm check                     # typecheck + vitest + cargo fmt --check + clippy -D warnings + cargo test
 e2e/run.sh                     # เส้นทางหลักในหน้าต่างแอปจริง (ต้องมี desktop session)
+e2e/setup.sh                   # หน้าต่าง "เตรียมแอปให้พร้อมใช้" ตอนเปิดครั้งแรก กับฐานรุ่น Python จำลอง (macOS)
 e2e/update.sh                  # แอปจริงอัปเดตตัวเองจากรุ่นปัจจุบันเป็นรุ่นทดสอบ (build สองรอบ หลายนาที; Windows รันใน workflow Release เท่านั้น)
 LIVE=1 e2e/update.sh           # หลังออกรุ่น: แอปรุ่นเก่าอัปเดตตัวเองจาก GitHub จริงเป็นรุ่นที่เพิ่งเผยแพร่ (macOS, ออกเครือข่าย)
 e2e/update-published.sh        # หลังออกรุ่น: แอปรุ่นก่อนหน้าตัวที่เผยแพร่จริงอัปเดตตัวเองเป็นรุ่นล่าสุด (macOS, ต้องได้สิทธิ์ Accessibility)
