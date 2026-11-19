@@ -215,6 +215,11 @@ enum Command {
         face_ids: Vec<String>,
         person_id: String,
     },
+    #[serde(rename_all = "camelCase")]
+    RestoreSuggestions {
+        face_ids: Vec<String>,
+        person_id: String,
+    },
 }
 
 /// ชื่อคำสั่งทั้งหมด — ต้องตรงกับ `Commands` ใน `src/lib/ipc/types.ts` (มีเทสต์ตรวจ)
@@ -276,6 +281,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "get_review_overview",
     "get_review_faces",
     "reject_suggestions",
+    "restore_suggestions",
 ];
 
 #[derive(Serialize)]
@@ -428,6 +434,9 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         }
         RejectSuggestions { face_ids, person_id } => {
             ok(serde_json::json!({ "dataRevision": review::reject(app, &face_ids, &person_id)? }))
+        }
+        RestoreSuggestions { face_ids, person_id } => {
+            ok(serde_json::json!({ "dataRevision": review::restore(app, &face_ids, &person_id)? }))
         }
     }
 }

@@ -256,6 +256,19 @@ fn ai_matches_count_as_the_persons_photos_until_the_user_says_no() {
     assert_eq!(overview["unexaminedFaceCount"], 0);
     let kan_group = arr(&overview["suggested"]).iter().find(|g| g["person"]["id"] == kan.as_str()).unwrap();
     assert_eq!((kan_group["faceCount"].as_i64(), kan_group["photoCount"].as_i64()), (Some(1), Some(1)));
+
+    // รูปที่แจ้งว่าไม่ใช่ยังดูได้ และคืนได้เมื่อแจ้งผิด: กลับไปเป็นรูปที่ AI จัดให้ตามเดิม (ไม่กลายเป็นคำยืนยัน)
+    assert_eq!(lib.call("get_person", json!({ "personId": kan }))["rejectedPhotoCount"], 1);
+    let rejected = lib.query(json!({ "rejectedPersonId": kan }));
+    assert_eq!(names(&rejected), ["a2.jpg"]);
+    assert_eq!(rejected["items"][0]["rejectedFaces"], json!([a2_face]));
+    lib.call("restore_suggestions", json!({ "faceIds": [a2_face], "personId": kan }));
+    let person = lib.call("get_person", json!({ "personId": kan }));
+    assert_eq!((person["rejectedPhotoCount"].as_i64(), person["aiPhotoCount"].as_i64()), (Some(0), Some(2)));
+    let back = lib.query(json!({ "personIds": [kan], "includeSuggested": true, "sort": "filename" }));
+    assert_eq!(names(&back), ["a1.jpg", "a2.jpg", "a3.jpg"]);
+    assert_eq!(lib.query(json!({ "rejectedPersonId": kan }))["total"], 0);
+    assert_eq!(lib.count("SELECT COUNT(*) FROM face_assignments WHERE revoked_at IS NULL"), 2);
 }
 
 #[test]

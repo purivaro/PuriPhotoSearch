@@ -36,6 +36,9 @@ pub const PERSON_COVER_SQL: &str = "COALESCE(\
 /// เงื่อนไข "รูปนี้มีใบหน้าที่ยืนยันแล้วของ …" เมื่อมองจากแถวรูป (ความหมายเดียวกับ view v_confirmed)
 const CONFIRMED_ON_PHOTO: &str = "FROM faces f JOIN face_assignments a ON a.face_id = f.id AND a.revoked_at IS NULL \
                                   WHERE f.photo_revision_id = r.id AND f.status = 'active'";
+/// เงื่อนไข "รูปนี้มีใบหน้าที่ผู้ใช้แจ้งว่าไม่ใช่ …"
+const REJECTED_ON_PHOTO: &str = "FROM faces f JOIN face_rejections x ON x.face_id = f.id \
+                                 WHERE f.photo_revision_id = r.id AND f.status = 'active'";
 /// เงื่อนไข "รูปนี้มีใบหน้าที่ AI จัดให้ …" (ตารางชั่วคราวที่ `review::ensure_matches` เติม)
 const AI_ON_PHOTO: &str = "FROM temp.ai_matches m WHERE m.revision_id = r.id";
 
@@ -303,6 +306,8 @@ pub struct SearchParams {
     pub limit: Option<i64>,
     /// นับรูปที่ AI จัดให้บุคคลนั้นด้วย (ยังไม่มีคนยืนยัน); ผู้เรียกต้องเรียก `review::ensure_matches` ก่อน
     pub include_suggested: bool,
+    /// เฉพาะรูปที่ผู้ใช้แจ้งว่า "ไม่ใช่" บุคคลนี้ (ใช้ดูและคืนรูปที่แจ้งผิด); ผลบอกใบหน้าใน `rejectedFaces`
+    pub rejected_person_id: Option<String>,
 }
 
 /// บุคคลที่อยู่ในรูปตามที่ AI จัดให้ พร้อมใบหน้าที่เป็นเหตุ (ใช้แจ้งว่า "ไม่ใช่คนนี้")
@@ -330,6 +335,8 @@ pub struct PhotoResult {
     pub confirmed_people: Vec<PersonRef>,
     /// บุคคลที่ AI จัดให้ในรูปนี้ (มีเมื่อค้นแบบรวมรูปที่ AI จัดให้)
     pub suggested_people: Vec<SuggestedPerson>,
+    /// ใบหน้าในรูปนี้ที่ผู้ใช้แจ้งว่าไม่ใช่บุคคลที่ถาม (มีเมื่อค้นด้วย `rejectedPersonId`)
+    pub rejected_faces: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -392,6 +399,7 @@ fn photo_from_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoResult> {
         available: r.get(10)?,
         confirmed_people: vec![],
         suggested_people: vec![],
+        rejected_faces: vec![],
     })
 }
 
@@ -499,6 +507,11 @@ fn build_filter(p: &SearchParams) -> Result<Filter> {
             (false, true) => f.sql.push_str(&format!(" AND (({}) OR {col} IS NULL)", parts.join(" AND "))),
             (false, false) => f.sql.push_str(&format!(" AND ({})", parts.join(" AND "))),
         }
+    }
+
+    if let Some(person) = &p.rejected_person_id {
+        let arg = f.arg(person.clone());
+        f.sql.push_str(&format!(" AND EXISTS (SELECT 1 {REJECTED_ON_PHOTO} AND x.person_id = {arg})"));
     }
 
     match p.face_filter.as_deref().unwrap_or("any") {
@@ -615,6 +628,16 @@ pub fn query_photos(conn: &Connection, p: &SearchParams) -> Result<PhotoPage> {
     attach_people(conn, &mut items)?;
     if p.include_suggested {
         attach_suggested(conn, &mut items)?;
+    }
+    if let Some(person) = &p.rejected_person_id {
+        let mut stmt = conn.prepare(
+            "SELECT f.id FROM faces f JOIN face_rejections x ON x.face_id = f.id
+             WHERE f.photo_revision_id = ?1 AND f.status = 'active' AND x.person_id = ?2 ORDER BY f.id",
+        )?;
+        for item in &mut items {
+            item.rejected_faces =
+                stmt.query_map(params![item.revision_id, person], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        }
     }
 
     let total = coverage.eligible_photos;

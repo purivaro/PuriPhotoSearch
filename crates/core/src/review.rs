@@ -602,6 +602,38 @@ pub fn reject(app: &App, face_ids: &[String], person_id: &str) -> Result<i64> {
     Ok(revision)
 }
 
+/// ย้อน "ไม่ใช่บุคคลนี้": ลบคำปฏิเสธของคู่ ใบหน้า–บุคคล ใบหน้านั้นกลับไปให้ AI จัดได้ตามเดิม (ไม่สร้างคำยืนยัน)
+pub fn restore(app: &App, face_ids: &[String], person_id: &str) -> Result<i64> {
+    if face_ids.is_empty() || face_ids.len() > 2000 {
+        return Err(AppError::invalid("เลือกใบหน้าที่จะคืน (ไม่เกิน 2,000 ใบต่อครั้ง)"));
+    }
+    let revision = {
+        let mut conn = app.db();
+        let tx = conn.transaction()?;
+        people::summary(&tx, person_id)?;
+        for face_id in face_ids {
+            tx.execute(
+                "DELETE FROM face_rejections WHERE face_id = ?1 AND person_id = ?2",
+                params![face_id, person_id],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO operations(id, kind, summary, created_at) VALUES (?1, 'restore_suggestions', ?2, ?3)",
+            params![
+                util::new_id(),
+                serde_json::json!({ "faceIds": face_ids, "personId": person_id }).to_string(),
+                util::now()
+            ],
+        )?;
+        db::bump_decision(&tx)?;
+        let revision = db::bump_revision(&tx)?;
+        tx.commit()?;
+        revision
+    };
+    app.notify(&["people", "photos"]);
+    Ok(revision)
+}
+
 /// สร้างเวกเตอร์ให้ใบหน้าตัวอย่างที่นำเข้าและยังไม่มีเวกเตอร์ใน space ปัจจุบัน; คืนจำนวนที่ทำสำเร็จ
 /// เรียกจาก worker เมื่อโมเดลพร้อม ทำทีละชุดเล็กเพื่อไม่ขวางงานอื่น
 pub(crate) fn embed_pending_samples(
