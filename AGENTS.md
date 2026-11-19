@@ -34,6 +34,7 @@ export PATH="/opt/homebrew/opt/rustup/bin:$PATH"   # เครื่องนี
 pnpm check          # typecheck + vitest + cargo fmt --check + clippy -D warnings + cargo test
 e2e/run.sh          # เส้นทางหลักในแอปจริง (ต้องมี desktop session)
 e2e/update.sh       # เมื่อแตะตัวอัปเดต (src-tauri/src/updater.rs, src/features/update) หรือ workflow ออกรุ่น
+e2e/update-published.sh   # หลังออกรุ่น: แอปรุ่นก่อนหน้าที่เผยแพร่ต้องอัปเดตตัวเองมาเป็นรุ่นใหม่ได้
 ```
 
 - ทุกพฤติกรรมที่แตะข้อมูลต้องมีเทสต์ใน `crates/core/tests/` ที่ใช้ไฟล์จริงและวัดผลจริง
