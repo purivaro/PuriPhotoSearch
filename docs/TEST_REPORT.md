@@ -377,7 +377,7 @@ debug build ฉีดสคริปต์เข้า WKWebView ของหน
 
 `e2e/run.sh` (เส้นทางหลัก 14 ขั้น) รันซ้ำหลังเพิ่มตัวอัปเดต: ผ่าน — debug build ที่ไม่ได้ตั้ง `PURI_UPDATE_ENDPOINT` ไม่ออกเครือข่าย
 
-**ยังไม่ได้ทดสอบ:** release build ที่เซ็น + notarize อัปเดตตัวเองจาก GitHub จริง (ยังไม่มีรุ่นที่เผยแพร่พร้อมตัวอัปเดต — พิสูจน์ได้ครั้งแรกเมื่อออกสองรุ่นติดกัน),
+**ยังไม่ได้ทดสอบ:** release build ที่เซ็น + notarize เป็นฝ่ายถามและอัปเดตตัวเองจาก GitHub จริง (พิสูจน์ได้ครั้งแรกเมื่อออกรุ่นถัดจาก alpha.4 — ดู "รุ่น 2.0.0-alpha.4 ที่เผยแพร่"),
 แอปใน `/Applications` ที่ต้องขอสิทธิ์ผู้ดูแลเครื่อง, แอปที่เปิดจาก `.dmg` โดยตรง (มีข้อความเฉพาะ แต่ไม่ได้ลอง), เครือข่ายหลุดกลางการดาวน์โหลด,
 การตรวจซ้ำทุก 6 ชั่วโมง, สวิตช์ปิดการตรวจอัตโนมัติ (เปิดดูแล้ว ไม่อยู่ในเทสต์), Intel Mac, เครื่อง Windows จริง
 
@@ -398,9 +398,23 @@ debug build ฉีดสคริปต์เข้า WKWebView ของหน
 | เลขรุ่นที่ผูกกับลายเซ็น | trusted comment ของทั้งสองไฟล์มี `version:2.0.0-alpha.3` (สิ่งที่ `requireSignedVersion` ตรวจ) |
 | `latest.json` จาก job `manifest` | `version` ตรงกับ `tauri.conf.json`, มี `darwin-aarch64` + `darwin-x86_64` (ไฟล์เดียวกัน) + `windows-x86_64`, URL ชี้ `releases/download/v<รุ่น>/<ชื่อไฟล์คงที่>`, `notes` ว่างพร้อมคำเตือนว่าไม่มี `docs/release-notes/<รุ่น>.md` |
 
-**ยังไม่ได้รัน:** job `publish` (แนบไฟล์กับ release, เขียน `latest.json` ลง branch `updates`) และการปฏิเสธ tag ที่ไม่ตรงเลขรุ่น — ทั้งสองเกิดเฉพาะเมื่อ push tag จริง
-จึงพิสูจน์ได้ครั้งแรกตอนออกรุ่นถัดไป และยังไม่มีแอปตัวไหนอ่าน `latest.json` จาก `raw.githubusercontent.com` จริง
+job `publish` รันเฉพาะ tag จริง จึงไม่อยู่ในรอบซ้อมนี้ — ดูหัวข้อถัดไป
 สคริปต์ `scripts/update-manifest.sh` ตัวเดียวกันนี้ถูกใช้และผ่านใน `e2e/update.sh` แล้วทั้งสองระบบ
+
+### รุ่น 2.0.0-alpha.4 ที่เผยแพร่ (19 พ.ย. 2569) — ครั้งแรกที่ job `publish` แบบใหม่รันจริง
+
+push tag `v2.0.0-alpha.4` → workflow `Release` ผ่านทุก job รวม `publish`:
+
+| ตรวจ | ผล |
+|---|---|
+| release | pre-release มี `PuriPhotoSearch-mac.dmg` (20.6 MiB), `PuriPhotoSearch-mac.app.tar.gz` (20.2 MiB), `PuriPhotoSearch-windows-setup.exe` (9.9 MiB), `latest.json`, `SHA256SUMS.txt`; ไม่มีไฟล์ `.sig` แยก (ลายเซ็นอยู่ใน `latest.json`) |
+| ไฟล์ที่ดาวน์โหลดกลับมา | `shasum -c SHA256SUMS.txt` ตรงทั้งสามไฟล์; DMG: `stapler validate` ผ่าน, `spctl` รับเป็น `Notarized Developer ID` |
+| branch `updates` | ถูกสร้างโดย workflow มี `latest.json` ไฟล์เดียว ตรงทุก byte กับ `latest.json` ที่แนบกับ release; อ่านได้ผ่าน `raw.githubusercontent.com` — รุ่น 2.0.0-alpha.4, ข้อความ "มีอะไรใหม่" จาก `docs/release-notes/2.0.0-alpha.4.md`, สามระบบ |
+| **อัปเดตจาก GitHub จริง** (`LIVE=1 e2e/update.sh`, macOS) | debug build ที่ตั้งเลขรุ่นเป็น 0.0.1 พร้อมกุญแจสาธารณะจริง อ่าน manifest จริง → ดาวน์โหลด `PuriPhotoSearch-mac.app.tar.gz` จาก release → ผ่านลายเซ็น → กล่องยืนยันแสดง "มีอะไรใหม่" ของรุ่นนั้น → กดอัปเดต → `.app` ในที่เดิมกลายเป็น 2.0.0-alpha.4 ตัวที่เผยแพร่ (`codesign --verify --deep --strict` ผ่าน, มีใบ notarize, `spctl` รับ, universal) และเปิดขึ้นมาใหม่เอง แอปรุ่นใหม่เปิดด้วย `HOME` ชั่วคราว คลังจริงไม่เปลี่ยน |
+
+**ที่ยังไม่ได้พิสูจน์แม้หลังรอบนี้:** ฝั่ง "ผู้ถาม" ของเทสต์ข้างบนเป็น debug build — **ยังไม่เคยมี release build (เซ็น + hardened runtime) ที่ถามหารุ่นใหม่ ดาวน์โหลด และสลับตัวเองจริง**
+ซึ่งจะเกิดครั้งแรกเมื่อออกรุ่นถัดจาก alpha.4 (แอป alpha.4 ที่เปิดขึ้นมาในเทสต์ถามหารุ่นใหม่เองเช่นกัน แต่ไม่มีทางอ่านผลจากภายนอก);
+การปฏิเสธ tag ที่ไม่ตรงเลขรุ่น (ไม่เคยเกิด); Windows กับไฟล์ที่เผยแพร่จริง (job `update-windows` ทดสอบ debug build ของ commit เดียวกัน ผ่าน)
 
 ### Windows (job `update-windows` ของ workflow `Release`, runner `windows-latest` — รอบซ้อมของ PR #17)
 

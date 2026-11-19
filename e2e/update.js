@@ -8,6 +8,8 @@
   const OLD = '__OLD__';
   const NEW = '__NEW__';
   const NOTES = '__NOTES__';
+  // โหมดตรวจรุ่นที่เผยแพร่แล้ว: manifest และไฟล์มาจาก GitHub จริง จึงไม่มีขั้นไฟล์ที่ถูกแก้ และข้อความมีอะไรใหม่เป็นของรุ่นนั้น
+  const LIVE = '__LIVE__' === '1';
   const invoke = window.__TAURI_INTERNALS__.invoke;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const log = [];
@@ -53,10 +55,12 @@
     await stage('opened', { version: first.currentVersion });
 
     // 1) แอปตรวจเองหลังเปิด: ไฟล์ที่ไม่ตรงกับลายเซ็นต้องไม่ถูกเสนอให้ติดตั้ง
-    await waitFor(async () => (await status()).state === 'failed', 'ไฟล์ที่ถูกแก้ถูกปฏิเสธ', 60000);
-    await waitFor(() => text(section).includes('ลายเซ็น'), 'หน้าตั้งค่าบอกว่าไม่ผ่านการตรวจลายเซ็น');
-    expect(!tid('update-notice') && !tid('update-open'), 'ไม่มีปุ่มติดตั้งสำหรับไฟล์ที่ไม่ผ่านลายเซ็น');
-    await stage('rejected', { message: (await status()).message });
+    if (!LIVE) {
+      await waitFor(async () => (await status()).state === 'failed', 'ไฟล์ที่ถูกแก้ถูกปฏิเสธ', 60000);
+      await waitFor(() => text(section).includes('ลายเซ็น'), 'หน้าตั้งค่าบอกว่าไม่ผ่านการตรวจลายเซ็น');
+      expect(!tid('update-notice') && !tid('update-open'), 'ไม่มีปุ่มติดตั้งสำหรับไฟล์ที่ไม่ผ่านลายเซ็น');
+      await stage('rejected', { message: (await status()).message });
+    }
 
     // 2) ตัวรันวางไฟล์จริงกลับ: กด "ลองตรวจใหม่" จนดาวน์โหลดผ่าน
     await waitFor(
@@ -69,7 +73,7 @@
         return false;
       },
       'ดาวน์โหลดรุ่นใหม่จนพร้อมติดตั้ง',
-      90000,
+      LIVE ? 300000 : 90000,
     );
     const ready = await status();
     expect(ready.version === NEW, `พบรุ่น ${NEW} (ได้ ${ready.version})`);
@@ -79,8 +83,8 @@
     // 3) ปุ่มในเมนูซ้าย → กล่องยืนยัน (แสดง "มีอะไรใหม่" จาก manifest) → อัปเดตและเปิดใหม่
     (await see('update-notice')).click();
     const notes = await see('update-notes');
-    expect(text(notes).includes(NOTES), `กล่องยืนยันแสดงข้อความมีอะไรใหม่ (ได้ "${text(notes)}")`);
-    await stage('confirm');
+    expect(LIVE ? text(notes).length > 0 : text(notes).includes(NOTES), `กล่องยืนยันแสดงข้อความมีอะไรใหม่ (ได้ "${text(notes)}")`);
+    await stage('confirm', { notes: text(notes) });
     (await see('update-install')).click();
     // จากนี้แอปปิดและเปิดใหม่เอง รายงานขั้นสุดท้ายมาจากรอบสอง
   } catch (e) {
