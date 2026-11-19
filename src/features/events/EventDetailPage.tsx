@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
-import { CircleCheck, CloudOff, Copy, FolderOpen, Image as ImageIcon, ImageOff, RefreshCw, ScanFace, TriangleAlert, UserRoundSearch } from 'lucide-react';
+import { CircleCheck, CloudOff, Copy, FolderOpen, FolderSearch, Image as ImageIcon, ImageOff, RefreshCw, ScanFace, TriangleAlert, UserRoundSearch } from 'lucide-react';
 import { Page, PageHeader, useDocumentTitle } from '@/app/PageLayout';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState, ErrorState, InlineNotice, LoadingBlock, StatusBadge } from '@/components/ui/Feedback';
@@ -16,6 +16,8 @@ import { assetUrl, call } from '@/lib/ipc/client';
 import type { EventDetail, SearchParams } from '@/lib/ipc/types';
 import { isJobActive, PHOTO_PAGE_SIZE, qk, useActiveJobs, useCapabilities, useEvent, type PhotoQuery } from '@/lib/queries';
 import { FILE_MANAGER } from '@/lib/platform';
+import { useFolderChooser } from '@/app/FolderChooser';
+import { RelinkDialog } from './RelinkDialog';
 
 type EventTab = 'photos' | 'people' | 'info' | 'history';
 
@@ -42,6 +44,15 @@ export function EventDetailPage() {
     onError: (error) => toast.error(errorMessage(error)),
   });
   // หนึ่ง requestId ต่อการกดหนึ่งครั้ง: กดซ้ำระหว่างรอไม่สร้างงานสำเนา
+  const choose = useFolderChooser();
+  const relinkPreview = useMutation({
+    mutationFn: (newFolder: string) => call('preview_relink', { eventId, newFolder }),
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  const chooseNewFolder = async () => {
+    const folder = await choose({ title: 'เลือกโฟลเดอร์ของกิจกรรมนี้ที่ตำแหน่งใหม่', hint: 'โฟลเดอร์ที่มีรูปของกิจกรรมนี้อยู่ตอนนี้ แอปจะตรวจให้ดูก่อนเปลี่ยนตำแหน่ง' });
+    if (folder) relinkPreview.mutate(folder);
+  };
   const rescanRequest = useRef<string | null>(null);
   const rescan = useMutation({
     mutationFn: () => {
@@ -171,10 +182,21 @@ export function EventDetailPage() {
       </div>
 
       {!data.sourceAvailable && (
-        <InlineNotice tone="warn" icon={<CloudOff aria-hidden />} className="mb-4">
-          โฟลเดอร์ต้นทางไม่พร้อมใช้งาน เชื่อมต่อไดรฟ์แล้วเปิดกิจกรรมนี้อีกครั้ง ระหว่างนี้ยังดูภาพย่อและชื่อบุคคลที่บันทึกไว้ได้ แต่เปิดต้นฉบับ ส่งออก และตรวจรูปใหม่ไม่ได้
+        <InlineNotice
+          tone="warn"
+          icon={<CloudOff aria-hidden />}
+          className="mb-4"
+          action={
+            <Button size="sm" icon={<FolderSearch className="size-4" aria-hidden />} busy={relinkPreview.isPending} onClick={() => void chooseNewFolder()} data-testid="event-relink">
+              ระบุตำแหน่งใหม่…
+            </Button>
+          }
+        >
+          หาโฟลเดอร์ต้นทางไม่เจอ ถ้าอยู่ในไดรฟ์ภายนอก ให้เชื่อมต่อไดรฟ์แล้วเปิดกิจกรรมนี้อีกครั้ง ถ้าย้ายหรือเปลี่ยนชื่อโฟลเดอร์ไปแล้ว ให้ระบุตำแหน่งใหม่
+          ระหว่างนี้ยังดูภาพย่อ ค้นหา และดูชื่อบุคคลได้ตามเดิม แต่เปิดต้นฉบับ ส่งออก และตรวจรูปใหม่ไม่ได้
         </InlineNotice>
       )}
+      <RelinkDialog preview={relinkPreview.data ?? null} onClose={() => relinkPreview.reset()} />
 
       {job && (
         <div className="mb-4">

@@ -367,6 +367,76 @@ fn t12_offline_source_keeps_metadata_and_reconnect_restores_same_ids() {
 }
 
 #[test]
+fn t13_relink_moved_folder_keeps_ids_names_and_only_binds_files_it_can_prove() {
+    let lib = Lib::new();
+    let root = year_folder(&lib);
+    lib.import(&root, "child_events", |d| d["defaultSelected"] == true);
+    let events = lib.call("list_events", json!({}));
+    let id_of = |title: &str| arr(&events).iter().find(|e| e["title"] == title).unwrap()["id"].clone();
+    let (ai, welcome) = (id_of("งานอบรม AI"), id_of("ต้อนรับคณะญาติโยม"));
+    lib.label("IMG_0001.jpg", 0.2, ("name", "คุณกานต์"));
+    let kan = lib.person_id("คุณกานต์");
+    let photo = lib.photo_id("IMG_0001.jpg");
+    let before = lib.count("SELECT COUNT(*) FROM photos");
+
+    // ย้ายทั้งโฟลเดอร์แม่ไปที่อื่นจากนอกแอป แล้วแก้ไฟล์หนึ่งและลบอีกไฟล์ในโฟลเดอร์งานอบรม
+    let moved = lib.tmp.path().join("ไดรฟ์ใหม่").join("2569");
+    std::fs::create_dir_all(moved.parent().unwrap()).unwrap();
+    std::fs::rename(&root, &moved).unwrap();
+    let ai_new = moved.join("691118 งานอบรม AI");
+    std::fs::write(ai_new.join("กล้อง A/IMG_0002.jpg"), b"not the same file any more").unwrap();
+    std::fs::remove_file(ai_new.join("กล้อง B/DSC_0001.jpg")).unwrap();
+    assert_eq!(lib.call("get_event", json!({ "eventId": ai.clone() }))["sourceAvailable"], false);
+
+    // ดูก่อน: จับคู่ได้เฉพาะไฟล์ที่ตำแหน่งและขนาดตรง, กิจกรรมพี่น้องที่ย้ายไปด้วยกันถูกพบเอง
+    let preview = lib.call("preview_relink", json!({ "eventId": ai.clone(), "newFolder": ai_new }));
+    let e = &preview["event"];
+    assert_eq!(
+        (e["photos"].as_i64(), e["matched"].as_i64(), e["changed"].as_i64(), e["missing"].as_i64()),
+        (Some(3), Some(1), Some(1), Some(1))
+    );
+    let siblings: Vec<&str> = arr(&preview["siblings"]).iter().map(|s| s["title"].as_str().unwrap()).collect();
+    assert_eq!(siblings, ["ต้อนรับคณะญาติโยม", "รูปใน 2569"]);
+    assert_eq!(lib.call("get_event", json!({ "eventId": ai.clone() }))["sourceAvailable"], false, "ดูก่อนไม่เปลี่ยนอะไร");
+
+    // โฟลเดอร์ของกิจกรรมอื่น หรือโฟลเดอร์ที่ไม่มีรูปของกิจกรรมนี้: ไม่เปลี่ยนตำแหน่ง
+    let empty = lib.tmp.path().join("ว่าง");
+    std::fs::create_dir_all(&empty).unwrap();
+    assert!(lib.try_call("commit_relink", json!({ "eventId": ai.clone(), "newFolder": empty })).is_err());
+    assert_eq!(lib.call("get_event", json!({ "eventId": ai.clone() }))["sourceAvailable"], false);
+
+    let result =
+        lib.call("commit_relink", json!({ "eventId": ai.clone(), "newFolder": ai_new, "includeSiblings": true }));
+    assert_eq!(
+        (result["events"].as_i64(), result["photosRelinked"].as_i64(), result["photosUnresolved"].as_i64()),
+        (Some(3), Some(4), Some(2))
+    );
+
+    // ID เดิม ชื่อเดิม: ไม่มีรูปหรือกิจกรรมใหม่ และรูปที่จับคู่ได้เปิดต้นฉบับได้
+    assert_eq!(lib.count("SELECT COUNT(*) FROM photos"), before);
+    assert_eq!(arr(&lib.call("list_events", json!({}))).len(), 3);
+    for id in [&ai, &welcome] {
+        assert_eq!(lib.call("get_event", json!({ "eventId": id }))["sourceAvailable"], true);
+    }
+    assert_eq!(lib.photo_id("IMG_0001.jpg"), photo);
+    assert_eq!(lib.filenames(json!({ "personIds": [kan] })), ["IMG_0001.jpg"]);
+    assert_eq!(lib.call("get_photo_details", json!({ "photoId": photo }))["originalAvailable"], true);
+    assert!(puri_core::api::asset(&lib.app, &format!("photo/{photo}")).is_ok());
+    // ไฟล์ที่ถูกแก้ (ขนาดไม่ตรง) และไฟล์ที่หายไป ไม่ถูกผูกกับไฟล์อื่นเอง
+    for name in ["IMG_0002.jpg", "DSC_0001.jpg"] {
+        let id = lib.photo_id(name);
+        assert_eq!(lib.call("get_photo_details", json!({ "photoId": id }))["originalAvailable"], false, "{name}");
+    }
+    // ตรวจรูปใหม่ที่ตำแหน่งใหม่ทำงานต่อได้ และโฟลเดอร์แม่ของแหล่งรูปย้ายตาม
+    write_jpeg(&ai_new.join("กล้อง A/IMG_NEW.jpg"), 77);
+    lib.call("rescan_event", json!({ "eventId": ai.clone() }));
+    lib.run_jobs();
+    assert!(lib.filenames(json!({ "eventIds": [ai] })).contains(&"IMG_NEW.jpg".to_string()));
+    let roots = lib.count("SELECT COUNT(*) FROM sources WHERE root_path LIKE '%ไดรฟ์ใหม่%'");
+    assert_eq!(roots, 1);
+}
+
+#[test]
 fn t15_t16_duplicate_names_and_groups() {
     let lib = Lib::new();
     let save = |name: &str, groups: Vec<Value>| {

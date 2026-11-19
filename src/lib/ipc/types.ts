@@ -581,6 +581,34 @@ export interface ExportReport {
 
 // ───────────────────────── ย้ายข้อมูลเดิม (dry-run เท่านั้น) ─────────────────────────
 
+/** ผลจับคู่รูปของกิจกรรมหนึ่งกับไฟล์ที่ตำแหน่งใหม่ (จับคู่จากตำแหน่งในโฟลเดอร์ + ขนาดไฟล์) */
+export interface RelinkEvent {
+  eventId: Id;
+  title: string;
+  oldFolder: string;
+  newFolder: string;
+  photos: number;
+  matched: number;
+  /** ไม่พบไฟล์ที่ตำแหน่งเดิมในโฟลเดอร์ใหม่ */
+  missing: number;
+  /** พบไฟล์ชื่อเดิมแต่ขนาดต่างจากที่บันทึกไว้ */
+  changed: number;
+}
+
+export interface RelinkPreview {
+  event: RelinkEvent;
+  /** กิจกรรมอื่นจากโฟลเดอร์แม่เดียวกันที่หาไม่เจอ และพบที่ตำแหน่งใหม่แบบเดียวกัน */
+  siblings: RelinkEvent[];
+  siblingsNotFound: number;
+}
+
+export interface RelinkResult {
+  events: number;
+  photosRelinked: number;
+  photosUnresolved: number;
+  dataRevision: number;
+}
+
 export interface BackupCounts {
   events: number;
   photos: number;
@@ -710,6 +738,8 @@ export interface Commands {
   /** แสดงโฟลเดอร์ปลายทางของงานส่งออกในตัวจัดการไฟล์ */
   reveal_export_destination: [{ jobId: Id }, null];
 
+  preview_relink: [{ eventId: Id; newFolder: string }, RelinkPreview];
+  commit_relink: [{ eventId: Id; newFolder: string; includeSiblings: boolean }, RelinkResult];
   get_backup_status: [Record<string, never>, BackupStatus];
   create_backup: [{ destination: string }, BackupInfo];
   preview_restore: [{ path: string }, RestorePreview];

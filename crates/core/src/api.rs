@@ -6,7 +6,7 @@
 
 use crate::error::{AppError, Result};
 use crate::{
-    ai, assets, backup, catalog, db, export, faces, import, jobs, legacy, media, people, platform, review, App,
+    ai, assets, backup, catalog, db, export, faces, import, jobs, legacy, media, people, platform, relink, review, App,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -182,6 +182,19 @@ enum Command {
         request_id: String,
     },
 
+    #[serde(rename_all = "camelCase")]
+    PreviewRelink {
+        event_id: String,
+        new_folder: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    CommitRelink {
+        event_id: String,
+        new_folder: String,
+        #[serde(default)]
+        include_siblings: bool,
+    },
+
     GetBackupStatus {},
     CreateBackup {
         destination: String,
@@ -271,6 +284,8 @@ pub const COMMAND_NAMES: &[&str] = &[
     "reveal_export_destination",
     "preview_legacy_import",
     "import_legacy_people",
+    "preview_relink",
+    "commit_relink",
     "get_backup_status",
     "create_backup",
     "preview_restore",
@@ -416,6 +431,11 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
 
         PreviewLegacyImport { path } => ok(legacy::dry_run(path.as_deref())?),
         ImportLegacyPeople { path, request_id } => ok(legacy::import_people(app, path.as_deref(), &request_id)?),
+
+        PreviewRelink { event_id, new_folder } => ok(relink::preview(app, &event_id, &new_folder)?),
+        CommitRelink { event_id, new_folder, include_siblings } => {
+            ok(relink::commit(app, &event_id, &new_folder, include_siblings)?)
+        }
 
         GetBackupStatus {} => ok(backup::status(app)?),
         CreateBackup { destination } => ok(backup::create(app, &destination)?),
