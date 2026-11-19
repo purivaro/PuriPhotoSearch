@@ -10,6 +10,9 @@
 # ไม่ตั้ง PURI_NOTARY_PROFILE = เซ็นแต่ไม่ notarize; ไม่ตั้ง APPLE_SIGNING_IDENTITY = ad-hoc เท่านั้น (เครื่องอื่นจะเปิดไม่ได้ตามปกติ)
 # สคริปต์นี้ไม่อ่านและไม่เขียนความลับ: codesign และ notarytool หยิบจาก keychain เอง
 #
+# ไฟล์อัปเดตในแอป: ถ้ามีกุญแจของตัวอัปเดตที่ ~/.config/puriphotosearch/updater.key (หรือที่ PURI_UPDATER_KEY ชี้) จะได้
+# PuriPhotoSearch-mac.app.tar.gz + .sig ด้วย (Tauri อ่านกุญแจจากไฟล์นั้นเอง) — manifest ที่แอปใช้ถามหารุ่นใหม่เผยแพร่โดย workflow Release เท่านั้น
+#
 # ผลลัพธ์: target/release-download/PuriPhotoSearch-mac.dmg และ SHA256SUMS.txt
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -17,8 +20,16 @@ export PATH="/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH"
 export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
 
 bundle=target/universal-apple-darwin/release/bundle
-rm -f "$bundle"/dmg/*.dmg
-pnpm tauri build --target universal-apple-darwin
+rm -f "$bundle"/dmg/*.dmg "$bundle"/macos/*.tar.gz*
+updater='{}'
+updater_key="${PURI_UPDATER_KEY:-$HOME/.config/puriphotosearch/updater.key}"
+if [ -f "$updater_key" ]; then
+  export TAURI_SIGNING_PRIVATE_KEY="$updater_key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+  updater='{"bundle":{"createUpdaterArtifacts":true}}'
+else
+  echo "! ไม่พบกุญแจของตัวอัปเดต ($updater_key): ได้ตัวติดตั้งอย่างเดียว ไม่มีไฟล์อัปเดตในแอป"
+fi
+pnpm tauri build --target universal-apple-darwin --config "$updater"
 app="$bundle/macos/Puri Photo Search.app"
 dmg=$(ls "$bundle"/dmg/*.dmg)
 codesign --verify --deep --strict --verbose=2 "$app"
@@ -41,6 +52,11 @@ fi
 
 out=target/release-download
 mkdir -p "$out"
+rm -f "$out"/PuriPhotoSearch-mac.*
 cp "$dmg" "$out/PuriPhotoSearch-mac.dmg"
+if [ -f "$app.tar.gz.sig" ]; then
+  cp "$app.tar.gz" "$out/PuriPhotoSearch-mac.app.tar.gz"
+  cp "$app.tar.gz.sig" "$out/PuriPhotoSearch-mac.app.tar.gz.sig"
+fi
 (cd "$out" && shasum -a 256 PuriPhotoSearch-mac.dmg > SHA256SUMS.txt && cat SHA256SUMS.txt)
 ls -la "$out"

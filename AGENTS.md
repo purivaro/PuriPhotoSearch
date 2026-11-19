@@ -19,7 +19,7 @@
 | ที่ | หน้าที่ | ห้าม |
 |---|---|---|
 | `crates/core` | กติกาข้อมูลทั้งหมด, SQLite, งานเบื้องหลัง, คำสั่ง (`api::dispatch`) | `use tauri` |
-| `src-tauri` | เปิดคลัง, ลงทะเบียนคำสั่ง, protocol `puri://`, native picker, hook e2e | มีตรรกะข้อมูล |
+| `src-tauri` | เปิดคลัง, ลงทะเบียนคำสั่ง, protocol `puri://`, native picker, ตัวอัปเดตแอป, hook e2e | มีตรรกะข้อมูล |
 | `crates/devbridge` | เครื่องมือพัฒนา: dispatch เดียวกันผ่าน HTTP ในเครื่อง | ถูกอ้างจาก `src-tauri` |
 | `src/` | React UI; เรียก Rust ผ่าน `src/lib/ipc/client.ts` เท่านั้น | เปิด SQLite, อ่านไฟล์, สร้างข้อมูลตัวอย่าง |
 | `e2e/` | ทดสอบแอปจริง (ฉีดสคริปต์เข้า debug build) | |
@@ -33,6 +33,7 @@
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"   # เครื่องนี้ติดตั้ง rustup ผ่าน Homebrew
 pnpm check          # typecheck + vitest + cargo fmt --check + clippy -D warnings + cargo test
 e2e/run.sh          # เส้นทางหลักในแอปจริง (ต้องมี desktop session)
+e2e/update.sh       # เมื่อแตะตัวอัปเดต (src-tauri/src/updater.rs, src/features/update) หรือ workflow ออกรุ่น
 ```
 
 - ทุกพฤติกรรมที่แตะข้อมูลต้องมีเทสต์ใน `crates/core/tests/` ที่ใช้ไฟล์จริงและวัดผลจริง

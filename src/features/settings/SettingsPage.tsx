@@ -9,6 +9,7 @@ import { ConfirmDialog } from '@/components/ui/Dialog';
 import { ErrorState, InlineNotice, LoadingBlock, StatusBadge } from '@/components/ui/Feedback';
 import { Tabs } from '@/components/ui/Form';
 import { FaceModelNotice } from '@/features/faces/FaceModelNotice';
+import { UpdateSection } from '@/features/update/UpdateSection';
 import { cn } from '@/lib/cn';
 import { errorMessage, formatCount, newRequestId } from '@/lib/format';
 import { call } from '@/lib/ipc/client';
@@ -110,6 +111,8 @@ function GeneralTab({ capabilities }: { capabilities: Capabilities }) {
           })}
         </div>
       </section>
+
+      <UpdateSection appVersion={capabilities.appVersion} />
 
       <section className={CARD}>
         <h2 className="text-lg font-bold text-ink">แป้นพิมพ์ลัด</h2>

@@ -1,4 +1,4 @@
-import type { AppError, AssetKind, CommandName, Commands, DataChangedEvent } from './types';
+import type { AppError, AssetKind, CommandName, Commands, DataChangedEvent, UpdateStatus } from './types';
 
 /**
  * ทางเรียก Rust ทางเดียวของ UI
@@ -87,6 +87,26 @@ export async function restartApp(): Promise<void> {
   if (!isTauri) throw new Error('restartApp ใช้ได้เฉพาะในแอป');
   const { invoke } = await import('@tauri-apps/api/core');
   await invoke('restart_app');
+}
+
+/** คำสั่งของตัวอัปเดต (เฉพาะในแอป Tauri): `check` คืนสถานะหลังถามเซิร์ฟเวอร์เสร็จ, `install` สำเร็จแล้วแอปเปิดใหม่ */
+export async function updateCommand(command: 'status' | 'check'): Promise<UpdateStatus>;
+export async function updateCommand(command: 'install'): Promise<void>;
+export async function updateCommand(command: 'status' | 'check' | 'install'): Promise<UpdateStatus | void> {
+  if (!isTauri) throw new Error('ตัวอัปเดตใช้ได้เฉพาะในแอป');
+  const { invoke } = await import('@tauri-apps/api/core');
+  try {
+    return await invoke<UpdateStatus | void>(`update_${command}`);
+  } catch (e) {
+    throw toIpcError(e);
+  }
+}
+
+/** ฟังสถานะตัวอัปเดตที่เปลี่ยน (ความคืบหน้าการดาวน์โหลด, พร้อมติดตั้ง) */
+export async function onUpdateStatus(handler: (status: UpdateStatus) => void): Promise<() => void> {
+  if (!isTauri) return () => {};
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<UpdateStatus>('update-status', (ev) => handler(ev.payload));
 }
 
 /** เปิด native folder picker (เฉพาะในแอป Tauri); คืน null เมื่อผู้ใช้ยกเลิก */

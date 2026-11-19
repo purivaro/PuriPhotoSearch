@@ -10,6 +10,10 @@
 #   APPLE_TEAM_ID                Team ID
 #   APPLE_ID                     อีเมล Apple ID (ถามตอนรัน)
 #   APPLE_PASSWORD               app-specific password ของ Apple ID (ถามตอนรัน ไม่แสดงบนจอ)
+#   TAURI_SIGNING_PRIVATE_KEY    กุญแจเซ็นไฟล์อัปเดตในแอป จาก ~/.config/puriphotosearch/updater.key (หรือที่ PURI_UPDATER_KEY ชี้)
+#                                คนละเรื่องกับใบรับรองของ Apple: แอปที่ติดตั้งแล้วรับเฉพาะรุ่นใหม่ที่เซ็นด้วยกุญแจนี้
+#                                **ไฟล์นี้มีที่เดียว ทำหายแล้วแอปที่แจกไปจะอัปเดตเองไม่ได้อีก** (กุญแจสาธารณะคู่กันอยู่ใน src-tauri/tauri.conf.json)
+#                                ตั้งเฉพาะตัวนี้:  gh secret set TAURI_SIGNING_PRIVATE_KEY --repo <owner/repo> < ~/.config/puriphotosearch/updater.key
 #
 # ไม่มีค่าใดถูกพิมพ์ออกจอหรือเขียนลงไฟล์ถาวร: ไฟล์ .p12 ชั่วคราวถูกลบเมื่อจบ
 # macOS จะถามสิทธิ์เข้าถึงกุญแจใน keychain หนึ่งครั้ง
@@ -42,6 +46,13 @@ base64 <"$tmp/cert.p12" | gh secret set APPLE_CERTIFICATE --repo "$REPO"
 printf '%s' "$P12_PASSWORD" | gh secret set APPLE_CERTIFICATE_PASSWORD --repo "$REPO"
 printf '%s' "$IDENTITY" | gh secret set APPLE_SIGNING_IDENTITY --repo "$REPO"
 printf '%s' "$TEAM" | gh secret set APPLE_TEAM_ID --repo "$REPO"
+
+UPDATER_KEY=${PURI_UPDATER_KEY:-$HOME/.config/puriphotosearch/updater.key}
+if [ -f "$UPDATER_KEY" ]; then
+  gh secret set TAURI_SIGNING_PRIVATE_KEY --repo "$REPO" <"$UPDATER_KEY"
+else
+  echo "! ไม่พบกุญแจของตัวอัปเดตที่ $UPDATER_KEY — ข้ามไป (workflow จะออกรุ่นจาก tag ไม่ได้จนกว่าจะตั้ง TAURI_SIGNING_PRIVATE_KEY)"
+fi
 
 read -r -p "Apple ID (อีเมล): " APPLE_ID
 printf '%s' "$APPLE_ID" | gh secret set APPLE_ID --repo "$REPO"
