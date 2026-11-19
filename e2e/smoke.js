@@ -172,6 +172,16 @@
     await click(tid('nav-people'), 'เมนูบุคคล');
     await waitFor(() => tids('person-card').length === 2, 'การ์ดบุคคลสองใบ');
     const kanCard = () => tids('person-card').find((c) => c.dataset.personId === kan.id);
+    // คนที่ปักหมุดขึ้นก่อนเสมอ: คุณเมย์ (ตามชื่ออยู่หลังคุณกานต์) ปักแล้วขึ้นมาเป็นใบแรก เอาออกแล้วกลับที่เดิม
+    const firstCard = () => tids('person-card')[0]?.dataset.personId;
+    expect(firstCard() === kan.id, 'เรียงตามชื่อ: คุณกานต์มาก่อน');
+    const mayCard = () => tids('person-card').find((c) => c.dataset.personId !== kan.id);
+    const mayId = mayCard().dataset.personId;
+    await click(tid('person-pin', mayCard()), 'ปักหมุดคุณเมย์');
+    await waitFor(() => firstCard() === mayId, 'คนที่ปักหมุดขึ้นเป็นใบแรก');
+    await stage('people-pinned-first');
+    await click(tid('person-pin', mayCard()), 'เอาหมุดคุณเมย์ออก');
+    await waitFor(() => firstCard() === kan.id, 'เอาหมุดออกแล้วกลับไปเรียงตามชื่อ');
     await click(tid('person-pin', kanCard()), 'ปักหมุดคุณกานต์');
     await waitFor(() => tid('person-pin', kanCard()).getAttribute('aria-pressed') === 'true', 'สถานะปักหมุด');
     expect(location.hash.startsWith('#/people') && !location.hash.includes(kan.id), 'ปักหมุดไม่เปิดการ์ด');

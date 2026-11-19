@@ -13,7 +13,7 @@
 | Rust: สำรองและกู้คืน | `cargo test -p puri-core --test backup` | 3 ผ่าน |
 | Rust: คำสั่ง Tauri ครบทุกตัว | `cargo test -p puri-photo-search` | 1 ผ่าน |
 | Rust: lint | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` | ผ่าน ไม่มี warning |
-| Frontend | `pnpm typecheck`, `pnpm test`, `pnpm build` | typecheck ผ่าน (รวม `noUncheckedIndexedAccess`), vitest 42 ผ่านใน 6 ไฟล์, build ผ่าน (JS 762 kB / gzip 216 kB) |
+| Frontend | `pnpm typecheck`, `pnpm test`, `pnpm build` | typecheck ผ่าน (รวม `noUncheckedIndexedAccess`), vitest 45 ผ่านใน 7 ไฟล์, build ผ่าน (JS 762 kB / gzip 216 kB) |
 | แอปจริง | `e2e/run.sh` | ผ่าน 14 ขั้น ทั้ง `pnpm tauri dev` และ `.app` debug ที่ bundle แล้ว; รันซ้ำหลัง UI ชุดใบหน้า ผ่าน 14 ขั้นทั้งสองแบบ (แบบ `.app` รันกับ bundle debug ที่เซ็นด้วย Developer ID + hardened runtime) |
 | แอปจริง: อัปเดตตัวเอง | `e2e/update.sh` (19 พ.ย. 2569) | macOS: ผ่าน 5 ขั้น (กุญแจชั่วคราว และกุญแจจริง) · Windows บน runner: ผ่าน — ดูหมวด "อัปเดตแอปเอง" |
 | แอปจริง: เตรียมแอปให้พร้อมใช้ | `e2e/setup.sh` (20 พ.ย. 2569) | macOS: ผ่าน 6 ขั้น — ดูหมวด "เตรียมแอปให้พร้อมใช้" |
@@ -167,11 +167,11 @@ dev bridge แบบ release (รุ่น 2.0.0-alpha.2) กับคลัง�
 ติ๊กรูปที่ AI จัดให้แล้วกด "ไม่ใช่ …" → 4 เหลือ 3 รูป และมีแท็บ "ที่แจ้งว่าไม่ใช่ (1)" → เปิดแท็บ เห็นรูปนั้น ติ๊กแล้วกด "คืนให้ …" → กลับเป็น 4 รูป แท็บหายไป
 → แจ้ง "ไม่ใช่" อีกครั้งแล้วกด "เลิกทำ" ในข้อความแจ้ง → กลับเป็น 4 รูป
 
-## Frontend unit tests (vitest, 42 ข้อ)
+## Frontend unit tests (vitest, 45 ข้อ)
 
 `src/lib/format.test.ts` (วันที่ พ.ศ., ขนาดไฟล์, จำนวน) · `src/features/import/importModel.test.ts` (เลือกแถว/สร้างคำขอ commit) ·
 `src/features/photos/geometry.test.ts` (สี่เหลี่ยมภาพที่แสดงจริง ↔ พิกัดสัดส่วนของกรอบใบหน้า) ·
-`src/features/photos/selection.test.ts` (เลือกช่วง/เลือกที่โหลด/snapshot) · `src/features/search/searchParams.test.ts` (ตัวกรอง ↔ URL) ·
+`src/features/photos/selection.test.ts` (เลือกช่วง/เลือกที่โหลด/snapshot) · `src/features/search/searchParams.test.ts` (ตัวกรอง ↔ URL) · `src/features/people/sortPeople.test.ts` (คนที่ปักหมุดขึ้นก่อน) ·
 `src/features/review/reviewModel.test.ts` (คิวตรวจสอบ: แท็บตั้งต้น, คงกลุ่มที่เลือกหลังคิวโหลดใหม่, เลือก/ยกเลิกเลือกใบหน้า)
 
 ## แอปจริง (`e2e/run.sh` + `e2e/smoke.js`)
@@ -193,6 +193,7 @@ debug build ฉีดสคริปต์เข้า WKWebView ของหน
 | `event-detail` | grid หกรูป ภาพย่อโหลดจริง |
 | `viewer-two-faces` | เปิดต้นฉบับ 1200px ผ่าน `puri://photo`; ลากกรอบสองใบหน้า สร้างบุคคลสองคน |
 | `viewer-labelled` | รูปถัดไป → เลือก "คนเดิม" (ไม่เกิดคนชื่อซ้ำ); จำนวนรูปยืนยัน 2 และ 1; คำสั่งเปิดต้นฉบับ/เปิดใน Finder ไม่ผิดพลาด; ปิดแล้วกลับหน้ากิจกรรมเดิม |
+| `people-pinned-first` | (20 พ.ย. 2569) ปักหมุดคุณเมย์ซึ่งตามชื่ออยู่ใบที่สอง แล้วขึ้นเป็นใบแรก; เอาหมุดออกแล้วกลับไปเรียงตามชื่อ |
 | `people-quickview` | ปักหมุดไม่เปิดการ์ด; ดูเร็วไม่เปลี่ยนหน้า; "ปรากฏร่วมในภาพ" แสดงอีกคน; ภาพในแผงโหลดจริง |
 | `search-all` / `search-any` | กดคนร่วม → ค้นแบบทุกคน ได้หนึ่งรูป; สลับเป็นคนใดคนหนึ่ง ได้สองรูป |
 | `export-plan` / `export-report` | เลือกสองรูป → เลือกปลายทาง → แผน → รายงาน |

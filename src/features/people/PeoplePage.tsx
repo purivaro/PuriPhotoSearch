@@ -7,21 +7,13 @@ import { EmptyState, ErrorState, LoadingBlock } from '@/components/ui/Feedback';
 import { Select, TextInput } from '@/components/ui/Form';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
-import type { PersonSummary } from '@/lib/ipc/types';
 import { useGroups, usePeople, useSetupState } from '@/lib/queries';
 import { useUi } from '@/stores/ui';
 import { PERSON_GRID, PersonCard } from './PersonCard';
 import { PersonEditorDialog } from './PersonEditorDialog';
 import { PersonQuickViewHost, useQuickView } from './PersonQuickView';
+import { sortPeople, type PeopleSort } from './sortPeople';
 import { useTogglePin } from './usePersonActions';
-
-type PeopleSort = 'name' | 'photos';
-
-function sortPeople(people: PersonSummary[], sort: PeopleSort): PersonSummary[] {
-  const byName = (a: PersonSummary, b: PersonSummary) => a.displayName.localeCompare(b.displayName, 'th') || a.id.localeCompare(b.id);
-  const list = [...people];
-  return sort === 'photos' ? list.sort((a, b) => b.confirmedPhotoCount + b.aiPhotoCount - (a.confirmedPhotoCount + a.aiPhotoCount) || byName(a, b)) : list.sort(byName);
-}
 
 /** S08 — รายชื่อบุคคล: เฉพาะคนที่ตั้งชื่อแล้ว ไม่ปะปนกับใบหน้าที่ยังไม่ยืนยัน */
 export function PeoplePage() {
