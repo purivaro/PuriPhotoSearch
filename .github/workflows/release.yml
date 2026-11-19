@@ -5,6 +5,13 @@
 # Run by hand (workflow_dispatch), or open a PR that changes this file, to build
 # without publishing; the file is then only kept as a workflow artifact.
 #
+# In-app updates: with the TAURI_SIGNING_PRIVATE_KEY secret, each build also produces the
+# file the app downloads to update itself, signed with that key (the app only installs what
+# verifies against the public key in src-tauri/tauri.conf.json). The publish job then writes
+# latest.json, which names the release and carries the signatures, to the `updates` branch:
+# that file is what installed apps poll. A tag is refused without the key, or when it does
+# not match the app version.
+#
 # Windows: an NSIS installer for x64, not code-signed (no Windows certificate), so SmartScreen warns on first run.
 # It is exercised only on GitHub's Windows runner (ci.yml) — see docs/TEST_REPORT.md. No Linux build.
 name: Release
@@ -76,11 +83,29 @@ jobs:
             echo "::warning::No notarization secrets; the app is signed but not notarized."
           fi
       - name: Build universal app
-        run: pnpm tauri build --target universal-apple-darwin
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: |
+          # Updater artifacts need the private key; without it the build is a plain installer.
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            updater='{"bundle":{"createUpdaterArtifacts":true}}'
+          else
+            echo "::warning::No updater signing key; this build cannot be offered as an in-app update."
+            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+            updater='{}'
+          fi
+          pnpm tauri build --target universal-apple-darwin --config "$updater"
       - name: Collect
         run: |
           mkdir -p out
           cp target/universal-apple-darwin/release/bundle/dmg/*.dmg out/PuriPhotoSearch-mac.dmg
+          # The in-app update: the same .app, archived and signed with the updater key.
+          update="target/universal-apple-darwin/release/bundle/macos/Puri Photo Search.app.tar.gz"
+          if [ -f "$update.sig" ]; then
+            cp "$update" out/PuriPhotoSearch-mac.app.tar.gz
+            cp "$update.sig" out/PuriPhotoSearch-mac.app.tar.gz.sig
+          fi
           codesign --verify --deep --strict --verbose=2 "target/universal-apple-darwin/release/bundle/macos/Puri Photo Search.app"
           lipo -archs "target/universal-apple-darwin/release/bundle/macos/Puri Photo Search.app/Contents/MacOS/puri-photo-search"
       # Tauri notarizes and staples the .app; the DMG around it gets its own
@@ -91,6 +116,18 @@ jobs:
           dmg=out/PuriPhotoSearch-mac.dmg
           app="target/universal-apple-darwin/release/bundle/macos/Puri Photo Search.app"
           codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
+          # The update archive must hold the signed (and notarized) app, not an earlier state of it.
+          if [ -f out/PuriPhotoSearch-mac.app.tar.gz ]; then
+            mkdir "$RUNNER_TEMP/update"
+            tar -xzf out/PuriPhotoSearch-mac.app.tar.gz -C "$RUNNER_TEMP/update"
+            updated="$RUNNER_TEMP/update/Puri Photo Search.app"
+            codesign --verify --deep --strict --verbose=2 "$updated"
+            diff -r "$app" "$updated"
+            if [ -n "$APPLE_ID" ]; then
+              xcrun stapler validate "$updated"
+              spctl -a -vv "$updated"
+            fi
+          fi
           if [ -z "$APPLE_ID" ]; then exit 0; fi
           xcrun stapler validate "$app"
           xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
@@ -125,11 +162,27 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: pnpm install --frozen-lockfile
       - name: Build installer
-        run: pnpm tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: |
+          # Updater artifacts need the private key; without it the build is a plain installer.
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            updater='{"bundle":{"createUpdaterArtifacts":true}}'
+          else
+            echo "::warning::No updater signing key; this build cannot be offered as an in-app update."
+            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+            updater='{}'
+          fi
+          pnpm tauri build --config "$updater"
       - name: Collect
         run: |
           mkdir -p out
           cp target/release/bundle/nsis/*-setup.exe out/PuriPhotoSearch-windows-setup.exe
+          # The in-app update is the installer itself; its signature is what the app checks.
+          if ls target/release/bundle/nsis/*-setup.exe.sig >/dev/null 2>&1; then
+            cp target/release/bundle/nsis/*-setup.exe.sig out/PuriPhotoSearch-windows-setup.exe.sig
+          fi
           ls -la out
       - uses: actions/upload-artifact@v4
         with:
@@ -137,8 +190,91 @@ jobs:
           path: out/*
           if-no-files-found: error
 
-  publish:
+  # The in-app update on Windows, where we have no machine of our own: this runner is the
+  # only place the path "app runs the new NSIS installer, which restarts the app" is exercised.
+  # It tests debug builds of this commit signed with a throwaway key, not the release files,
+  # and does not gate publishing.
+  update-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: debug
+      - run: pnpm install --frozen-lockfile
+      # The runner's 1024x768 display squeezes the 1440x900 window (same as ci.yml).
+      - name: Set the display size
+        shell: pwsh
+        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
+      - name: The installed app updates itself
+        run: |
+          # The runner's own temp folder: the user's %TEMP% is an 8.3 short name.
+          export TMPDIR="$(cygpath -u "$RUNNER_TEMP")"
+          KEEP=1 e2e/update.sh
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: update-windows-report
+          path: target/e2e-update-report.json
+          if-no-files-found: ignore
+
+  # latest.json for the in-app updater. Built on every run so a rehearsal shows it;
+  # only a tag publishes it (below).
+  manifest:
     needs: [macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: Write latest.json
+        run: |
+          version=$(jq -r .version src-tauri/tauri.conf.json)
+          tag=false; [[ "$GITHUB_REF" == refs/tags/v* ]] && tag=true
+          if $tag && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            # An app that reports another version than the manifest would offer the update forever.
+            echo "::error::Tag $GITHUB_REF_NAME does not match the app version $version in src-tauri/tauri.conf.json."
+            exit 1
+          fi
+          missing=""
+          for file in PuriPhotoSearch-mac.app.tar.gz PuriPhotoSearch-windows-setup.exe; do
+            [ -f "release/$file.sig" ] || missing="$missing $file"
+          done
+          if [ -n "$missing" ]; then
+            if $tag; then
+              echo "::error::No update signature for:$missing. Set the TAURI_SIGNING_PRIVATE_KEY secret (scripts/setup-release-secrets.sh)."
+              exit 1
+            fi
+            echo "::warning::No update signature for:$missing — not part of the manifest."
+          fi
+          notes="docs/release-notes/$version.md"
+          [ -f "$notes" ] || echo "::warning::$notes not found: the app will show no \"what's new\" text for this version."
+          mkdir manifest
+          if ls release/*.sig >/dev/null 2>&1; then
+            scripts/update-manifest.sh "$version" "https://github.com/$GITHUB_REPOSITORY/releases/download/v$version" release "$notes" > manifest/latest.json
+            cat manifest/latest.json
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manifest
+          path: manifest/*
+          if-no-files-found: ignore
+
+  publish:
+    needs: [macos, windows, manifest]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -150,7 +286,9 @@ jobs:
           merge-multiple: true
       - name: Checksums
         working-directory: release
-        run: sha256sum PuriPhotoSearch-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+        run: |
+          rm -f PuriPhotoSearch-*.sig   # the signatures are inside latest.json
+          sha256sum PuriPhotoSearch-* > SHA256SUMS.txt && cat SHA256SUMS.txt
       - name: Create or update release
         working-directory: release
         env:
@@ -159,10 +297,31 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" PuriPhotoSearch-* SHA256SUMS.txt --clobber
+            gh release upload "$TAG" PuriPhotoSearch-* latest.json SHA256SUMS.txt --clobber
           else
             # A tag with a suffix (v0.2.0-rc1) becomes a pre-release, so it
             # never takes over the releases/latest download link.
             pre=""; [[ "$TAG" == *-* ]] && pre="--prerelease"
-            gh release create "$TAG" PuriPhotoSearch-* SHA256SUMS.txt --title "Puri Photo Search ${TAG#v}" --generate-notes $pre
+            gh release create "$TAG" PuriPhotoSearch-* latest.json SHA256SUMS.txt --title "Puri Photo Search ${TAG#v}" --generate-notes $pre
           fi
+      # Installed apps read latest.json from the `updates` branch (pre-releases never reach
+      # releases/latest, so that link cannot serve them). Pushed last: the files it points to
+      # are already downloadable. Re-running an older tag puts that version's manifest back.
+      - name: Offer the release to installed apps
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          git init -q updates && cd updates
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q --depth 1 origin updates 2>/dev/null; then
+            git checkout -q -b updates FETCH_HEAD
+          else
+            git checkout -q --orphan updates
+          fi
+          cp ../release/latest.json latest.json
+          git add latest.json
+          if git diff --cached --quiet; then echo "latest.json unchanged"; exit 0; fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Update manifest for $TAG"
+          git push -q origin updates

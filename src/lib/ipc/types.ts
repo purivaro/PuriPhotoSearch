@@ -749,3 +749,22 @@ export interface DataChangedEvent {
   dataRevision: number;
   scopes: ('events' | 'photos' | 'people' | 'jobs')[];
 }
+
+// ───────────────────────── อัปเดตแอป ─────────────────────────
+
+/** สถานะตัวอัปเดตของเปลือก Tauri (`src-tauri/src/updater.rs`) — ไม่ใช่คำสั่งโดเมน จึงไม่อยู่ใน `Commands` */
+export interface UpdateStatus {
+  /** unsupported = build นี้ไม่ตรวจหารุ่นใหม่ (รุ่นสำหรับพัฒนา) */
+  state: 'unsupported' | 'idle' | 'checking' | 'up_to_date' | 'downloading' | 'ready' | 'installing' | 'failed';
+  currentVersion: string;
+  /** รุ่นใหม่ที่พบ */
+  version: string | null;
+  /** ข้อความ "มีอะไรใหม่" บรรทัดละเรื่อง */
+  notes: string | null;
+  downloaded: number;
+  total: number | null;
+  /** เหตุที่ตรวจหรือดาวน์โหลดไม่สำเร็จ */
+  message: string | null;
+  /** เวลาที่ตรวจสำเร็จครั้งล่าสุด (มิลลิวินาทีจาก Unix epoch) */
+  checkedAt: number | null;
+}
