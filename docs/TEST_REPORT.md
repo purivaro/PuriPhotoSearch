@@ -381,14 +381,25 @@ debug build ฉีดสคริปต์เข้า WKWebView ของหน
 แอปใน `/Applications` ที่ต้องขอสิทธิ์ผู้ดูแลเครื่อง, แอปที่เปิดจาก `.dmg` โดยตรง (มีข้อความเฉพาะ แต่ไม่ได้ลอง), เครือข่ายหลุดกลางการดาวน์โหลด,
 การตรวจซ้ำทุก 6 ชั่วโมง, สวิตช์ปิดการตรวจอัตโนมัติ (เปิดดูแล้ว ไม่อยู่ในเทสต์), Intel Mac, เครื่อง Windows จริง
 
-### workflow `Release` รอบซ้อมของ PR #17 (ยังไม่มี secret ของกุญแจ)
+### workflow `Release` รอบซ้อมของ PR #17 ก่อนมี secret ของกุญแจ
 
 ทุก job ผ่าน: `macos` (เซ็น + notarize + staple ตามเดิม, `spctl` รับ DMG เป็น `Notarized Developer ID`), `windows`, `update-windows`, `manifest`; `publish` ถูกข้ามเพราะไม่ใช่ tag
 รอบนี้**ไม่มี** `TAURI_SIGNING_PRIVATE_KEY` workflow จึงเดินทาง "ไม่มีกุญแจ": เตือนว่า build นี้ใช้เป็นอัปเดตในแอปไม่ได้ สร้างตัวติดตั้งตามปกติ และไม่เขียน manifest
 
-**ยังไม่ได้รัน:** ทางที่มีกุญแจของ workflow — การสร้าง `PuriPhotoSearch-mac.app.tar.gz` + ลายเซ็นบน runner, ขั้นที่แตกไฟล์นั้นแล้วตรวจว่าเป็นแอปที่ notarize แล้ว
-(`codesign` / `stapler validate` / `spctl` / `diff -r`), ลายเซ็นของตัวติดตั้ง Windows, เนื้อหา `latest.json` ที่ job `manifest` สร้าง, และ job `publish` ทั้งตัว
-(แนบไฟล์กับ release, เขียน branch `updates`) — รันได้เมื่อเจ้าของตั้ง secret แล้วสั่ง `gh workflow run release.yml --ref <branch>` (ยกเว้น `publish` ซึ่งรันเฉพาะ tag จริง)
+### workflow `Release` รอบซ้อมที่มีกุญแจ (`workflow_dispatch` บน branch หลังเจ้าของตั้ง secret `TAURI_SIGNING_PRIVATE_KEY` — 19 พ.ย. 2569)
+
+ทุก job ผ่าน (`publish` ถูกข้ามเพราะไม่ใช่ tag) ดาวน์โหลด artifact มาตรวจในเครื่อง:
+
+| ตรวจ | ผล |
+|---|---|
+| ไฟล์อัปเดต | `PuriPhotoSearch-mac.app.tar.gz` 20.2 MiB + `.sig`, `PuriPhotoSearch-windows-setup.exe` 9.9 MiB + `.sig` (ตัวติดตั้งตัวเดียวกับที่ให้ดาวน์โหลด) |
+| ไฟล์อัปเดตของ macOS คือแอปที่ notarize แล้ว | บน runner: แตก `.tar.gz` แล้ว `codesign --verify --deep --strict` ผ่าน, `diff -r` กับ `.app` ที่ build ไม่ต่าง, `stapler validate` ผ่าน, `spctl` รับเป็น `Notarized Developer ID` |
+| ลายเซ็นตรงกับกุญแจสาธารณะใน `tauri.conf.json` | ตรวจในเครื่องด้วย `openssl` (Ed25519 บน BLAKE2b ของไฟล์ ตามรูปแบบ minisign): ลายเซ็นของไฟล์ถูกทั้งสองระบบ, ลายเซ็นของ trusted comment ถูก, ไฟล์ที่เติมหนึ่ง byte ไม่ผ่าน — secret บน GitHub จึงเป็นกุญแจคู่เดียวกับที่ฝังในแอป |
+| เลขรุ่นที่ผูกกับลายเซ็น | trusted comment ของทั้งสองไฟล์มี `version:2.0.0-alpha.3` (สิ่งที่ `requireSignedVersion` ตรวจ) |
+| `latest.json` จาก job `manifest` | `version` ตรงกับ `tauri.conf.json`, มี `darwin-aarch64` + `darwin-x86_64` (ไฟล์เดียวกัน) + `windows-x86_64`, URL ชี้ `releases/download/v<รุ่น>/<ชื่อไฟล์คงที่>`, `notes` ว่างพร้อมคำเตือนว่าไม่มี `docs/release-notes/<รุ่น>.md` |
+
+**ยังไม่ได้รัน:** job `publish` (แนบไฟล์กับ release, เขียน `latest.json` ลง branch `updates`) และการปฏิเสธ tag ที่ไม่ตรงเลขรุ่น — ทั้งสองเกิดเฉพาะเมื่อ push tag จริง
+จึงพิสูจน์ได้ครั้งแรกตอนออกรุ่นถัดไป และยังไม่มีแอปตัวไหนอ่าน `latest.json` จาก `raw.githubusercontent.com` จริง
 สคริปต์ `scripts/update-manifest.sh` ตัวเดียวกันนี้ถูกใช้และผ่านใน `e2e/update.sh` แล้วทั้งสองระบบ
 
 ### Windows (job `update-windows` ของ workflow `Release`, runner `windows-latest` — รอบซ้อมของ PR #17)
