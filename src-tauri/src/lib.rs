@@ -91,6 +91,8 @@ domain_commands!(
     reveal_export_destination,
     preview_legacy_import,
     import_legacy_people,
+    preview_relink,
+    commit_relink,
     get_backup_status,
     create_backup,
     preview_restore,

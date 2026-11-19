@@ -18,6 +18,7 @@ pub mod legacy;
 pub mod media;
 pub mod people;
 pub mod platform;
+pub mod relink;
 pub mod review;
 pub mod util;
 
