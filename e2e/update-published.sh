@@ -27,6 +27,8 @@ WORK=$(cd "$(mktemp -d)" && pwd -P)
 REAL="$HOME/Library/Application Support/com.purivaro.puriphotosearch2/library/library.sqlite"
 state() { if [ -f "$REAL" ]; then stat -f '%m %z' "$REAL"; else echo none; fi; }
 BEFORE=$(state)
+# แอปที่ผู้ใช้ติดตั้งและเปิดใช้อยู่เขียนคลังจริงของมันเองได้ตลอดเวลา: เทียบสถานะไฟล์คลังจริงได้เฉพาะเมื่อไม่มีแอปตัวอื่นเปิดอยู่
+others() { pgrep -fl "puri-photo-search" | grep -v "$WORK/" | grep -q "MacOS/puri-photo-search"; }
 app="$WORK/Applications/Puri Photo Search.app"
 bin="$app/Contents/MacOS/puri-photo-search"
 version() { /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist"; }
@@ -83,6 +85,14 @@ has "$(spctl -a -vv "$app" 2>&1 || true)" "Notarized Developer ID" || fail "Gate
 shown=""
 for _ in $(seq 1 10); do if has "$(seen)" "PURI PHOTO SEARCH"; then shown=1; break; fi; sleep 1.5; done
 [ -n "$shown" ] || fail "แอปรุ่นใหม่ไม่ได้แสดงหน้าจอ"
-[ "$(state)" = "$BEFORE" ] || fail "คลังจริงเปลี่ยนระหว่างเทสต์"
-echo "  · แอปในตำแหน่งเดิมเป็นรุ่น $NEW (notarize, Gatekeeper รับ), เปิดขึ้นมาใหม่เองและแสดงหน้าจอ, ไม่เหลือไฟล์ชั่วคราว, คลังจริงไม่เปลี่ยน"
+# แอปทดสอบทั้งสองรุ่นต้องใช้คลังใต้ HOME ชั่วคราว และไม่เปิดไฟล์คลังจริงเลย
+[ -f "$WORK/home/Library/Application Support/com.purivaro.puriphotosearch2/library/library.sqlite" ] || fail "แอปทดสอบไม่ได้ใช้คลังใต้ HOME ชั่วคราว"
+if lsof -p "$(pid)" 2>/dev/null | grep -F "$(dirname "$REAL")/" >/dev/null; then fail "แอปทดสอบเปิดไฟล์ในคลังจริง"; fi
+if others; then
+  real="แอปทดสอบไม่ได้เปิดคลังจริง (มีแอปที่ติดตั้งไว้เปิดใช้อยู่ จึงไม่ได้เทียบเวลาแก้ไขของไฟล์คลังจริง)"
+else
+  [ "$(state)" = "$BEFORE" ] || fail "คลังจริงเปลี่ยนระหว่างเทสต์"
+  real="คลังจริงไม่เปลี่ยน"
+fi
+echo "  · แอปในตำแหน่งเดิมเป็นรุ่น $NEW (notarize, Gatekeeper รับ), เปิดขึ้นมาใหม่เองและแสดงหน้าจอ, ไม่เหลือไฟล์ชั่วคราว, $real"
 echo "✓ แอปที่เผยแพร่อัปเดตตัวเอง: $FROM → v$NEW"
