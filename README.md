@@ -2,6 +2,15 @@
 
 # Puri Photo Search 2
 
+## ดาวน์โหลด — รุ่นทดลอง 2.0.0-alpha.3
+
+| ระบบ | ดาวน์โหลด | ควรรู้ก่อนติดตั้ง |
+|---|---|---|
+| **macOS** 13.4 ขึ้นไป (ชิป Apple และ Intel) | **[⬇ PuriPhotoSearch-mac.dmg](https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.3/PuriPhotoSearch-mac.dmg)** (19 MB) | เซ็นและผ่านการตรวจของ Apple แล้ว เปิดติดตั้งได้ตามปกติ |
+| **Windows** 10 / 11 (64-bit) | **[⬇ PuriPhotoSearch-windows-setup.exe](https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.3/PuriPhotoSearch-windows-setup.exe)** (9 MB) | ยังไม่ได้เซ็นและยังไม่เคยลองบนเครื่องจริง — เมื่อ SmartScreen เตือน กด "More info" แล้ว "Run anyway" |
+
+วิธีติดตั้งอยู่[ด้านล่าง](#ติดตั้ง-macos) · รุ่นอื่นและ `SHA256SUMS.txt` อยู่ที่หน้า [Releases](https://github.com/purivaro/PuriPhotoSearch/releases)
+
 แอป desktop สำหรับคลังภาพกิจกรรม: เพิ่มโฟลเดอร์งานที่มีอยู่แล้วในเครื่อง ตั้งชื่อคนจากใบหน้า ค้นรูปข้ามกิจกรรม และส่งออกสำเนา
 รูปต้นฉบับอยู่ที่เดิมเสมอ แอปเก็บข้อมูลสำหรับค้นหาไว้แยกต่างหากในเครื่อง ไม่มีบัญชี ไม่มีการส่งข้อมูลออก
 
@@ -13,7 +22,7 @@
 
 ## ติดตั้ง (macOS)
 
-1. ดาวน์โหลด `PuriPhotoSearch-mac.dmg` จากหน้า [Releases](https://github.com/purivaro/PuriPhotoSearch/releases)
+1. ดาวน์โหลด `PuriPhotoSearch-mac.dmg` จากลิงก์ด้านบน
 2. เปิดไฟล์ แล้วลาก **Puri Photo Search** ไปไว้ใน Applications
 3. เปิดแอปได้ตามปกติ — ตัวติดตั้งเซ็นด้วย Developer ID และผ่านการ notarize ของ Apple แล้ว จึงไม่ต้องปลดล็อกใน System Settings
 
@@ -25,7 +34,7 @@
 
 ## ติดตั้ง (Windows) — ยังไม่เคยลองบนเครื่องจริง
 
-ตั้งแต่รุ่น 2.0.0-alpha.3 หน้า [Releases](https://github.com/purivaro/PuriPhotoSearch/releases) มี `PuriPhotoSearch-windows-setup.exe` (Windows 10 รุ่น 1803 ขึ้นไป หรือ Windows 11, 64-bit)
+ตั้งแต่รุ่น 2.0.0-alpha.3 มี `PuriPhotoSearch-windows-setup.exe` (ลิงก์ด้านบน) สำหรับ Windows 10 รุ่น 1803 ขึ้นไป หรือ Windows 11, 64-bit
 
 1. ดาวน์โหลดแล้วเปิดไฟล์ ตัวติดตั้ง**ไม่ได้เซ็น** (ยังไม่มีใบรับรองของ Windows) SmartScreen จะเตือนว่าไม่รู้จักผู้เผยแพร่ — กด "More info" แล้ว "Run anyway"
 2. ติดตั้งเฉพาะผู้ใช้ปัจจุบัน ไม่ต้องใช้สิทธิ์ผู้ดูแลเครื่อง ถ้าเครื่องยังไม่มี WebView2 ตัวติดตั้งจะดาวน์โหลดให้
@@ -95,6 +104,8 @@ APPLE_SIGNING_IDENTITY="Developer ID Application: …" PURI_NOTARY_PROFILE=<โ�
 ให้ GitHub Actions ทำแทน: เจ้าของใบรับรองรัน `scripts/setup-release-secrets.sh` หนึ่งครั้ง (ส่งใบรับรองและรหัส notarize ขึ้นเป็น secret ของ repo)
 จากนั้น push tag `v*` แล้ว workflow `Release` จะ build + เซ็น + notarize และแนบตัวติดตั้งกับ release ให้ ถ้ายังไม่มี secret
 workflow จะได้แอปที่เซ็นแบบ ad-hoc เท่านั้น ซึ่งเครื่องอื่นเปิดตามปกติไม่ได้
+
+ลิงก์ดาวน์โหลดบนสุดของไฟล์นี้ชี้ไปที่ tag ของรุ่นล่าสุดโดยตรง (ทุกรุ่นยังเป็น pre-release ลิงก์ `releases/latest` ของ GitHub จึงใช้ไม่ได้) — **แก้เลขรุ่นในลิงก์ทุกครั้งที่ออกรุ่นใหม่**
 
 ## ข้อมูลอยู่ที่ไหน
 
