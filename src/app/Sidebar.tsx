@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router';
 import { Folder, HardDrive, House, PanelLeft, ScanFace, Search, Settings, Users, type LucideIcon } from 'lucide-react';
 import { Tooltip } from '@/components/ui/Overlay';
+import { UpdateNotice } from '@/features/update/UpdateNotice';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import { isTauri } from '@/lib/ipc/client';
@@ -118,6 +119,7 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
         })}
       </ul>
 
+      <UpdateNotice collapsed={collapsed} />
       <div className={cn('shrink-0 border-t border-line py-4', collapsed ? 'px-2.5' : 'mx-3 px-2')}>
         {collapsed ? (
           <Tooltip label="ข้อมูลอยู่ในเครื่อง ไม่มีการส่งรูปหรือชื่อบุคคลออกไปที่อื่น" side="right">

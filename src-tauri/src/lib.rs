@@ -1,7 +1,7 @@
 //! เปลือก Tauri ของ Puri Photo Search 2 — บางที่สุดเท่าที่ทำได้
 //!
 //! ตรรกะทั้งหมดอยู่ใน `puri-core`; ไฟล์นี้ทำแค่: เปิดคลัง, ลงทะเบียนคำสั่ง IPC หนึ่งตัวต่อคำสั่งโดเมน,
-//! เสิร์ฟรูปผ่าน protocol `puri://` ด้วย ID, เปิด native folder picker และส่ง event หลังข้อมูลเปลี่ยน
+//! เสิร์ฟรูปผ่าน protocol `puri://` ด้วย ID, เปิด native folder picker, ส่ง event หลังข้อมูลเปลี่ยน และอัปเดตตัวแอปเอง (`updater.rs`)
 
 use puri_core::{api, App, AppError, EventSink, Options};
 use serde_json::Value;
@@ -9,7 +9,9 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-type Shared = Arc<App>;
+mod updater;
+
+pub(crate) type Shared = Arc<App>;
 
 struct TauriSink(tauri::AppHandle);
 
@@ -38,7 +40,15 @@ macro_rules! domain_commands {
         const REGISTERED: &[&str] = &[$(stringify!($name)),*];
 
         fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
-            builder.invoke_handler(tauri::generate_handler![$($name,)* pick_folder, restart_app, e2e_report])
+            builder.invoke_handler(tauri::generate_handler![
+                $($name,)*
+                pick_folder,
+                restart_app,
+                e2e_report,
+                updater::update_status,
+                updater::update_check,
+                updater::update_install
+            ])
         }
     };
 }
@@ -161,12 +171,14 @@ fn asset_response(app: Option<Shared>, path: &str) -> tauri::http::Response<Vec<
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .register_asynchronous_uri_scheme_protocol("puri", |ctx, request, responder| {
             let app = ctx.app_handle().try_state::<Shared>().map(|s| s.inner().clone());
             let path = request.uri().path().to_string();
             tauri::async_runtime::spawn_blocking(move || responder.respond(asset_response(app, &path)));
         })
         .setup(|app| {
+            app.manage(updater::initial(app.handle()));
             let (data, cache) = (app.path().app_data_dir()?, app.path().app_cache_dir()?);
             // เทสต์ชี้ debug build ไปที่โฟลเดอร์ทิ้งได้ แทนคลังจริงของผู้ใช้
             #[cfg(debug_assertions)]

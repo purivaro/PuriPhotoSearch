@@ -15,6 +15,7 @@
 | Rust: lint | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` | ผ่าน ไม่มี warning |
 | Frontend | `pnpm typecheck`, `pnpm test`, `pnpm build` | typecheck ผ่าน (รวม `noUncheckedIndexedAccess`), vitest 42 ผ่านใน 6 ไฟล์, build ผ่าน (JS 762 kB / gzip 216 kB) |
 | แอปจริง | `e2e/run.sh` | ผ่าน 14 ขั้น ทั้ง `pnpm tauri dev` และ `.app` debug ที่ bundle แล้ว; รันซ้ำหลัง UI ชุดใบหน้า ผ่าน 14 ขั้นทั้งสองแบบ (แบบ `.app` รันกับ bundle debug ที่เซ็นด้วย Developer ID + hardened runtime) |
+| แอปจริง: อัปเดตตัวเอง | `e2e/update.sh` (19 พ.ย. 2569) | macOS: ผ่าน 5 ขั้น (กุญแจชั่วคราว และกุญแจจริง) · Windows บน runner: ผ่าน — ดูหมวด "อัปเดตแอปเอง" |
 | ข้อมูลจริง | Rust core กับ `~/Photos/2569` และฐานของรุ่น Python (อ่านอย่างเดียว) | ดูหมวด "ข้อมูลจริง" |
 
 ## Rust: integration (`crates/core/tests/workflow.rs`)
@@ -359,6 +360,79 @@ debug build ฉีดสคริปต์เข้า WKWebView ของหน
 → SHA-256 ของ `PuriPhotoSearch-mac.dmg` และ `PuriPhotoSearch-windows-setup.exe` ตรงกับ `SHA256SUMS.txt`; ฝั่ง macOS `stapler validate` ผ่าน,
 `spctl` รับทั้ง DMG และแอป (`Notarized Developer ID`), แอปเป็น `x86_64 arm64` รุ่น 2.0.0-alpha.3 ขั้นต่ำ macOS 13.4 และเปิดด้วย `HOME` ชั่วคราวได้
 (คลังจริงของเครื่องไม่ถูกสร้าง; เก็บภาพหน้าต่างไม่ได้อีกครั้ง) ฝั่ง Windows ตรวจได้เพียงว่าเป็น NSIS installer ขนาด 9.19 MB — **ยังไม่มีใครรันไฟล์นี้**
+
+## อัปเดตแอปเอง (19 พ.ย. 2569)
+
+`e2e/update.sh` + `e2e/update.js` บน macOS 26.7 / Apple M4: build debug `.app` สองรุ่น (รุ่นปัจจุบัน 2.0.0-alpha.3 และรุ่นทดสอบ 99.0.0),
+วางรุ่นปัจจุบันในโฟลเดอร์ชั่วคราวแทน Applications, เสิร์ฟ manifest ที่สร้างด้วย `scripts/update-manifest.sh` (ตัวเดียวกับ workflow) จาก `127.0.0.1`
+แล้วขับผ่านหน้าต่างจริงของแอป ไม่มีขั้นไหนเรียกตัวอัปเดตตรง ๆ ยกเว้นการอ่านสถานะ
+
+| ขั้น | สิ่งที่พิสูจน์ |
+|---|---|
+| `opened` | แอปรุ่น 2.0.0-alpha.3 เปิดจากตำแหน่งที่ติดตั้ง ตัวอัปเดตเปิดใช้ |
+| `rejected` | แอป**ตรวจเองหลังเปิด** พบรุ่น 99.0.0 ดาวน์โหลดไฟล์ที่ถูกเติมหนึ่ง byte ภายใต้ลายเซ็นของไฟล์จริง → ไม่ผ่านลายเซ็น: หน้าตั้งค่าบอกเหตุ ไม่มีปุ่มติดตั้ง และ `.app` บนดิสก์ยังเป็นรุ่นเดิม |
+| `ready` | วางไฟล์จริงกลับแล้วกด "ลองตรวจใหม่" → ดาวน์โหลดเบื้องหลังจนขึ้น "มีรุ่นใหม่พร้อมติดตั้ง" |
+| `confirm` | ปุ่มในเมนูซ้ายเปิดกล่องยืนยัน ซึ่งแสดงข้อความ "มีอะไรใหม่" จาก manifest |
+| `done` | กด "อัปเดตและเปิดใหม่" → แอปปิด สลับ `.app` ในที่เดิม **เปิดขึ้นมาเอง**เป็นรุ่น 99.0.0 ตรวจเองอีกรอบได้ "เป็นรุ่นล่าสุด" และไม่มีปุ่มอัปเดตค้าง |
+
+ตัวรันตรวจบนดิสก์หลังจบ: `Info.plist` เป็นรุ่นใหม่, `.app` ที่ติดตั้งตรงกับผล build ทุกไฟล์ (`diff -r`), process ทำงานจากตำแหน่งเดิม, คลังยังอยู่,
+ไม่เหลือโฟลเดอร์ชั่วคราวของตัวอัปเดตข้างแอป
+
+รันสองแบบ ผ่านทั้งคู่: (1) กุญแจชั่วคราวที่เทสต์สร้างเอง (2) `REAL_KEY=~/.config/puriphotosearch/updater.key` กับกุญแจสาธารณะใน `tauri.conf.json`
+ตามที่เป็น — แบบที่สองพิสูจน์ว่ากุญแจที่เก็บไว้เป็นคู่ของกุญแจสาธารณะที่จะฝังไปกับแอป และว่า `requireSignedVersion` รับลายเซ็นที่ `tauri build` สร้าง
+
+หน้าจอ (หมวดอัปเดตในตั้งค่าทุกสถานะ, ปุ่มในเมนูซ้ายแบบเต็มและแบบยุบ, กล่องยืนยัน, ธีมมืด) เปิดดูด้วยตาในเบราว์เซอร์ผ่าน dev server
+โดยตั้งสถานะจาก console — ในเบราว์เซอร์และ debug build ที่ไม่ได้ตั้งปลายทาง หมวดนี้แสดงว่า "เป็นรุ่นสำหรับพัฒนา ไม่ตรวจหารุ่นใหม่"
+
+`e2e/run.sh` (เส้นทางหลัก 14 ขั้น) รันซ้ำหลังเพิ่มตัวอัปเดต: ผ่าน — debug build ที่ไม่ได้ตั้ง `PURI_UPDATE_ENDPOINT` ไม่ออกเครือข่าย
+
+**ยังไม่ได้ทดสอบ:** release build ที่เซ็น + notarize เป็นฝ่ายถามและอัปเดตตัวเองจาก GitHub จริง (พิสูจน์ได้ครั้งแรกเมื่อออกรุ่นถัดจาก alpha.4 — ดู "รุ่น 2.0.0-alpha.4 ที่เผยแพร่"),
+แอปใน `/Applications` ที่ต้องขอสิทธิ์ผู้ดูแลเครื่อง, แอปที่เปิดจาก `.dmg` โดยตรง (มีข้อความเฉพาะ แต่ไม่ได้ลอง), เครือข่ายหลุดกลางการดาวน์โหลด,
+การตรวจซ้ำทุก 6 ชั่วโมง, สวิตช์ปิดการตรวจอัตโนมัติ (เปิดดูแล้ว ไม่อยู่ในเทสต์), Intel Mac, เครื่อง Windows จริง
+
+### workflow `Release` รอบซ้อมของ PR #17 ก่อนมี secret ของกุญแจ
+
+ทุก job ผ่าน: `macos` (เซ็น + notarize + staple ตามเดิม, `spctl` รับ DMG เป็น `Notarized Developer ID`), `windows`, `update-windows`, `manifest`; `publish` ถูกข้ามเพราะไม่ใช่ tag
+รอบนี้**ไม่มี** `TAURI_SIGNING_PRIVATE_KEY` workflow จึงเดินทาง "ไม่มีกุญแจ": เตือนว่า build นี้ใช้เป็นอัปเดตในแอปไม่ได้ สร้างตัวติดตั้งตามปกติ และไม่เขียน manifest
+
+### workflow `Release` รอบซ้อมที่มีกุญแจ (`workflow_dispatch` บน branch หลังเจ้าของตั้ง secret `TAURI_SIGNING_PRIVATE_KEY` — 19 พ.ย. 2569)
+
+ทุก job ผ่าน (`publish` ถูกข้ามเพราะไม่ใช่ tag) ดาวน์โหลด artifact มาตรวจในเครื่อง:
+
+| ตรวจ | ผล |
+|---|---|
+| ไฟล์อัปเดต | `PuriPhotoSearch-mac.app.tar.gz` 20.2 MiB + `.sig`, `PuriPhotoSearch-windows-setup.exe` 9.9 MiB + `.sig` (ตัวติดตั้งตัวเดียวกับที่ให้ดาวน์โหลด) |
+| ไฟล์อัปเดตของ macOS คือแอปที่ notarize แล้ว | บน runner: แตก `.tar.gz` แล้ว `codesign --verify --deep --strict` ผ่าน, `diff -r` กับ `.app` ที่ build ไม่ต่าง, `stapler validate` ผ่าน, `spctl` รับเป็น `Notarized Developer ID` |
+| ลายเซ็นตรงกับกุญแจสาธารณะใน `tauri.conf.json` | ตรวจในเครื่องด้วย `openssl` (Ed25519 บน BLAKE2b ของไฟล์ ตามรูปแบบ minisign): ลายเซ็นของไฟล์ถูกทั้งสองระบบ, ลายเซ็นของ trusted comment ถูก, ไฟล์ที่เติมหนึ่ง byte ไม่ผ่าน — secret บน GitHub จึงเป็นกุญแจคู่เดียวกับที่ฝังในแอป |
+| เลขรุ่นที่ผูกกับลายเซ็น | trusted comment ของทั้งสองไฟล์มี `version:2.0.0-alpha.3` (สิ่งที่ `requireSignedVersion` ตรวจ) |
+| `latest.json` จาก job `manifest` | `version` ตรงกับ `tauri.conf.json`, มี `darwin-aarch64` + `darwin-x86_64` (ไฟล์เดียวกัน) + `windows-x86_64`, URL ชี้ `releases/download/v<รุ่น>/<ชื่อไฟล์คงที่>`, `notes` ว่างพร้อมคำเตือนว่าไม่มี `docs/release-notes/<รุ่น>.md` |
+
+job `publish` รันเฉพาะ tag จริง จึงไม่อยู่ในรอบซ้อมนี้ — ดูหัวข้อถัดไป
+สคริปต์ `scripts/update-manifest.sh` ตัวเดียวกันนี้ถูกใช้และผ่านใน `e2e/update.sh` แล้วทั้งสองระบบ
+
+### รุ่น 2.0.0-alpha.4 ที่เผยแพร่ (19 พ.ย. 2569) — ครั้งแรกที่ job `publish` แบบใหม่รันจริง
+
+push tag `v2.0.0-alpha.4` → workflow `Release` ผ่านทุก job รวม `publish`:
+
+| ตรวจ | ผล |
+|---|---|
+| release | pre-release มี `PuriPhotoSearch-mac.dmg` (20.6 MiB), `PuriPhotoSearch-mac.app.tar.gz` (20.2 MiB), `PuriPhotoSearch-windows-setup.exe` (9.9 MiB), `latest.json`, `SHA256SUMS.txt`; ไม่มีไฟล์ `.sig` แยก (ลายเซ็นอยู่ใน `latest.json`) |
+| ไฟล์ที่ดาวน์โหลดกลับมา | `shasum -c SHA256SUMS.txt` ตรงทั้งสามไฟล์; DMG: `stapler validate` ผ่าน, `spctl` รับเป็น `Notarized Developer ID` |
+| branch `updates` | ถูกสร้างโดย workflow มี `latest.json` ไฟล์เดียว ตรงทุก byte กับ `latest.json` ที่แนบกับ release; อ่านได้ผ่าน `raw.githubusercontent.com` — รุ่น 2.0.0-alpha.4, ข้อความ "มีอะไรใหม่" จาก `docs/release-notes/2.0.0-alpha.4.md`, สามระบบ |
+| **อัปเดตจาก GitHub จริง** (`LIVE=1 e2e/update.sh`, macOS) | debug build ที่ตั้งเลขรุ่นเป็น 0.0.1 พร้อมกุญแจสาธารณะจริง อ่าน manifest จริง → ดาวน์โหลด `PuriPhotoSearch-mac.app.tar.gz` จาก release → ผ่านลายเซ็น → กล่องยืนยันแสดง "มีอะไรใหม่" ของรุ่นนั้น → กดอัปเดต → `.app` ในที่เดิมกลายเป็น 2.0.0-alpha.4 ตัวที่เผยแพร่ (`codesign --verify --deep --strict` ผ่าน, มีใบ notarize, `spctl` รับ, universal) และเปิดขึ้นมาใหม่เอง แอปรุ่นใหม่เปิดด้วย `HOME` ชั่วคราว คลังจริงไม่เปลี่ยน |
+
+**ที่ยังไม่ได้พิสูจน์แม้หลังรอบนี้:** ฝั่ง "ผู้ถาม" ของเทสต์ข้างบนเป็น debug build — **ยังไม่เคยมี release build (เซ็น + hardened runtime) ที่ถามหารุ่นใหม่ ดาวน์โหลด และสลับตัวเองจริง**
+ซึ่งจะเกิดครั้งแรกเมื่อออกรุ่นถัดจาก alpha.4 (แอป alpha.4 ที่เปิดขึ้นมาในเทสต์ถามหารุ่นใหม่เองเช่นกัน แต่ไม่มีทางอ่านผลจากภายนอก);
+การปฏิเสธ tag ที่ไม่ตรงเลขรุ่น (ไม่เคยเกิด); Windows กับไฟล์ที่เผยแพร่จริง (job `update-windows` ทดสอบ debug build ของ commit เดียวกัน ผ่าน)
+
+### Windows (job `update-windows` ของ workflow `Release`, runner `windows-latest` — รอบซ้อมของ PR #17)
+
+สคริปต์เดียวกัน แต่ "ติดตั้ง" ด้วยตัวติดตั้ง NSIS จริงแบบเงียบ (`/S`) ลง `%LOCALAPPDATA%\Puri Photo Search` แล้วเปิดแอปจากที่นั่น:
+ผ่านขั้น `opened` → `rejected` (ข้อความไม่ผ่านลายเซ็นขึ้นในหน้าตั้งค่า) → `ready` (ดาวน์โหลดตัวติดตั้งรุ่นใหม่ 11.4 MB) → `confirm` → กด "อัปเดตและเปิดใหม่"
+→ แอปปิด, ตัวติดตั้ง 99.0.0 รันแบบ passive, เลขรุ่นที่ตัวติดตั้งบันทึกใน registry (`DisplayVersion`) เปลี่ยนจาก 2.0.0-alpha.3 เป็น 99.0.0, และมี process ของแอปทำงานอยู่หลังจากนั้น
+
+**ที่ยืนยันไม่ได้บน Windows:** ตัวติดตั้งเปิดแอปใหม่ผ่าน shell ซึ่งไม่ส่งตัวแปรของเทสต์ต่อให้ แอปรอบสองจึงไม่ได้รายงานเลขรุ่นของตัวเองกลับมา —
+หลักฐานว่าเป็นรุ่นใหม่คือเลขรุ่นใน registry กับ process ที่ทำงานอยู่ ไม่ใช่คำตอบจากในแอป (บน macOS ยืนยันจากในแอป) และไม่มีใครเห็นหน้าต่างของตัวติดตั้งด้วยตา
 
 ## Windows (runner ของ GitHub เท่านั้น — 18 พ.ย. 2569)
 

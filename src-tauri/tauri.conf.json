@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Puri Photo Search",
-  "version": "2.0.0-alpha.3",
+  "version": "2.0.0-alpha.4",
   "identifier": "com.purivaro.puriphotosearch2",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -26,6 +26,13 @@
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: puri: http://puri.localhost; font-src 'self' data:; connect-src ipc: http://ipc.localhost",
       "devCsp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: http://localhost:1420; img-src 'self' data: blob: puri: http://puri.localhost http://localhost:1420; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU1NTIxOEU0MjFERUY5NUUKUldSZStkNGg1QmhTVlg5K3ZYT1A5NGVVVGlpVjh6dFI3WFFZVnVWYTJPYWVLZWJyN0FDbEpCZ1YK",
+      "endpoints": ["https://raw.githubusercontent.com/purivaro/PuriPhotoSearch/updates/latest.json"],
+      "requireSignedVersion": true
     }
   },
   "bundle": {

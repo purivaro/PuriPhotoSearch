@@ -2,12 +2,12 @@
 
 # Puri Photo Search 2
 
-## ดาวน์โหลด — รุ่นทดลอง 2.0.0-alpha.3
+## ดาวน์โหลด — รุ่นทดลอง 2.0.0-alpha.4
 
 | ระบบ | ดาวน์โหลด | ควรรู้ก่อนติดตั้ง |
 |---|---|---|
-| **macOS** 13.4 ขึ้นไป (ชิป Apple และ Intel) | **[⬇ PuriPhotoSearch-mac.dmg](https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.3/PuriPhotoSearch-mac.dmg)** (19 MB) | เซ็นและผ่านการตรวจของ Apple แล้ว เปิดติดตั้งได้ตามปกติ |
-| **Windows** 10 / 11 (64-bit) | **[⬇ PuriPhotoSearch-windows-setup.exe](https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.3/PuriPhotoSearch-windows-setup.exe)** (9 MB) | ยังไม่ได้เซ็นและยังไม่เคยลองบนเครื่องจริง — เมื่อ SmartScreen เตือน กด "More info" แล้ว "Run anyway" |
+| **macOS** 13.4 ขึ้นไป (ชิป Apple และ Intel) | **[⬇ PuriPhotoSearch-mac.dmg](https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.4/PuriPhotoSearch-mac.dmg)** (21 MB) | เซ็นและผ่านการตรวจของ Apple แล้ว เปิดติดตั้งได้ตามปกติ |
+| **Windows** 10 / 11 (64-bit) | **[⬇ PuriPhotoSearch-windows-setup.exe](https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.4/PuriPhotoSearch-windows-setup.exe)** (10 MB) | ยังไม่ได้เซ็นและยังไม่เคยลองบนเครื่องจริง — เมื่อ SmartScreen เตือน กด "More info" แล้ว "Run anyway" |
 
 วิธีติดตั้งอยู่[ด้านล่าง](#ติดตั้ง-macos) · รุ่นอื่นและ `SHA256SUMS.txt` อยู่ที่หน้า [Releases](https://github.com/purivaro/PuriPhotoSearch/releases)
 
@@ -16,7 +16,7 @@
 
 เขียนใหม่ด้วย Rust + Tauri 2 + React แทนรุ่น Python (PuriPhotoSearch 1.9.3)
 
-> **สถานะ: รุ่นทดลอง (2.0.0-alpha.3) ยังไม่พร้อมใช้กับงานจริง**
+> **สถานะ: รุ่นทดลอง (2.0.0-alpha.4) ยังไม่พร้อมใช้กับงานจริง**
 > วิเคราะห์ใบหน้าอัตโนมัติใช้ได้บน Mac ชิป Apple และ Windows 64-bit (กดดาวน์โหลดตัววิเคราะห์ครั้งเดียว ~290 MB) AI จัดรูปให้บุคคลเอง ผู้ใช้แจ้งเฉพาะรูปที่ไม่ใช่
 > สิ่งที่ทำแล้ว ทดสอบแล้ว และยังไม่ได้ทำ ดูที่ [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)
 
@@ -31,6 +31,17 @@
 ไม่ต้องติดตั้ง Python, Node หรือ Rust ตรวจไฟล์ที่ดาวน์โหลดได้ด้วย `shasum -a 256 PuriPhotoSearch-mac.dmg` เทียบกับ `SHA256SUMS.txt`
 
 รุ่นนี้เป็นคนละแอปกับ PuriPhotoSearch 1.x (Python): ติดตั้งคู่กันได้ และไม่แตะข้อมูลของรุ่นเดิม
+
+## อัปเดต
+
+ตั้งแต่รุ่น 2.0.0-alpha.4 แอป**อัปเดตตัวเองได้**: ตอนเปิดแอป (และทุก 6 ชั่วโมงถ้าเปิดค้างไว้) แอปถาม GitHub ว่ามีรุ่นใหม่ไหม
+ถ้ามีจะดาวน์โหลดไว้เบื้องหลัง ตรวจลายเซ็น แล้วขึ้นปุ่ม **"มีรุ่นใหม่พร้อมติดตั้ง"** ที่เมนูซ้าย กดแล้วแอปปิด ติดตั้ง และเปิดใหม่เอง
+คลัง ชื่อบุคคล และรูปต้นฉบับไม่ถูกแตะ งานเบื้องหลังที่ค้างทำต่อเองหลังเปิดใหม่ ปิดการตรวจอัตโนมัติหรือสั่งตรวจเองได้ที่ ตั้งค่า → ทั่วไป → อัปเดตแอป
+
+- **รุ่น 2.0.0-alpha.3 และเก่ากว่ายังไม่มีตัวอัปเดต** ต้องดาวน์โหลดตัวติดตั้งรุ่นใหม่มาติดตั้งทับเองหนึ่งครั้ง (คลังเดิมใช้ต่อได้)
+- บน macOS แอปต้องอยู่ในโฟลเดอร์ Applications (เปิดจากไฟล์ `.dmg` โดยตรงจะอัปเดตไม่ได้ แอปจะบอกเอง)
+- การถามหารุ่นใหม่ไม่ส่งรูป ชื่อบุคคล หรือข้อมูลในคลังออกไป — แอปอ่านไฟล์ `latest.json` หนึ่งไฟล์จาก GitHub เท่านั้น
+- **Windows: การอัปเดตในแอปผ่านการทดสอบบนเครื่องของ GitHub เท่านั้น ยังไม่เคยเกิดบนเครื่องจริง** — ถ้ากดแล้วไม่สำเร็จ ให้ดาวน์โหลดตัวติดตั้งจากหน้านี้มาติดตั้งทับ
 
 ## ติดตั้ง (Windows) — ยังไม่เคยลองบนเครื่องจริง
 
@@ -90,6 +101,8 @@ cargo run -p puri-core --example make_fixtures -- /tmp/puri-photos
 ```sh
 pnpm check                     # typecheck + vitest + cargo fmt --check + clippy -D warnings + cargo test
 e2e/run.sh                     # เส้นทางหลักในหน้าต่างแอปจริง (ต้องมี desktop session)
+e2e/update.sh                  # แอปจริงอัปเดตตัวเองจากรุ่นปัจจุบันเป็นรุ่นทดสอบ (build สองรอบ หลายนาที; Windows รันใน workflow Release เท่านั้น)
+LIVE=1 e2e/update.sh           # หลังออกรุ่น: แอปรุ่นเก่าอัปเดตตัวเองจาก GitHub จริงเป็นรุ่นที่เพิ่งเผยแพร่ (macOS, ออกเครือข่าย)
 ```
 
 ## สร้างตัวติดตั้ง
@@ -102,8 +115,26 @@ APPLE_SIGNING_IDENTITY="Developer ID Application: …" PURI_NOTARY_PROFILE=<โ�
 ใบรับรองและรหัสอยู่ใน keychain ของเครื่องที่ build สคริปต์ไม่อ่านหรือเขียนความลับ
 
 ให้ GitHub Actions ทำแทน: เจ้าของใบรับรองรัน `scripts/setup-release-secrets.sh` หนึ่งครั้ง (ส่งใบรับรองและรหัส notarize ขึ้นเป็น secret ของ repo)
-จากนั้น push tag `v*` แล้ว workflow `Release` จะ build + เซ็น + notarize และแนบตัวติดตั้งกับ release ให้ ถ้ายังไม่มี secret
-workflow จะได้แอปที่เซ็นแบบ ad-hoc เท่านั้น ซึ่งเครื่องอื่นเปิดตามปกติไม่ได้
+จากนั้น push tag `v*` แล้ว workflow `Release` จะ build + เซ็น + notarize และแนบตัวติดตั้งกับ release ให้ ถ้ายังไม่มี secret ของ Apple
+workflow จะได้แอปที่เซ็นแบบ ad-hoc เท่านั้น ซึ่งเครื่องอื่นเปิดตามปกติไม่ได้ (รอบซ้อมแบบ `workflow_dispatch` เท่านั้น — tag ที่ไม่มีกุญแจของตัวอัปเดตถูกปฏิเสธ)
+
+### ออกรุ่นใหม่ (ให้แอปที่ติดตั้งแล้วอัปเดตตาม)
+
+1. PR ปรับเลขรุ่นให้ตรงกันสามที่ (`Cargo.toml` ของ workspace, `src-tauri/tauri.conf.json`, `package.json`) และแก้ลิงก์ดาวน์โหลดบนสุดของไฟล์นี้
+   พร้อมเขียน `docs/release-notes/<เลขรุ่น>.md` — ข้อความ "มีอะไรใหม่" ที่แอปแสดงในกล่องยืนยันก่อนอัปเดต
+   (ข้อความธรรมดา ภาษาไทย บรรทัดละเรื่อง ไม่ใช่ Markdown; ไม่มีไฟล์ = แอปไม่แสดงส่วนนี้)
+2. merge แล้ว push tag `v<เลขรุ่น>` — tag ที่ไม่ตรงกับเลขรุ่นใน `tauri.conf.json` ถูกปฏิเสธ
+3. workflow `Release` สร้างตัวติดตั้ง + ไฟล์อัปเดตที่เซ็นด้วยกุญแจของตัวอัปเดต แนบกับ release แล้วเขียน `latest.json` ลง branch `updates`
+   แอปที่ติดตั้งแล้วอ่านไฟล์นั้น (`raw.githubusercontent.com/…/updates/latest.json`) และเห็นรุ่นใหม่ภายในไม่กี่นาที
+4. แก้ข้อความประกาศของ release (workflow ใส่รายการ PR ภาษาอังกฤษให้ก่อน) แล้วรัน `LIVE=1 e2e/update.sh` ยืนยันว่าอัปเดตจาก GitHub ได้จริง
+
+**กุญแจของตัวอัปเดต** (คนละเรื่องกับใบรับรองของ Apple) อยู่ที่ `~/.config/puriphotosearch/updater.key` บน Mac ของเจ้าของ workflow ใช้ผ่าน secret
+`TAURI_SIGNING_PRIVATE_KEY` ที่เจ้าของตั้งเองจากไฟล์นั้น (`gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.config/puriphotosearch/updater.key`
+หรือ `scripts/setup-release-secrets.sh`); กุญแจสาธารณะคู่กันฝังอยู่ใน `src-tauri/tauri.conf.json` แอปติดตั้งเฉพาะไฟล์ที่ตรวจกับกุญแจสาธารณะนั้นผ่าน
+**ไฟล์กุญแจมีที่เดียวและอ่านกลับจาก GitHub ไม่ได้ — ทำหายแล้วแอปที่แจกไปจะอัปเดตเองไม่ได้อีก ควรสำรองไว้นอกเครื่อง**
+
+ถอนรุ่นที่มีปัญหา: แก้ `latest.json` บน branch `updates` ให้กลับเป็นของรุ่นก่อน (ทุก release แนบ `latest.json` ของตัวเองไว้) แอปที่ยังไม่ได้อัปเดตจะไม่ถูกชวนอีก
+ส่วนเครื่องที่อัปเดตไปแล้วไม่ถอยกลับเอง ต้องออกรุ่นแก้ที่เลขสูงกว่า
 
 ลิงก์ดาวน์โหลดบนสุดของไฟล์นี้ชี้ไปที่ tag ของรุ่นล่าสุดโดยตรง (ทุกรุ่นยังเป็น pre-release ลิงก์ `releases/latest` ของ GitHub จึงใช้ไม่ได้) — **แก้เลขรุ่นในลิงก์ทุกครั้งที่ออกรุ่นใหม่**
 

@@ -16,6 +16,8 @@ import { PhotoViewer } from '@/features/photos/PhotoViewer';
 import { ReviewPage } from '@/features/review/ReviewPage';
 import { SearchPage } from '@/features/search/SearchPage';
 import { SettingsPage } from '@/features/settings/SettingsPage';
+import { UpdateDialog } from '@/features/update/UpdateDialog';
+import { useUpdateRuntime } from '@/features/update/updates';
 import { onFolderDropped } from '@/lib/ipc/client';
 import { useJobWatcher, useSummary } from '@/lib/queries';
 import { resolveTheme, useSettings } from '@/stores/settings';
@@ -55,9 +57,10 @@ function Boot() {
   return <Navigate to={summary.data.eventCount === 0 ? '/welcome' : '/home'} replace />;
 }
 
-/** ส่วนที่ต้องอยู่ใน router: เฝ้างาน, แป้นลัดทั้งแอป, รับโฟลเดอร์ที่ลากมาวาง */
+/** ส่วนที่ต้องอยู่ใน router: เฝ้างาน, แป้นลัดทั้งแอป, รับโฟลเดอร์ที่ลากมาวาง, ตรวจรุ่นใหม่ของแอป */
 function AppRuntime() {
   useJobWatcher();
+  useUpdateRuntime();
   const startImport = useStartImport();
   const setPaletteOpen = useUi((s) => s.setPaletteOpen);
 
@@ -155,6 +158,7 @@ export function App() {
               <AppRuntime />
               <AppRoutes />
               <CommandPalette />
+              <UpdateDialog />
             </ViewerProvider>
           </FolderChooserProvider>
         </HashRouter>
