@@ -102,6 +102,7 @@ cargo run -p puri-core --example make_fixtures -- /tmp/puri-photos
 pnpm check                     # typecheck + vitest + cargo fmt --check + clippy -D warnings + cargo test
 e2e/run.sh                     # เส้นทางหลักในหน้าต่างแอปจริง (ต้องมี desktop session)
 e2e/update.sh                  # แอปจริงอัปเดตตัวเองจากรุ่นปัจจุบันเป็นรุ่นทดสอบ (build สองรอบ หลายนาที; Windows รันใน workflow Release เท่านั้น)
+LIVE=1 e2e/update.sh           # หลังออกรุ่น: แอปรุ่นเก่าอัปเดตตัวเองจาก GitHub จริงเป็นรุ่นที่เพิ่งเผยแพร่ (macOS, ออกเครือข่าย)
 ```
 
 ## สร้างตัวติดตั้ง
@@ -125,6 +126,7 @@ workflow จะได้แอปที่เซ็นแบบ ad-hoc เท่
 2. merge แล้ว push tag `v<เลขรุ่น>` — tag ที่ไม่ตรงกับเลขรุ่นใน `tauri.conf.json` ถูกปฏิเสธ
 3. workflow `Release` สร้างตัวติดตั้ง + ไฟล์อัปเดตที่เซ็นด้วยกุญแจของตัวอัปเดต แนบกับ release แล้วเขียน `latest.json` ลง branch `updates`
    แอปที่ติดตั้งแล้วอ่านไฟล์นั้น (`raw.githubusercontent.com/…/updates/latest.json`) และเห็นรุ่นใหม่ภายในไม่กี่นาที
+4. แก้ข้อความประกาศของ release (workflow ใส่รายการ PR ภาษาอังกฤษให้ก่อน) แล้วรัน `LIVE=1 e2e/update.sh` ยืนยันว่าอัปเดตจาก GitHub ได้จริง
 
 **กุญแจของตัวอัปเดต** (คนละเรื่องกับใบรับรองของ Apple) อยู่ที่ `~/.config/puriphotosearch/updater.key` บน Mac ของเจ้าของ workflow ใช้ผ่าน secret
 `TAURI_SIGNING_PRIVATE_KEY` ที่เจ้าของตั้งเองจากไฟล์นั้น (`gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.config/puriphotosearch/updater.key`
