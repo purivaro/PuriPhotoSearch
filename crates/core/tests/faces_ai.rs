@@ -517,4 +517,12 @@ fn library_from_v1_upgrades_in_place() {
     assert_eq!(call("list_job_errors", json!({ "jobId": "j1" }))[0]["filename"], "bad.jpg");
     assert_eq!(call("list_people", json!({}))[0]["displayName"], "คุณกานต์");
     assert!(call("list_people", json!({}))[0]["coverAsset"].is_null());
+
+    // คลังเดิมถูกเก็บไว้ก่อนเปลี่ยน schema: ชุดสำรองยังเป็นรุ่น 1 และกู้กลับได้
+    let kept = call("get_backup_status", json!({}));
+    let before = &kept["automatic"][0];
+    assert_eq!((before["kind"].as_str(), before["schemaVersion"].as_i64()), (Some("before_upgrade"), Some(1)));
+    assert_eq!(before["counts"]["persons"], 1);
+    let preview = call("preview_restore", json!({ "path": before["path"] }));
+    assert_eq!(preview["needsUpgrade"], true);
 }

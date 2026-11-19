@@ -16,6 +16,7 @@ import type { Capabilities, FaceAnalysisStatus, LegacyImportResult, LegacyReport
 import { invalidatePeopleData, useCapabilities, useSummary } from '@/lib/queries';
 import { useSettings, type ThemeChoice } from '@/stores/settings';
 import { MOD_KEY } from '@/lib/platform';
+import { BackupSection } from './BackupSection';
 
 type SettingsTab = 'general' | 'library' | 'ai' | 'migration';
 
@@ -177,10 +178,7 @@ function LibraryTab({ capabilities }: { capabilities: Capabilities }) {
         )}
         <p className="mt-2 text-[13px] text-muted">ฐานข้อมูลเก็บชื่อบุคคล การยืนยัน และข้อมูลกิจกรรม ส่วนภาพย่อสร้างใหม่ได้เมื่อโฟลเดอร์ต้นทางพร้อม — ไฟล์รูปต้นฉบับอยู่ในโฟลเดอร์เดิมเสมอ</p>
       </section>
-      <InlineNotice tone="info" icon={<Info aria-hidden />}>
-        <p className="font-semibold">การสำรองและกู้คืนยังไม่มีในรุ่นนี้</p>
-        <p>ระหว่างนี้ หากต้องการเก็บสำเนา ให้ปิดแอปก่อนแล้วคัดลอกโฟลเดอร์ฐานข้อมูลตามตำแหน่งด้านบน สำเนานั้นไม่รวมไฟล์รูปต้นฉบับ</p>
-      </InlineNotice>
+      <BackupSection />
     </>
   );
 }

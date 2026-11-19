@@ -139,7 +139,7 @@ fn load_items(conn: &Connection, selection: &SelectionSpec) -> Result<Vec<Source
 }
 
 /// ปลายทางอยู่ในโฟลเดอร์ที่คลังติดตามอยู่หรือไม่ (กันวงจร คัดลอก → ถูกเพิ่มเข้าคลัง → คัดลอกอีก)
-fn inside_tracked_source(conn: &Connection, dest: &Path) -> Result<bool> {
+pub(crate) fn inside_tracked_source(conn: &Connection, dest: &Path) -> Result<bool> {
     let mut roots: Vec<String> = conn
         .prepare("SELECT root_path FROM sources WHERE catalog_state = 'active'")?
         .query_map([], |r| r.get(0))?

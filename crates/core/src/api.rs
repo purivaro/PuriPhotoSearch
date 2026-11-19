@@ -5,7 +5,9 @@
 //! dev bridge ใช้ dispatch ตัวเดียวกัน จึงไม่มีพฤติกรรมสองชุด
 
 use crate::error::{AppError, Result};
-use crate::{ai, assets, catalog, db, export, faces, import, jobs, legacy, media, people, platform, review, App};
+use crate::{
+    ai, assets, backup, catalog, db, export, faces, import, jobs, legacy, media, people, platform, review, App,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
@@ -180,6 +182,18 @@ enum Command {
         request_id: String,
     },
 
+    GetBackupStatus {},
+    CreateBackup {
+        destination: String,
+    },
+    PreviewRestore {
+        path: String,
+    },
+    StageRestore {
+        path: String,
+    },
+    CancelRestore {},
+
     InstallFaceModel {},
     #[serde(rename_all = "camelCase")]
     AnalyzeFaces {
@@ -252,6 +266,11 @@ pub const COMMAND_NAMES: &[&str] = &[
     "reveal_export_destination",
     "preview_legacy_import",
     "import_legacy_people",
+    "get_backup_status",
+    "create_backup",
+    "preview_restore",
+    "stage_restore",
+    "cancel_restore",
     "install_face_model",
     "analyze_faces",
     "get_review_overview",
@@ -391,6 +410,15 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
 
         PreviewLegacyImport { path } => ok(legacy::dry_run(path.as_deref())?),
         ImportLegacyPeople { path, request_id } => ok(legacy::import_people(app, path.as_deref(), &request_id)?),
+
+        GetBackupStatus {} => ok(backup::status(app)?),
+        CreateBackup { destination } => ok(backup::create(app, &destination)?),
+        PreviewRestore { path } => ok(backup::preview_restore(app, &path)?),
+        StageRestore { path } => ok(backup::stage_restore(app, &path)?),
+        CancelRestore {} => {
+            backup::cancel_restore(app)?;
+            ok(backup::status(app)?)
+        }
 
         InstallFaceModel {} => ok(ai::install(app)?),
         AnalyzeFaces { event_id } => ok(serde_json::json!({ "jobIds": ai::analyze(app, event_id.as_deref())? })),

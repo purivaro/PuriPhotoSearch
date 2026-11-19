@@ -59,6 +59,12 @@ pub fn open_library(path: &Path) -> Result<Connection> {
     let mut conn = Connection::open(path)?;
     configure(&conn)?;
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if existed && version > 0 && version < latest_version() {
+        // เก็บคลังก่อนเปลี่ยน schema: ถ้าเก็บไม่ได้ ไม่อัปเกรด (เปิดด้วยแอปรุ่นเดิมได้ต่อ)
+        crate::backup::before_upgrade(path, version).map_err(|e| {
+            AppError::internal(format!("สำรองคลังก่อนอัปเกรดไม่สำเร็จ จึงยังไม่เปิดคลัง ตรวจพื้นที่ดิสก์แล้วลองใหม่ ({})", e.message))
+        })?;
+    }
     // migration ที่สร้างตารางใหม่แทนของเดิมต้องปิด foreign keys ชั่วคราว (ทำได้เฉพาะนอก transaction)
     // แล้วตรวจความสมบูรณ์ด้วย foreign_key_check หลังเปิดกลับ
     conn.pragma_update(None, "foreign_keys", "OFF")?;
