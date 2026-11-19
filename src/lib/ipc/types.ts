@@ -575,6 +575,54 @@ export interface ExportReport {
 
 // ───────────────────────── ย้ายข้อมูลเดิม (dry-run เท่านั้น) ─────────────────────────
 
+export interface BackupCounts {
+  events: number;
+  photos: number;
+  persons: number;
+  confirmations: number;
+  faces: number;
+}
+
+/** ชุดสำรองหนึ่งชุด (เนื้อหาของ manifest.json) */
+export interface BackupManifest {
+  format: number;
+  /** manual = ผู้ใช้สั่ง, auto = แอปสำรองประจำวัน, before_restore / before_upgrade = แอปเก็บไว้ก่อนเปลี่ยนคลัง */
+  kind: 'manual' | 'auto' | 'before_restore' | 'before_upgrade';
+  libraryId: Id;
+  libraryName: string;
+  appVersion: string;
+  schemaVersion: number;
+  createdAt: string;
+  counts: BackupCounts;
+  bytes: number;
+  sha256: string;
+  /** สิ่งที่ไม่รวมในชุดสำรอง: originals | thumbnails | face_crops | models */
+  excluded: string[];
+}
+
+export interface BackupInfo extends BackupManifest {
+  /** โฟลเดอร์ของชุดสำรอง */
+  path: string;
+}
+
+export interface BackupStatus {
+  lastBackupAt: string | null;
+  lastBackupPath: string | null;
+  backupsDir: string;
+  /** ชุดที่แอปเก็บเอง ใหม่สุดก่อน */
+  automatic: BackupInfo[];
+  /** ชุดที่จะถูกใช้เป็นคลังเมื่อเปิดแอปครั้งถัดไป */
+  pendingRestore: BackupManifest | null;
+}
+
+export interface RestorePreview {
+  backup: BackupInfo;
+  /** จำนวนในคลังที่เปิดอยู่ ซึ่งจะถูกแทนที่ */
+  current: BackupCounts;
+  sameLibrary: boolean;
+  needsUpgrade: boolean;
+}
+
 export interface LegacyReport {
   path: string;
   recognized: boolean;
@@ -656,6 +704,11 @@ export interface Commands {
   /** แสดงโฟลเดอร์ปลายทางของงานส่งออกในตัวจัดการไฟล์ */
   reveal_export_destination: [{ jobId: Id }, null];
 
+  get_backup_status: [Record<string, never>, BackupStatus];
+  create_backup: [{ destination: string }, BackupInfo];
+  preview_restore: [{ path: string }, RestorePreview];
+  stage_restore: [{ path: string }, RestorePreview];
+  cancel_restore: [Record<string, never>, BackupStatus];
   preview_legacy_import: [{ path?: string }, LegacyReport];
   /** นำรายชื่อบุคคล กลุ่ม และใบหน้าตัวอย่างจากรุ่น Python เข้าคลัง (อ่านฐานเดิมอย่างเดียว รันซ้ำไม่สร้างคนซ้ำ) */
   import_legacy_people: [{ path?: string; requestId: Id }, LegacyImportResult];

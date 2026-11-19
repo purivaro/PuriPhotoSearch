@@ -38,7 +38,7 @@ macro_rules! domain_commands {
         const REGISTERED: &[&str] = &[$(stringify!($name)),*];
 
         fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
-            builder.invoke_handler(tauri::generate_handler![$($name,)* pick_folder, e2e_report])
+            builder.invoke_handler(tauri::generate_handler![$($name,)* pick_folder, restart_app, e2e_report])
         }
     };
 }
@@ -91,6 +91,11 @@ domain_commands!(
     reveal_export_destination,
     preview_legacy_import,
     import_legacy_people,
+    get_backup_status,
+    create_backup,
+    preview_restore,
+    stage_restore,
+    cancel_restore,
     install_face_model,
     analyze_faces,
     get_review_overview,
@@ -112,6 +117,12 @@ async fn pick_folder(app: tauri::AppHandle, title: String) -> Option<String> {
     .ok()
     .flatten()
     .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// ปิดแล้วเปิดแอปใหม่ (ใช้หลังสั่งกู้คืนคลัง: ชุดที่รอไว้ถูกสลับเข้าตอนเปิด)
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) {
+    app.restart();
 }
 
 /// รับรายงานจากสคริปต์ทดสอบ end-to-end (debug build เท่านั้น; release ไม่ทำอะไร)

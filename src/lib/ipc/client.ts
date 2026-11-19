@@ -82,6 +82,13 @@ export function assetPath(path: string, version?: string | number): string {
   return assetUrl(kind as AssetKind, rest.join('/'), version);
 }
 
+/** ปิดแล้วเปิดแอปใหม่ (เฉพาะในแอป Tauri) */
+export async function restartApp(): Promise<void> {
+  if (!isTauri) throw new Error('restartApp ใช้ได้เฉพาะในแอป');
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('restart_app');
+}
+
 /** เปิด native folder picker (เฉพาะในแอป Tauri); คืน null เมื่อผู้ใช้ยกเลิก */
 export async function pickFolder(title: string): Promise<string | null> {
   if (!isTauri) throw new Error('pickFolder ใช้ได้เฉพาะในแอป');

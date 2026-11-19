@@ -6,6 +6,7 @@
 pub mod ai;
 pub mod api;
 pub mod assets;
+pub mod backup;
 pub mod catalog;
 pub mod db;
 pub mod error;
@@ -84,6 +85,8 @@ impl App {
             ));
         }
 
+        // ชุดสำรองที่ผู้ใช้สั่งกู้คืนไว้รอบก่อน: สลับเข้าก่อนเปิดฐานข้อมูล (คลังเดิมถูกเก็บเป็นชุดสำรองก่อน)
+        backup::apply_pending_restore(&opts.data_dir);
         let db_path = opts.data_dir.join("library.sqlite");
         let conn = db::open_library(&db_path)?;
         jobs::recover_after_restart(&conn)?;
@@ -107,6 +110,11 @@ impl App {
         });
         if opts.start_worker {
             app.worker.start();
+            // สำรองอัตโนมัติวันละครั้งในเบื้องหลัง: ล้มเหลวก็ไม่กระทบการใช้งาน
+            let db_path = app.db_path.clone();
+            std::thread::spawn(move || {
+                let _ = backup::auto_backup(&db_path);
+            });
         }
         Ok(app)
     }
