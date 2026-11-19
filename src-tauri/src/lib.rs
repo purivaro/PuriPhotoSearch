@@ -101,6 +101,7 @@ domain_commands!(
     get_review_overview,
     get_review_faces,
     reject_suggestions,
+    restore_suggestions,
 );
 
 /// เปิด native folder picker; คืน path ที่ผู้ใช้เลือกเอง (หรือ None เมื่อยกเลิก)

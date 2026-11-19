@@ -71,6 +71,8 @@ pub struct PersonDetail {
     pub has_confirmed_faces: bool,
     pub events: Vec<PersonEventCount>,
     pub coappearances: Vec<CoappearanceItem>,
+    /// รูปที่ผู้ใช้แจ้งว่าไม่ใช่คนนี้ (คืนได้จากหน้ารายละเอียดบุคคล)
+    pub rejected_photo_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -248,6 +250,14 @@ pub fn get(conn: &Connection, person_id: &str) -> Result<PersonDetail> {
         has_confirmed_faces: summary.confirmed_photo_count > 0,
         confirmed_event_count: events.len() as i64,
         coappearances: coappearances(conn, person_id, 24)?,
+        rejected_photo_count: conn.query_row(
+            "SELECT COUNT(DISTINCT p.id) FROM face_rejections x JOIN faces f ON f.id = x.face_id AND f.status = 'active'
+             JOIN photos p ON p.current_revision_id = f.photo_revision_id AND p.catalog_state = 'active'
+             JOIN event_photos ep ON ep.photo_id = p.id JOIN events e ON e.id = ep.event_id AND e.catalog_state = 'active'
+             WHERE x.person_id = ?1",
+            [person_id],
+            |r| r.get(0),
+        )?,
         summary,
         aliases,
         notes,

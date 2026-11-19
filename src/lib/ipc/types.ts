@@ -237,6 +237,8 @@ export interface SearchParams {
   limit: number;
   /** นับรูปที่ AI จัดให้บุคคลนั้นด้วย (ยังไม่มีคนยืนยัน); ผลบอกแยกใน `suggestedPeople` */
   includeSuggested?: boolean;
+  /** เฉพาะรูปที่ผู้ใช้แจ้งว่า "ไม่ใช่" บุคคลนี้; ผลบอกใบหน้าใน `rejectedFaces` */
+  rejectedPersonId?: Id;
 }
 
 export interface PersonRef {
@@ -268,6 +270,8 @@ export interface PhotoResult {
   confirmedPeople: PersonRef[];
   /** บุคคลที่ AI จัดให้ในรูปนี้ พร้อมใบหน้าที่เป็นเหตุ (มีเมื่อค้นแบบ `includeSuggested`) */
   suggestedPeople: { person: PersonRef; faceId: Id }[];
+  /** ใบหน้าในรูปนี้ที่ผู้ใช้แจ้งว่าไม่ใช่บุคคลที่ถาม (มีเมื่อค้นด้วย `rejectedPersonId`) */
+  rejectedFaces: Id[];
 }
 
 export interface Coverage {
@@ -366,6 +370,8 @@ export interface PersonDetail extends PersonSummary {
   hasConfirmedFaces: boolean;
   events: PersonEventCount[];
   coappearances: CoappearanceItem[];
+  /** รูปที่ผู้ใช้แจ้งว่าไม่ใช่คนนี้ (คืนได้) */
+  rejectedPhotoCount: number;
 }
 
 export interface PersonQuickViewData {
@@ -722,6 +728,8 @@ export interface Commands {
   get_review_faces: [{ kind: 'person' | 'cluster'; id: Id; eventId?: Id; reviewRevision: number }, ReviewGroupFaces];
   /** "ไม่ใช่บุคคลนี้" สำหรับข้อเสนอของ AI: จำคู่ ใบหน้า–บุคคล ไว้ไม่เสนอซ้ำ ใบหน้ายังอยู่ให้เลือกคนอื่น */
   reject_suggestions: [{ faceIds: Id[]; personId: Id }, { dataRevision: number }];
+  /** ย้อน "ไม่ใช่บุคคลนี้": ใบหน้ากลับไปให้ AI จัดได้ตามเดิม */
+  restore_suggestions: [{ faceIds: Id[]; personId: Id }, { dataRevision: number }];
 }
 
 export type CommandName = keyof Commands;

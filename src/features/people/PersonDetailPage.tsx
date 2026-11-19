@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Link, useParams, useSearchParams } from 'react-router';
-import { Archive, ArchiveRestore, Calendar, CircleCheck, EllipsisVertical, Image as ImageIcon, Pencil, Pin, Sparkles, UserRoundSearch, UserX } from 'lucide-react';
+import { Archive, ArchiveRestore, Calendar, CircleCheck, EllipsisVertical, Image as ImageIcon, Pencil, Pin, Sparkles, Undo2, UserRoundSearch, UserX } from 'lucide-react';
 import { Page, PageHeader, useDocumentTitle } from '@/app/PageLayout';
 import { Button, IconButton } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
@@ -197,11 +197,13 @@ export function PersonDetailPage() {
 function PersonPhotos({ person, eventId, onEventChange }: { person: PersonDetail; eventId: string | null; onEventChange: (id: string | null) => void }) {
   const [sort, setSort] = useState<SearchParams['sort']>('taken_desc');
   // ค่าเริ่มต้น: รวมรูปที่ AI จัดให้ ผู้ใช้ไล่ดูแล้วแจ้งเฉพาะรูปที่ไม่ใช่
-  const [scope, setScope] = useState<'all' | 'confirmed'>('all');
-  const query = useMemo<PhotoQuery>(
-    () => ({ personIds: [person.id], personMode: 'all', eventIds: eventId ? [eventId] : [], faceFilter: 'any', sort, limit: PHOTO_PAGE_SIZE, includeSuggested: scope === 'all' }),
-    [person.id, eventId, sort, scope],
-  );
+  const [chosen, setScope] = useState<PhotoScope>('all');
+  // รูปที่แจ้งว่าไม่ใช่ถูกคืนจนหมด: กลับไปมุมมองปกติ
+  const scope: PhotoScope = chosen === 'rejected' && person.rejectedPhotoCount === 0 ? 'all' : chosen;
+  const query = useMemo<PhotoQuery>(() => {
+    const base = { personMode: 'all' as const, eventIds: eventId ? [eventId] : [], faceFilter: 'any' as const, sort, limit: PHOTO_PAGE_SIZE };
+    return scope === 'rejected' ? { ...base, personIds: [], rejectedPersonId: person.id } : { ...base, personIds: [person.id], includeSuggested: scope === 'all' };
+  }, [person.id, eventId, sort, scope]);
   return (
     <div>
       <div className="mb-3.5 flex flex-wrap items-center gap-2.5">
@@ -219,8 +221,8 @@ function PersonPhotos({ person, eventId, onEventChange }: { person: PersonDetail
           <option value="added_desc">เพิ่มล่าสุด</option>
           <option value="filename">ชื่อไฟล์</option>
         </Select>
-        {person.aiPhotoCount > 0 && (
-          <Tabs<'all' | 'confirmed'>
+        {(person.aiPhotoCount > 0 || person.rejectedPhotoCount > 0) && (
+          <Tabs<PhotoScope>
             label="ขอบเขตของรูป"
             variant="pill"
             value={scope}
@@ -228,11 +230,17 @@ function PersonPhotos({ person, eventId, onEventChange }: { person: PersonDetail
             items={[
               { value: 'all', label: 'ทั้งหมด' },
               { value: 'confirmed', label: 'ยืนยันแล้วเท่านั้น' },
+              ...(person.rejectedPhotoCount > 0 ? [{ value: 'rejected' as const, label: `ที่แจ้งว่าไม่ใช่ (${formatCount(person.rejectedPhotoCount)})` }] : []),
             ]}
             testId="person-photo-scope"
           />
         )}
       </div>
+      {scope === 'rejected' && (
+        <InlineNotice tone="info" icon={<Undo2 aria-hidden />} className="mb-3.5">
+          รูปที่เคยแจ้งว่าไม่ใช่ {person.displayName} ถ้าแจ้งผิด ให้ติ๊กเลือกแล้วกด “คืนให้ {person.displayName}” รูปจะกลับไปเป็นรูปที่ AI จัดให้
+        </InlineNotice>
+      )}
       {person.aiPhotoCount > 0 && scope === 'all' && (
         <InlineNotice tone="info" icon={<Sparkles aria-hidden />} className="mb-3.5">
           รูปที่มีรูปประกาย <Sparkles className="inline size-3.5 align-[-2px]" aria-hidden /> คือรูปที่ AI จัดให้ ยังไม่มีคนตรวจ ถ้าเจอรูปที่ไม่ใช่ ให้ติ๊กเลือกแล้วกด “ไม่ใช่ {person.displayName}”
@@ -240,11 +248,13 @@ function PersonPhotos({ person, eventId, onEventChange }: { person: PersonDetail
       )}
       <PhotoResults
         query={query}
-        label={`รูปของ ${person.displayName}`}
+        label={scope === 'rejected' ? `รูปที่แจ้งว่าไม่ใช่ ${person.displayName}` : `รูปของ ${person.displayName}`}
         originLabel="กลับไปบุคคล"
         showEvent={!eventId}
         selectionKey={`${person.id}|${eventId ?? ''}|${scope}`}
-        selectionActions={({ photos, clear }) => <NotThisPerson person={person} photos={photos} onDone={clear} />}
+        selectionActions={({ photos, clear }) =>
+          scope === 'rejected' ? <GiveBack person={person} photos={photos} onDone={clear} /> : <NotThisPerson person={person} photos={photos} onDone={clear} />
+        }
         summary={(meta) =>
           meta.total > 0 ? (
             <p className="mb-2.5 text-sm text-muted" aria-live="polite">
@@ -273,16 +283,54 @@ function PersonPhotos({ person, eventId, onEventChange }: { person: PersonDetail
   );
 }
 
+type PhotoScope = 'all' | 'confirmed' | 'rejected';
+
+function useRestoreSuggestions(person: PersonDetail) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (faceIds: string[]) => call('restore_suggestions', { faceIds, personId: person.id }),
+    onSuccess: (_result, faceIds) => {
+      invalidatePeopleData(qc);
+      toast.success(`คืน ${formatCount(faceIds.length)} รูปให้ ${person.displayName} แล้ว`);
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+}
+
+/** คืนรูปที่เคยแจ้งว่าไม่ใช่ (แจ้งผิด): กลับไปเป็นรูปที่ AI จัดให้ */
+function GiveBack({ person, photos, onDone }: { person: PersonDetail; photos: PhotoResult[] | null; onDone: () => void }) {
+  const restore = useRestoreSuggestions(person);
+  const faceIds = (photos ?? []).flatMap((photo) => photo.rejectedFaces);
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      icon={<Undo2 className="size-4" aria-hidden />}
+      disabled={faceIds.length === 0}
+      busy={restore.isPending}
+      title={photos === null ? 'ใช้ได้กับรูปที่ติ๊กเลือกเอง ไม่ใช่ “ผลทั้งหมด”' : undefined}
+      onClick={() => restore.mutate(faceIds, { onSuccess: onDone })}
+      data-testid="restore-selected"
+    >
+      คืนให้ {person.displayName}
+    </Button>
+  );
+}
+
 /** "ไม่ใช่คนนี้" กับรูปที่เลือก: ใช้ได้กับรูปที่ AI จัดให้ (รูปที่ยืนยันแล้วแก้รายใบหน้าในตัวดูภาพ) */
 function NotThisPerson({ person, photos, onDone }: { person: PersonDetail; photos: PhotoResult[] | null; onDone: () => void }) {
   const qc = useQueryClient();
+  const restore = useRestoreSuggestions(person);
   const faceIds = (photos ?? []).flatMap((photo) => photo.suggestedPeople.filter((s) => s.person.id === person.id).map((s) => s.faceId));
   const reject = useMutation({
     mutationFn: () => call('reject_suggestions', { faceIds, personId: person.id }),
     onSuccess: () => {
       invalidatePeopleData(qc);
       onDone();
-      toast.success(`เอา ${formatCount(faceIds.length)} รูปออกจากรูปของ ${person.displayName} แล้ว ระบบจะไม่จัดรูปเหล่านี้ให้บุคคลนี้อีก`);
+      const rejected = faceIds;
+      toast.success(`เอา ${formatCount(rejected.length)} รูปออกจากรูปของ ${person.displayName} แล้ว ระบบจะไม่จัดรูปเหล่านี้ให้บุคคลนี้อีก`, {
+        action: { label: 'เลิกทำ', onClick: () => restore.mutate(rejected) },
+      });
     },
     onError: (error) => toast.error(errorMessage(error)),
   });
