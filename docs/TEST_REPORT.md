@@ -15,7 +15,7 @@
 | Rust: lint | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` | ผ่าน ไม่มี warning |
 | Frontend | `pnpm typecheck`, `pnpm test`, `pnpm build` | typecheck ผ่าน (รวม `noUncheckedIndexedAccess`), vitest 42 ผ่านใน 6 ไฟล์, build ผ่าน (JS 762 kB / gzip 216 kB) |
 | แอปจริง | `e2e/run.sh` | ผ่าน 14 ขั้น ทั้ง `pnpm tauri dev` และ `.app` debug ที่ bundle แล้ว; รันซ้ำหลัง UI ชุดใบหน้า ผ่าน 14 ขั้นทั้งสองแบบ (แบบ `.app` รันกับ bundle debug ที่เซ็นด้วย Developer ID + hardened runtime) |
-| แอปจริง: อัปเดตตัวเอง | `e2e/update.sh` (19 พ.ย. 2569) | ผ่าน 5 ขั้น สองรอบ (กุญแจชั่วคราว และกุญแจจริง) — ดูหมวด "อัปเดตแอปเอง" |
+| แอปจริง: อัปเดตตัวเอง | `e2e/update.sh` (19 พ.ย. 2569) | macOS: ผ่าน 5 ขั้น (กุญแจชั่วคราว และกุญแจจริง) · Windows บน runner: ผ่าน — ดูหมวด "อัปเดตแอปเอง" |
 | ข้อมูลจริง | Rust core กับ `~/Photos/2569` และฐานของรุ่น Python (อ่านอย่างเดียว) | ดูหมวด "ข้อมูลจริง" |
 
 ## Rust: integration (`crates/core/tests/workflow.rs`)
@@ -379,7 +379,26 @@ debug build ฉีดสคริปต์เข้า WKWebView ของหน
 
 **ยังไม่ได้ทดสอบ:** release build ที่เซ็น + notarize อัปเดตตัวเองจาก GitHub จริง (ยังไม่มีรุ่นที่เผยแพร่พร้อมตัวอัปเดต — พิสูจน์ได้ครั้งแรกเมื่อออกสองรุ่นติดกัน),
 แอปใน `/Applications` ที่ต้องขอสิทธิ์ผู้ดูแลเครื่อง, แอปที่เปิดจาก `.dmg` โดยตรง (มีข้อความเฉพาะ แต่ไม่ได้ลอง), เครือข่ายหลุดกลางการดาวน์โหลด,
-การตรวจซ้ำทุก 6 ชั่วโมง, สวิตช์ปิดการตรวจอัตโนมัติ (เปิดดูแล้ว ไม่อยู่ในเทสต์), Intel Mac และ **Windows ทั้งหมด** (ตัวติดตั้ง NSIS แบบ passive + เปิดแอปใหม่)
+การตรวจซ้ำทุก 6 ชั่วโมง, สวิตช์ปิดการตรวจอัตโนมัติ (เปิดดูแล้ว ไม่อยู่ในเทสต์), Intel Mac, เครื่อง Windows จริง
+
+### workflow `Release` รอบซ้อมของ PR #17 (ยังไม่มี secret ของกุญแจ)
+
+ทุก job ผ่าน: `macos` (เซ็น + notarize + staple ตามเดิม, `spctl` รับ DMG เป็น `Notarized Developer ID`), `windows`, `update-windows`, `manifest`; `publish` ถูกข้ามเพราะไม่ใช่ tag
+รอบนี้**ไม่มี** `TAURI_SIGNING_PRIVATE_KEY` workflow จึงเดินทาง "ไม่มีกุญแจ": เตือนว่า build นี้ใช้เป็นอัปเดตในแอปไม่ได้ สร้างตัวติดตั้งตามปกติ และไม่เขียน manifest
+
+**ยังไม่ได้รัน:** ทางที่มีกุญแจของ workflow — การสร้าง `PuriPhotoSearch-mac.app.tar.gz` + ลายเซ็นบน runner, ขั้นที่แตกไฟล์นั้นแล้วตรวจว่าเป็นแอปที่ notarize แล้ว
+(`codesign` / `stapler validate` / `spctl` / `diff -r`), ลายเซ็นของตัวติดตั้ง Windows, เนื้อหา `latest.json` ที่ job `manifest` สร้าง, และ job `publish` ทั้งตัว
+(แนบไฟล์กับ release, เขียน branch `updates`) — รันได้เมื่อเจ้าของตั้ง secret แล้วสั่ง `gh workflow run release.yml --ref <branch>` (ยกเว้น `publish` ซึ่งรันเฉพาะ tag จริง)
+สคริปต์ `scripts/update-manifest.sh` ตัวเดียวกันนี้ถูกใช้และผ่านใน `e2e/update.sh` แล้วทั้งสองระบบ
+
+### Windows (job `update-windows` ของ workflow `Release`, runner `windows-latest` — รอบซ้อมของ PR #17)
+
+สคริปต์เดียวกัน แต่ "ติดตั้ง" ด้วยตัวติดตั้ง NSIS จริงแบบเงียบ (`/S`) ลง `%LOCALAPPDATA%\Puri Photo Search` แล้วเปิดแอปจากที่นั่น:
+ผ่านขั้น `opened` → `rejected` (ข้อความไม่ผ่านลายเซ็นขึ้นในหน้าตั้งค่า) → `ready` (ดาวน์โหลดตัวติดตั้งรุ่นใหม่ 11.4 MB) → `confirm` → กด "อัปเดตและเปิดใหม่"
+→ แอปปิด, ตัวติดตั้ง 99.0.0 รันแบบ passive, เลขรุ่นที่ตัวติดตั้งบันทึกใน registry (`DisplayVersion`) เปลี่ยนจาก 2.0.0-alpha.3 เป็น 99.0.0, และมี process ของแอปทำงานอยู่หลังจากนั้น
+
+**ที่ยืนยันไม่ได้บน Windows:** ตัวติดตั้งเปิดแอปใหม่ผ่าน shell ซึ่งไม่ส่งตัวแปรของเทสต์ต่อให้ แอปรอบสองจึงไม่ได้รายงานเลขรุ่นของตัวเองกลับมา —
+หลักฐานว่าเป็นรุ่นใหม่คือเลขรุ่นใน registry กับ process ที่ทำงานอยู่ ไม่ใช่คำตอบจากในแอป (บน macOS ยืนยันจากในแอป) และไม่มีใครเห็นหน้าต่างของตัวติดตั้งด้วยตา
 
 ## Windows (runner ของ GitHub เท่านั้น — 18 พ.ย. 2569)
 
