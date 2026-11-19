@@ -66,6 +66,8 @@ export PURI_E2E_PICK="$(native "$PHOTOS")
 $(native "$WORK/export")
 $(native "$WORK/export")"
 export PURI_DATA_DIR="$(native "$WORK/library")" PURI_DISABLE_OPEN=1 PURI_DISABLE_FACE_ENGINE=1
+# ไม่ให้ฐานของรุ่น Python บนเครื่องผู้พัฒนาทำให้หน้าต่าง "เตรียมแอปให้พร้อมใช้" เปิดขึ้นกลางเทสต์ (ทดสอบแยกใน e2e/setup.sh)
+export PURI_LEGACY_DB="$(native "$WORK/no-legacy.db")"
 export PURI_E2E_SCRIPT="$(native "$WORK/smoke.js")" PURI_E2E_REPORT="$(native "$REPORT")"
 if [ -n "${APP:-}" ]; then
   echo "› เปิด $APP"

@@ -16,6 +16,7 @@ import { PhotoViewer } from '@/features/photos/PhotoViewer';
 import { ReviewPage } from '@/features/review/ReviewPage';
 import { SearchPage } from '@/features/search/SearchPage';
 import { SettingsPage } from '@/features/settings/SettingsPage';
+import { SetupDialog } from '@/features/setup/SetupDialog';
 import { UpdateDialog } from '@/features/update/UpdateDialog';
 import { useUpdateRuntime } from '@/features/update/updates';
 import { onFolderDropped } from '@/lib/ipc/client';
@@ -159,6 +160,7 @@ export function App() {
               <AppRoutes />
               <CommandPalette />
               <UpdateDialog />
+              <SetupDialog />
             </ViewerProvider>
           </FolderChooserProvider>
         </HashRouter>

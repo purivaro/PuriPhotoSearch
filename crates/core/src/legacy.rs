@@ -31,8 +31,20 @@ pub struct LegacyReport {
 
 /// ตำแหน่งฐานข้อมูลเริ่มต้นของรุ่น Python บน macOS (`app/config.py`: APP_NAME = "PuriPhotoSearch")
 pub fn default_path() -> Option<PathBuf> {
+    // เทสต์ชี้ debug build ไปที่ฐานจำลอง (หรือ path ที่ไม่มีไฟล์) แทนฐานจริงของผู้ใช้
+    #[cfg(debug_assertions)]
+    if let Some(path) = std::env::var_os("PURI_LEGACY_DB") {
+        return Some(PathBuf::from(path));
+    }
     let home = std::env::var_os("HOME")?;
     Some(Path::new(&home).join("Library/Application Support/PuriPhotoSearch/photosearch.db"))
+}
+
+fn resolve(path: Option<&str>) -> Result<PathBuf> {
+    match path {
+        Some(p) => Ok(PathBuf::from(p)),
+        None => default_path().ok_or_else(|| AppError::invalid("ไม่ทราบตำแหน่งข้อมูลของรุ่นเดิม")),
+    }
 }
 
 fn percent_encode(path: &str) -> String {
@@ -55,10 +67,7 @@ pub fn open_read_only(path: &Path) -> Result<Connection> {
 }
 
 pub fn dry_run(path: Option<&str>) -> Result<LegacyReport> {
-    let path = match path {
-        Some(p) => PathBuf::from(p),
-        None => default_path().ok_or_else(|| AppError::invalid("ไม่ทราบตำแหน่งข้อมูลของรุ่นเดิม"))?,
-    };
+    let path = resolve(path)?;
     let conn = open_read_only(&path)?;
     let has = |table: &str| -> Result<bool> {
         Ok(conn.query_row(
@@ -165,21 +174,8 @@ struct LegacyPerson {
     group: Option<String>,
 }
 
-/// นำรายชื่อ กลุ่ม และภาพใบหน้าตัวอย่างจากรุ่น Python เข้าคลัง (Blueprint 14.3 เฉพาะส่วนที่ผู้ใช้ยืนยันไว้จริง)
-///
-/// - ฐานเดิมเปิดแบบอ่านอย่างเดียว ไม่ถูกแก้
-/// - รันซ้ำไม่สร้างคนซ้ำ: จำคู่ (รหัสเดิม + เวลาสร้างเดิม) → ID ใหม่ ไว้ใน `legacy_id_map`
-/// - เวกเตอร์ของรุ่นเดิมไม่ถูกนำมาใช้ (คนละโมเดล คนละ space): ภาพครอปตัวอย่างจะถูกสร้างเวกเตอร์ใหม่ด้วยโมเดลปัจจุบัน
-/// - ผลจับคู่ของรุ่นเดิมไม่ถูกนำมาเป็นคำยืนยัน และรูป/โฟลเดอร์ไม่ถูกย้ายมา (ผู้ใช้เพิ่มโฟลเดอร์เอง)
-pub fn import_people(app: &App, path: Option<&str>, request_id: &str) -> Result<LegacyImportResult> {
-    if let Some(prev) = replay::<LegacyImportResult>(&app.db(), request_id)? {
-        return Ok(prev);
-    }
-    let path = match path {
-        Some(p) => PathBuf::from(p),
-        None => default_path().ok_or_else(|| AppError::invalid("ไม่ทราบตำแหน่งข้อมูลของรุ่นเดิม"))?,
-    };
-    let legacy = open_read_only(&path)?;
+/// รายชื่อบุคคลของฐานเดิม; ผิดพลาดเมื่อไฟล์ไม่ใช่ฐานข้อมูลของรุ่น Python ที่รู้จัก
+fn read_persons(legacy: &Connection) -> Result<Vec<LegacyPerson>> {
     let has_table = |t: &str| -> Result<bool> {
         Ok(legacy.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
@@ -196,13 +192,44 @@ pub fn import_people(app: &App, path: Option<&str>, request_id: &str) -> Result<
         |r| r.get(0),
     )?;
     let group_col = if has_group { "group_name" } else { "NULL" };
-    let persons: Vec<LegacyPerson> = legacy
+    let persons = legacy
         .prepare(&format!("SELECT id, name, {group_col}, COALESCE(created_at, '') FROM persons ORDER BY id"))?
         .query_map([], |r| {
             let (id, created): (i64, String) = (r.get(0)?, r.get(3)?);
             Ok(LegacyPerson { key: format!("{id}|{created}"), id, name: r.get(1)?, group: r.get(2)? })
         })?
         .collect::<rusqlite::Result<_>>()?;
+    Ok(persons)
+}
+
+/// จำนวนบุคคลในฐานเดิมที่ยังไม่ได้นำเข้าคลังนี้ (อ่านฐานเดิมอย่างเดียว) — ใช้ตัดสินว่าจะเสนอให้นำเข้าหรือไม่
+pub fn pending_people(app: &App, path: Option<&str>) -> Result<i64> {
+    let persons = read_persons(&open_read_only(&resolve(path)?)?)?;
+    let conn = app.db();
+    let mut known =
+        conn.prepare("SELECT EXISTS(SELECT 1 FROM legacy_id_map WHERE kind = 'person' AND legacy_id = ?1)")?;
+    let mut pending = 0;
+    for person in &persons {
+        if !known.query_row([&person.key], |r| r.get::<_, bool>(0))? {
+            pending += 1;
+        }
+    }
+    Ok(pending)
+}
+
+/// นำรายชื่อ กลุ่ม และภาพใบหน้าตัวอย่างจากรุ่น Python เข้าคลัง (Blueprint 14.3 เฉพาะส่วนที่ผู้ใช้ยืนยันไว้จริง)
+///
+/// - ฐานเดิมเปิดแบบอ่านอย่างเดียว ไม่ถูกแก้
+/// - รันซ้ำไม่สร้างคนซ้ำ: จำคู่ (รหัสเดิม + เวลาสร้างเดิม) → ID ใหม่ ไว้ใน `legacy_id_map`
+/// - เวกเตอร์ของรุ่นเดิมไม่ถูกนำมาใช้ (คนละโมเดล คนละ space): ภาพครอปตัวอย่างจะถูกสร้างเวกเตอร์ใหม่ด้วยโมเดลปัจจุบัน
+/// - ผลจับคู่ของรุ่นเดิมไม่ถูกนำมาเป็นคำยืนยัน และรูป/โฟลเดอร์ไม่ถูกย้ายมา (ผู้ใช้เพิ่มโฟลเดอร์เอง)
+pub fn import_people(app: &App, path: Option<&str>, request_id: &str) -> Result<LegacyImportResult> {
+    if let Some(prev) = replay::<LegacyImportResult>(&app.db(), request_id)? {
+        return Ok(prev);
+    }
+    let path = resolve(path)?;
+    let legacy = open_read_only(&path)?;
+    let persons = read_persons(&legacy)?;
     let mut samples = legacy.prepare(
         "SELECT thumbnail FROM person_embeddings WHERE person_id = ?1 AND thumbnail IS NOT NULL ORDER BY is_primary DESC, id",
     )?;

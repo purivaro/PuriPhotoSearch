@@ -478,6 +478,12 @@ export interface ReviewGroupFaces {
   total: number;
 }
 
+export interface SetupState {
+  /** บุคคลในฐานของรุ่น Python บนเครื่องนี้ที่ยังไม่ได้นำเข้า (0 = ไม่พบฐานเดิม หรือนำเข้าครบแล้ว) */
+  legacyPending: number;
+  dismissed: boolean;
+}
+
 export interface LegacyImportResult {
   personsCreated: number;
   /** มีอยู่แล้วจากการนำเข้าครั้งก่อน (ไม่สร้างซ้ำ) */
@@ -748,6 +754,10 @@ export interface Commands {
   preview_legacy_import: [{ path?: string }, LegacyReport];
   /** นำรายชื่อบุคคล กลุ่ม และใบหน้าตัวอย่างจากรุ่น Python เข้าคลัง (อ่านฐานเดิมอย่างเดียว รันซ้ำไม่สร้างคนซ้ำ) */
   import_legacy_people: [{ path?: string; requestId: Id }, LegacyImportResult];
+  /** สิ่งที่เสนอให้ทำตอนเปิดแอปครั้งแรก (S01) นอกเหนือจากสถานะตัววิเคราะห์ใบหน้าใน get_capabilities */
+  get_setup_state: [Record<string, never>, SetupState];
+  /** ผู้ใช้ปิดหน้าต่างข้อเสนอแล้ว: จำไว้กับคลัง ไม่เปิดเองอีก */
+  dismiss_setup: [Record<string, never>, null];
 
   /** ดาวน์โหลดและติดตั้งตัววิเคราะห์ใบหน้า (ครั้งเดียว) แล้ววิเคราะห์รูปที่มีในคลังต่อให้เอง */
   install_face_model: [Record<string, never>, JobSnapshot];

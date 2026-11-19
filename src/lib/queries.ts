@@ -9,6 +9,7 @@ export type PhotoQuery = Omit<SearchParams, 'cursor'>;
 export const qk = {
   capabilities: ['capabilities'] as const,
   summary: ['summary'] as const,
+  setup: ['setup'] as const,
   events: (text = '') => ['events', 'list', text] as const,
   event: (id: Id) => ['events', 'detail', id] as const,
   photos: (params: PhotoQuery) => ['photos', params] as const,
@@ -28,7 +29,7 @@ export const qk = {
 
 /** หลังแก้ข้อมูลบุคคล/ใบหน้า: จำนวนรูปและรายชื่อในทุกหน้าต้องตามให้ทัน */
 export function invalidatePeopleData(qc: QueryClient) {
-  for (const key of [['people'], ['photos'], ['photo'], ['events'], ['summary'], ['groups'], ['review']]) {
+  for (const key of [['people'], ['photos'], ['photo'], ['events'], ['summary'], ['groups'], ['review'], ['setup']]) {
     void qc.invalidateQueries({ queryKey: key });
   }
 }
@@ -45,6 +46,10 @@ export function useCapabilities() {
 
 export function useSummary() {
   return useQuery({ queryKey: qk.summary, queryFn: () => call('get_library_summary', {}) });
+}
+
+export function useSetupState() {
+  return useQuery({ queryKey: qk.setup, queryFn: () => call('get_setup_state', {}) });
 }
 
 export function useEvents(text = '') {
