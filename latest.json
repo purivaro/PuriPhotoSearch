@@ -1,19 +1,19 @@
 {
-  "version": "2.0.0-alpha.11",
-  "notes": "• ย่อไฟล์ต้นฉบับได้ — เลือกรูปแล้วกด “ย่อไฟล์ต้นฉบับ” เพื่อคืนพื้นที่ดิสก์ ไฟล์ที่ย่ออยู่แทนในโฟลเดอร์เดิมชื่อเดิม ต้นฉบับขนาดเต็มย้ายไปถังขยะ (กู้คืนได้จนกว่าจะล้างถังขยะ)\n• ใบหน้า ชื่อบุคคล และวันที่ถ่ายอยู่ครบหลังย่อ ไม่ต้องวิเคราะห์ใบหน้าใหม่\n• ส่งออกสำเนาแบบย่อขนาดได้ — ด้านยาว 2048 / 1600 / 1080 px หรือกำหนดขนาดไฟล์ไม่เกิน สำเนาเก็บวันที่ถ่าย ข้อมูลกล้อง และโปรไฟล์สีไว้\n• รุ่นนี้ปรับโครงสร้างคลัง แอปสำรองคลังเดิมไว้ให้ก่อนเมื่อเปิดครั้งแรก หลังจากนั้นแอปรุ่นก่อนหน้าจะเปิดคลังนี้ไม่ได้",
-  "pub_date": "2026-11-20T15:39:46Z",
+  "version": "2.0.0-alpha.12",
+  "notes": "• ส่งออกสำเนาพร้อมลายน้ำได้ — เปิด “ใส่ลายน้ำ” ในหน้าต่างส่งออก เพิ่มโลโก้ (PNG พื้นใสดีที่สุด) แล้วเลือกตำแหน่ง ขนาด และความทึบ ดูตัวอย่างบนรูปที่เลือกได้ทันที\n• ใช้ร่วมกับการย่อขนาดได้ ลายน้ำมีสัดส่วนเท่ากันทุกขนาดสำเนา · แอปเก็บโลโก้ไว้ใช้ซ้ำ และไฟล์ต้นฉบับไม่ถูกแตะ\n• รุ่นนี้ปรับโครงสร้างคลัง แอปสำรองคลังเดิมไว้ให้ก่อนเมื่อเปิดครั้งแรก หลังจากนั้นแอปรุ่นก่อนหน้าจะเปิดคลังนี้ไม่ได้",
+  "pub_date": "2026-11-20T16:56:17Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZStkNGg1QmhTVlRhTVhqNkc5c3FnR2YyWk5RSDBCTWNmdkEzMHlOY2tlUGpVakNVRjJSbFB0V21LV2FPMk1WUWN5bWRoQ1BScytUeXpIS2prSXJ1a0pKR05NYTN4OFFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MTg5MTAxCWZpbGU6UHVyaSBQaG90byBTZWFyY2guYXBwLnRhci5negl2ZXJzaW9uOjIuMC4wLWFscGhhLjExCkt3T1c2WFRYdkxZemlhdkExMXkxbmVzUEcvUXRhZXlDOXdYY1pKcGpEVFFiVDBPWDFENXFqTXRCVVBtVTlqeHRGQ2dDOTUxSk1JdmNiMHNqZE9zUUJ3PT0K",
-      "url": "https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.11/PuriPhotoSearch-mac.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZStkNGg1QmhTVmJ3Vjh1ZUhBSEplNnFjUUVvUTRIejdUVTNuZ0EvYkR2cXJ4Y0FKejB6NEgzOW0yT00xZkVMRFk1dUw0UmtWZ2duMlVtdC83ckNwRnhmR1NiVzhsSmdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MTkzNjkzCWZpbGU6UHVyaSBQaG90byBTZWFyY2guYXBwLnRhci5negl2ZXJzaW9uOjIuMC4wLWFscGhhLjEyCi9kd2IwV1dlWWJFZnBLdzZ3NDIzaldpb2d4VlZzcFBMbzcwOS9yOFRxdkJVRzlpcDhlZVZXQWdpWkFVNVdwQUNLMjI5QkJacGhQczlPU0JKTjZ1dkN3PT0K",
+      "url": "https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.12/PuriPhotoSearch-mac.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZStkNGg1QmhTVlRhTVhqNkc5c3FnR2YyWk5RSDBCTWNmdkEzMHlOY2tlUGpVakNVRjJSbFB0V21LV2FPMk1WUWN5bWRoQ1BScytUeXpIS2prSXJ1a0pKR05NYTN4OFFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MTg5MTAxCWZpbGU6UHVyaSBQaG90byBTZWFyY2guYXBwLnRhci5negl2ZXJzaW9uOjIuMC4wLWFscGhhLjExCkt3T1c2WFRYdkxZemlhdkExMXkxbmVzUEcvUXRhZXlDOXdYY1pKcGpEVFFiVDBPWDFENXFqTXRCVVBtVTlqeHRGQ2dDOTUxSk1JdmNiMHNqZE9zUUJ3PT0K",
-      "url": "https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.11/PuriPhotoSearch-mac.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZStkNGg1QmhTVmJ3Vjh1ZUhBSEplNnFjUUVvUTRIejdUVTNuZ0EvYkR2cXJ4Y0FKejB6NEgzOW0yT00xZkVMRFk1dUw0UmtWZ2duMlVtdC83ckNwRnhmR1NiVzhsSmdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MTkzNjkzCWZpbGU6UHVyaSBQaG90byBTZWFyY2guYXBwLnRhci5negl2ZXJzaW9uOjIuMC4wLWFscGhhLjEyCi9kd2IwV1dlWWJFZnBLdzZ3NDIzaldpb2d4VlZzcFBMbzcwOS9yOFRxdkJVRzlpcDhlZVZXQWdpWkFVNVdwQUNLMjI5QkJacGhQczlPU0JKTjZ1dkN3PT0K",
+      "url": "https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.12/PuriPhotoSearch-mac.app.tar.gz"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZStkNGg1QmhTVlU3ZkFBbE8vZ2RoSmJPaU9YcXVrR2NpbUJ2TWtwN0FKT01UUWt6ckR6YjJxTXBTblhlenYydWthZXNuOVJtYzdDa1k0b0ptTXB3MjBJbnppRDJ3R3c4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MTg4OTQ2CWZpbGU6UHVyaSBQaG90byBTZWFyY2hfMi4wLjAtYWxwaGEuMTFfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjIuMC4wLWFscGhhLjExCnN5NndkWmM2WEZIUzB2TC9mRG51bTVmbUhjNEV4NVlhakFlaEZoSExMRjNhcDNvMjJTb3ZneUdCM1B0K3dsWDdYVW1BbnBKSXovS0d4RG5UcTI4eUJ3PT0K",
-      "url": "https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.11/PuriPhotoSearch-windows-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZStkNGg1QmhTVldEbXNsbDhPRW9PckltMUJwTHh6NjhiWjBJL0pkcjVmaTZMcmVnaEhJY20vczdYbmZPRUsxMG1HYmVOR05FaWZLRmdFdVRFVzk0NDVlcFo3OXlEN2d3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MTkzNDg4CWZpbGU6UHVyaSBQaG90byBTZWFyY2hfMi4wLjAtYWxwaGEuMTJfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjIuMC4wLWFscGhhLjEyCmo5N1JUOWhhazBYcjhrMzBXVnB1OThVTVl4TGwrbmVadWpsWEt2Ungwc2YwZVdxbisvM2hnUVRua0ROcjFSQXVuYjJJNGJXK3Y5RSt2VFVqUnkxU0FnPT0K",
+      "url": "https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.12/PuriPhotoSearch-windows-setup.exe"
     }
   }
 }
