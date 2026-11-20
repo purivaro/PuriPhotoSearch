@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import { useViewer } from '@/app/navigation';
 import { ErrorState, LoadingBlock } from '@/components/ui/Feedback';
 import { ExportDialog } from '@/features/export/ExportDialog';
+import { ShrinkDialog } from '@/features/export/ShrinkDialog';
 import type { Coverage, PhotoResult } from '@/lib/ipc/types';
 import { usePhotoList, type PhotoQuery } from '@/lib/queries';
 import { PhotoGrid } from './PhotoGrid';
@@ -46,6 +47,7 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
   const viewer = useViewer();
   const [selection, setSelection] = useState<Selection>(EMPTY_SELECTION);
   const [exporting, setExporting] = useState(false);
+  const [shrinking, setShrinking] = useState(false);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
@@ -138,12 +140,14 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
         total={list.total}
         query={query}
         onExport={() => setExporting(true)}
+        onShrink={() => setShrinking(true)}
         actions={selectionActions?.({
           photos: selection.kind === 'explicit' ? list.items.filter((p) => selection.ids.has(p.id)) : null,
           clear: () => setSelection(EMPTY_SELECTION),
         })}
       />
       <ExportDialog open={exporting} onOpenChange={setExporting} selection={toSelectionSpec(selection)} count={count} />
+      <ShrinkDialog open={shrinking} onOpenChange={setShrinking} selection={toSelectionSpec(selection)} count={count} />
     </>
   );
 }

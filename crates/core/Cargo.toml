@@ -20,5 +20,14 @@ unicode-normalization = "0.1.26"
 uuid = { version = "1.29.3", features = ["v7"] }
 walkdir = "2.5.0"
 
+# ย้ายต้นฉบับไปถังขยะเมื่อผู้ใช้สั่งย่อไฟล์ในที่เดิม (platform::move_to_trash)
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSFileManager", "NSString", "NSURL"] }
+
+[target.'cfg(windows)'.dependencies]
+trash = { version = "5.4.0", default-features = false, features = ["coinit_apartmentthreaded"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 tempfile = "3.27.0"

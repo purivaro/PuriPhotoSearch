@@ -29,8 +29,32 @@ export const PX_MAX = 10_000;
 export const BYTES_MIN = 50 * 1024;
 export const BYTES_MAX = 100 * 1024 * 1024;
 
+/** ตัวเลือกที่ใช้ได้และขั้นต่ำของแต่ละงาน (ส่งออกสำเนา / ย่อไฟล์ต้นฉบับ) */
+export interface ResizeOptions {
+  presets: { value: ResizePreset; label: string }[];
+  pxMin: number;
+  bytesMin: number;
+}
+
+export const EXPORT_OPTIONS: ResizeOptions = { presets: PRESETS, pxMin: PX_MIN, bytesMin: BYTES_MIN };
+
+// ย่อไฟล์ต้นฉบับ: ไม่ต่ำกว่าภาพที่ตัววิเคราะห์ใบหน้าใช้ (Rust: shrink::MIN_EDGE / MIN_BYTES)
+export const SHRINK_OPTIONS: ResizeOptions = {
+  presets: [
+    { value: '2048', label: 'ด้านยาว 2048 px — คมชัด ดูเต็มจอคอมได้ (แนะนำ)' },
+    { value: '1600', label: 'ด้านยาว 1600 px — ประหยัดพื้นที่มากขึ้น' },
+    { value: 'custom', label: 'กำหนดด้านยาวเอง (อย่างน้อย 1280 px)…' },
+    { value: 'max', label: 'กำหนดขนาดไฟล์ไม่เกิน (อย่างน้อย 300 KB)…' },
+  ],
+  pxMin: 1280,
+  bytesMin: 300 * 1024,
+};
+
+export const DEFAULT_SHRINK_CHOICE: ResizeChoice = { preset: '2048', customPx: '1600', maxValue: '1', maxUnit: 'MB' };
+
 /** แปลงตัวเลือกเป็นคำสั่งที่ส่งให้ Rust; ค่าที่กรอกไม่ถูกต้องคืนข้อความบอกผู้ใช้แทน */
-export function toResize(choice: ResizeChoice): { resize: ExportResize } | { error: string } {
+export function toResize(choice: ResizeChoice, options: ResizeOptions = EXPORT_OPTIONS): { resize: ExportResize } | { error: string } {
+  if (!options.presets.some((p) => p.value === choice.preset)) return { error: 'เลือกขนาดที่จะย่อ' };
   switch (choice.preset) {
     case 'original':
       return { resize: { mode: 'original' } };
@@ -40,14 +64,16 @@ export function toResize(choice: ResizeChoice): { resize: ExportResize } | { err
       return { resize: { mode: 'long_edge', px: Number(choice.preset) } };
     case 'custom': {
       const px = Number(choice.customPx.trim());
-      if (!Number.isInteger(px) || px < PX_MIN || px > PX_MAX) return { error: `ใส่ด้านยาวเป็นจำนวนเต็มระหว่าง ${PX_MIN} ถึง ${PX_MAX.toLocaleString('th-TH')} px` };
+      if (!Number.isInteger(px) || px < options.pxMin || px > PX_MAX) {
+        return { error: `ใส่ด้านยาวเป็นจำนวนเต็มระหว่าง ${options.pxMin.toLocaleString('th-TH')} ถึง ${PX_MAX.toLocaleString('th-TH')} px` };
+      }
       return { resize: { mode: 'long_edge', px } };
     }
     case 'max': {
       const value = Number(choice.maxValue.trim().replace(',', '.'));
       const bytes = Math.round(value * (choice.maxUnit === 'MB' ? 1024 * 1024 : 1024));
-      if (!choice.maxValue.trim() || !Number.isFinite(value) || bytes < BYTES_MIN || bytes > BYTES_MAX) {
-        return { error: 'ใส่ขนาดไฟล์ระหว่าง 50 KB ถึง 100 MB' };
+      if (!choice.maxValue.trim() || !Number.isFinite(value) || bytes < options.bytesMin || bytes > BYTES_MAX) {
+        return { error: `ใส่ขนาดไฟล์ระหว่าง ${options.bytesMin / 1024} KB ถึง 100 MB` };
       }
       return { resize: { mode: 'max_bytes', bytes } };
     }
@@ -55,17 +81,17 @@ export function toResize(choice: ResizeChoice): { resize: ExportResize } | { err
 }
 
 /** อ่านค่าที่เคยเก็บไว้ ถ้าเสียหรือไม่ครบใช้ค่าเริ่มต้น */
-export function parseResizeChoice(raw: string | null): ResizeChoice {
-  if (!raw) return DEFAULT_RESIZE_CHOICE;
+export function parseResizeChoice(raw: string | null, fallback = DEFAULT_RESIZE_CHOICE, options = EXPORT_OPTIONS): ResizeChoice {
+  if (!raw) return fallback;
   try {
     const v = JSON.parse(raw) as Partial<ResizeChoice>;
     return {
-      preset: PRESETS.some((p) => p.value === v.preset) ? (v.preset as ResizePreset) : DEFAULT_RESIZE_CHOICE.preset,
-      customPx: typeof v.customPx === 'string' ? v.customPx : DEFAULT_RESIZE_CHOICE.customPx,
-      maxValue: typeof v.maxValue === 'string' ? v.maxValue : DEFAULT_RESIZE_CHOICE.maxValue,
+      preset: options.presets.some((p) => p.value === v.preset) ? (v.preset as ResizePreset) : fallback.preset,
+      customPx: typeof v.customPx === 'string' ? v.customPx : fallback.customPx,
+      maxValue: typeof v.maxValue === 'string' ? v.maxValue : fallback.maxValue,
       maxUnit: v.maxUnit === 'KB' ? 'KB' : 'MB',
     };
   } catch {
-    return DEFAULT_RESIZE_CHOICE;
+    return fallback;
   }
 }

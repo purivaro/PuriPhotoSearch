@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Upload, X } from 'lucide-react';
+import { Minimize2, Upload, X } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { errorMessage, formatCount } from '@/lib/format';
 import { call } from '@/lib/ipc/client';
@@ -18,12 +18,14 @@ interface SelectionBarProps {
   /** เงื่อนไขที่ใช้สร้าง snapshot ของ "ผลทั้งหมด" */
   query: PhotoQuery;
   onExport: () => void;
+  /** ย่อไฟล์ต้นฉบับในที่เดิม */
+  onShrink: () => void;
   /** ปุ่มเฉพาะหน้า วางก่อนปุ่มส่งออก */
   actions?: ReactNode;
 }
 
 /** แถบเลือกหลายรูป: บอกจำนวนและขอบเขตตลอดเวลา อยู่ท้าย grid โดยไม่บังแถวสุดท้าย */
-export function SelectionBar({ selection, onSelectionChange, loadedIds, total, query, onExport, actions }: SelectionBarProps) {
+export function SelectionBar({ selection, onSelectionChange, loadedIds, total, query, onExport, onShrink, actions }: SelectionBarProps) {
   const count = selectionCount(selection);
   const snapshot = useMutation({
     mutationFn: () => call('create_selection', query),
@@ -65,6 +67,9 @@ export function SelectionBar({ selection, onSelectionChange, loadedIds, total, q
           ล้างที่เลือก
         </Button>
         {actions}
+        <Button icon={<Minimize2 className="size-4" aria-hidden />} onClick={onShrink} data-testid="shrink-button">
+          ย่อไฟล์ต้นฉบับ
+        </Button>
         <Button variant="primary" icon={<Upload className="size-4" aria-hidden />} onClick={onExport} data-testid="export-button">
           ส่งออกสำเนา
         </Button>

@@ -13,7 +13,7 @@ Schema รุ่น 2 — ต้นฉบับคือ [`0001_init.sql`](../cr
 | ภาพย่อ | `~/Library/Caches/com.purivaro.puriphotosearch2/thumbs/<2 ตัวท้ายของ ID>/<revision id>.jpg` | ได้ เมื่อต้นทางพร้อม |
 | ครอปใบหน้า | `~/Library/Caches/com.purivaro.puriphotosearch2/faces/<face id>.jpg` | ได้ เมื่อต้นทางพร้อม |
 | ไฟล์โมเดลใบหน้า | `~/Library/Application Support/com.purivaro.puriphotosearch2/library/models/buffalo_l/` (`det_10g.onnx`, `w600k_r50.onnx`, `verified`) | ได้ — ดาวน์โหลดใหม่ |
-| ไฟล์รูปต้นฉบับ | อยู่ที่เดิมของผู้ใช้ แอปอ่านอย่างเดียว | — |
+| ไฟล์รูปต้นฉบับ | อยู่ที่เดิมของผู้ใช้ แอปอ่านอย่างเดียว — ยกเว้นเมื่อผู้ใช้สั่ง "ย่อไฟล์ต้นฉบับ" (DECISIONS ข้อ 15): แทนด้วยไฟล์ที่ย่อ ต้นฉบับไปถังขยะ | — |
 
 แยกจากข้อมูลของรุ่น Python (`~/Library/Application Support/PuriPhotoSearch/`) ทั้งสองรุ่นไม่เขียนไฟล์เดียวกัน
 debug build ที่ตั้ง `PURI_DATA_DIR` จะใช้โฟลเดอร์นั้นแทน
@@ -43,6 +43,7 @@ debug build ที่ตั้ง `PURI_DATA_DIR` จะใช้โฟลเด
 | งาน | `jobs`, `job_errors` | คิวถาวร, ตัวนับ, ข้อผิดพลาดรายไฟล์ |
 | ส่งออก | `selections`, `selection_items` | snapshot ของ "เลือกผลค้นหาทั้งหมด" |
 | | `export_runs`, `export_items` | ผลรายรูปของการส่งออกแต่ละครั้ง |
+| | `shrink_runs`, `shrink_items` | ผลรายรูปของการย่อไฟล์ต้นฉบับ (สถานะ เหตุผลที่ข้าม ตำแหน่งต้นฉบับในถังขยะ) — DECISIONS ข้อ 15 |
 | บันทึก | `operations` | audit ของการแก้ใบหน้า (ยังไม่มี undo) |
 | | `requests` | ผลของคำสั่งที่มี request ID สำหรับตอบซ้ำเมื่อ retry |
 | view | `v_confirmed` | ใบหน้าที่ยืนยันแล้วและยังมีผล — ที่มาเดียวของจำนวนรูปของบุคคล, กิจกรรมของบุคคล และ "ปรากฏร่วมในภาพ" |

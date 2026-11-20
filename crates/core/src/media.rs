@@ -187,7 +187,7 @@ fn decode_jpeg_scaled(bytes: &[u8], min_edge: u32) -> Option<(DynamicImage, (u32
 }
 
 /// ขนาดเต็ม (ก่อนหมุน) ของไฟล์ JPEG จาก header; None เมื่อไม่ใช่ JPEG
-fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+pub(crate) fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     if !bytes.starts_with(&[0xFF, 0xD8]) {
         return None;
     }
@@ -422,6 +422,11 @@ fn render(base: &DynamicImage, edge: u32, orientation: u8) -> DynamicImage {
         img = DynamicImage::ImageRgb8(flat);
     }
     img
+}
+
+/// จำนวน segment EXIF/โปรไฟล์สีในหัวไฟล์ JPEG — ใช้ตรวจว่าไฟล์ที่ย่อแล้วเก็บข้อมูลกำกับภาพไว้ครบ
+pub(crate) fn metadata_count(bytes: &[u8]) -> usize {
+    metadata_segments(bytes).len()
 }
 
 /// segment EXIF (APP1 "Exif") และโปรไฟล์สี (APP2 "ICC_PROFILE") จากหัวไฟล์ JPEG ต้นฉบับ

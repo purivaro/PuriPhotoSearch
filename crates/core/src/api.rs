@@ -7,7 +7,7 @@
 use crate::error::{AppError, Result};
 use crate::{
     ai, assets, backup, catalog, db, export, faces, import, jobs, legacy, media, people, platform, relink, review,
-    setup, App,
+    setup, shrink, App,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -178,6 +178,19 @@ enum Command {
     GetExportReport {
         job_id: String,
     },
+    PreviewShrink {
+        selection: export::SelectionSpec,
+        resize: export::Resize,
+    },
+    #[serde(rename_all = "camelCase")]
+    StartShrink {
+        plan_id: String,
+        request_id: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    GetShrinkReport {
+        job_id: String,
+    },
     #[serde(rename_all = "camelCase")]
     RevealExportDestination {
         job_id: String,
@@ -295,6 +308,9 @@ pub const COMMAND_NAMES: &[&str] = &[
     "start_export",
     "get_export_report",
     "reveal_export_destination",
+    "preview_shrink",
+    "start_shrink",
+    "get_shrink_report",
     "preview_legacy_import",
     "import_legacy_people",
     "get_setup_state",
@@ -442,6 +458,9 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         PreviewExport { selection, destination, resize } => ok(export::preview(app, &selection, &destination, resize)?),
         StartExport { plan_id, request_id } => ok(export::start(app, &plan_id, &request_id)?),
         GetExportReport { job_id } => ok(export::report(&app.db(), &job_id)?),
+        PreviewShrink { selection, resize } => ok(shrink::preview(app, &selection, resize)?),
+        StartShrink { plan_id, request_id } => ok(shrink::start(app, &plan_id, &request_id)?),
+        GetShrinkReport { job_id } => ok(shrink::report(&app.db(), &job_id)?),
         RevealExportDestination { job_id } => {
             let destination = export::report(&app.db(), &job_id)?.destination;
             ok(platform::reveal(Path::new(&destination))?)
