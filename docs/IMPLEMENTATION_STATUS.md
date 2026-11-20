@@ -63,7 +63,7 @@ PersonQuickView (S05/S08): **ทำแล้ว ทดสอบแล้ว** �
 | W07 Advanced search | บางส่วน — AND/OR, ปรากฏร่วม→AND, ภาษาไทย; ไม่มีค้นด้วยใบหน้าตัวอย่าง |
 | W08 Sources + recovery | บางส่วน — ออฟไลน์/ต่อกลับ, เชื่อมตำแหน่งโฟลเดอร์ใหม่; ไม่มี archive, watcher |
 | W09 Export + backups | บางส่วน — คัดลอกแบบ flat; สำรอง/กู้คืนคลังพร้อม manifest; ไม่มี CSV และ manifest ของการส่งออก |
-| W10 Migration + release | บางส่วน — นำรายชื่อ/กลุ่ม/ใบหน้าตัวอย่างจากฐานจริงเข้าได้; ยังไม่นำรูป/กรอบ/คำปฏิเสธเข้า; เผยแพร่เป็น pre-release `v2.0.0-alpha.10`: ตัวติดตั้ง macOS ที่เซ็น + notarize และตัวติดตั้ง Windows (NSIS, ไม่ได้เซ็น, ยังไม่เคยติดตั้งบนเครื่องจริง) (สร้างโดย workflow `Release` เมื่อ push tag; ยังไม่ได้ลองบนเครื่องอื่น); **อัปเดตในแอป** ทำแล้ว ทดสอบแล้วบน macOS ด้วย debug build ([DECISIONS.md](DECISIONS.md) ข้อ 13) และบน runner Windows — ยังไม่เคยมีรุ่นที่เผยแพร่แล้วอัปเดตตัวเองจริง (แอป alpha.4 ตัวที่เผยแพร่อัปเดตตัวเองเป็น alpha.5 ได้จริงบน macOS — `e2e/update-published.sh`; Windows ยังมีแต่ผลบน runner) |
+| W10 Migration + release | บางส่วน — นำรายชื่อ/กลุ่ม/ใบหน้าตัวอย่างจากฐานจริงเข้าได้; ยังไม่นำรูป/กรอบ/คำปฏิเสธเข้า; เผยแพร่เป็น pre-release `v2.0.0-alpha.11`: ตัวติดตั้ง macOS ที่เซ็น + notarize และตัวติดตั้ง Windows (NSIS, ไม่ได้เซ็น, ยังไม่เคยติดตั้งบนเครื่องจริง) (สร้างโดย workflow `Release` เมื่อ push tag; ยังไม่ได้ลองบนเครื่องอื่น); **อัปเดตในแอป** ทำแล้ว ทดสอบแล้วบน macOS ด้วย debug build ([DECISIONS.md](DECISIONS.md) ข้อ 13) และบน runner Windows — ยังไม่เคยมีรุ่นที่เผยแพร่แล้วอัปเดตตัวเองจริง (แอป alpha.4 ตัวที่เผยแพร่อัปเดตตัวเองเป็น alpha.5 ได้จริงบน macOS — `e2e/update-published.sh`; Windows ยังมีแต่ผลบน runner) |
 
 ## Acceptance matrix T01–T37
 
