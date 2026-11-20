@@ -326,10 +326,14 @@ impl EditParts {
             (a.parametric, a.parametric_split) = (f.parametric, f.parametric_split);
             (a.curve, a.curve_red, a.curve_green, a.curve_blue) =
                 (f.curve.clone(), f.curve_red.clone(), f.curve_green.clone(), f.curve_blue.clone());
+            (a.levels, a.levels_red, a.levels_green, a.levels_blue) =
+                (f.levels, f.levels_red, f.levels_green, f.levels_blue);
+            a.vignette = f.vignette;
         }
         if self.color {
             (a.temperature, a.tint, a.vibrance, a.saturation) = (f.temperature, f.tint, f.vibrance, f.saturation);
             (a.hue, a.sat, a.lum) = (f.hue, f.sat, f.lum);
+            a.grading = f.grading;
         }
         base
     }

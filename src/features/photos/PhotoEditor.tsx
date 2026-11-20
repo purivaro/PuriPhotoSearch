@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Crop, Eye, Info, Palette, RotateCcw, RotateCw, ScanFace, Sun, TriangleAlert, Wand2 } from 'lucide-react';
+import { Crop, Eye, Info, Palette, Pipette, RotateCcw, RotateCw, ScanFace, Sun, TriangleAlert, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
 import { InlineNotice, Spinner } from '@/components/ui/Feedback';
@@ -10,8 +10,8 @@ import { cn } from '@/lib/cn';
 import { errorMessage, formatCount } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
 import type { EditSettings, PhotoDetails, UnitRect } from '@/lib/ipc/types';
-import { NEUTRAL, applyToPixels, autoAdjust, isNeutral, type Adjust, type SliderKey } from './adjust';
-import { HslPanel, SliderRow, ToneCurvePanel } from './AdjustControls';
+import { NEUTRAL, applyToPixels, autoAdjust, histogram, isNeutral, neutralize, type Adjust, type Histogram, type SliderKey } from './adjust';
+import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, SliderRow, ToneCurvePanel, VignettePanel } from './AdjustControls';
 import { EditPresets } from './EditPresets';
 import {
   FULL,
@@ -111,10 +111,13 @@ function useSource(photoId: string) {
   return { source, failed };
 }
 
-/** วาดภาพที่แต่งเฉพาะส่วน `view` (สัดส่วนของกรอบหลังปรับเอียง) ลง canvas ทั้งผืน */
-function paint(canvas: HTMLCanvasElement, source: HTMLCanvasElement, s: EditSettings, view: UnitRect, withAdjust: boolean) {
+/**
+ * วาดภาพที่แต่งเฉพาะส่วน `view` (สัดส่วนของกรอบหลังปรับเอียง) ลง canvas ทั้งผืน
+ * `frame` = canvas นี้คือกรอบหลังตัดทั้งกรอบ (คิด Vignette ได้) · คืนฮิสโตแกรมของภาพที่วาดเมื่อขอ
+ */
+function paint(canvas: HTMLCanvasElement, source: HTMLCanvasElement, s: EditSettings, view: UnitRect, withAdjust: boolean, frame = false, wantHistogram = false): Histogram | null {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return;
+  if (!ctx) return null;
   const r = rotatedSize(source.width, source.height, s.rotate);
   const frameW = canvas.width / view.w;
   const frameH = canvas.height / view.h;
@@ -126,11 +129,26 @@ function paint(canvas: HTMLCanvasElement, source: HTMLCanvasElement, s: EditSett
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(source, (-source.width * k) / 2, (-source.height * k) / 2, source.width * k, source.height * k);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  if (withAdjust && !isNeutral(s.adjust)) {
-    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    applyToPixels(pixels.data, s.adjust);
+  const adjusting = withAdjust && !isNeutral(s.adjust);
+  if (!adjusting && !wantHistogram) return null;
+  const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  if (adjusting) {
+    applyToPixels(pixels.data, s.adjust, frame ? canvas.width : undefined);
     ctx.putImageData(pixels, 0, 0);
   }
+  return wantHistogram ? histogram(pixels.data) : null;
+}
+
+/** ค่าเฉลี่ยของสีรอบจุด (fx, fy) เป็นสัดส่วนของ canvas — รัศมี 2 พิกเซล */
+function sampleAround(canvas: HTMLCanvasElement, fx: number, fy: number): [number, number, number] | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const x = Math.min(Math.max(Math.round(fx * canvas.width) - 2, 0), canvas.width - 5);
+  const y = Math.min(Math.max(Math.round(fy * canvas.height) - 2, 0), canvas.height - 5);
+  const d = ctx.getImageData(x, y, 5, 5).data;
+  const sum = [0, 0, 0];
+  for (let i = 0; i < d.length; i += 4) for (let c = 0; c < 3; c += 1) sum[c]! += d[i + c]!;
+  return sum.map((v) => v / (d.length / 4)) as [number, number, number];
 }
 
 interface PhotoEditorProps {
@@ -151,8 +169,13 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
   const [portrait, setPortrait] = useState(false);
   const [straightening, setStraightening] = useState(false);
   const [before, setBefore] = useState(false);
+  const [hist, setHist] = useState<Histogram | null>(null);
+  // หลอดดูดสี: คลิกจุดที่ควรเป็นสีขาว/เทา เพื่อตั้งอุณหภูมิสีและโทนสี
+  const [picking, setPicking] = useState(false);
   // ชี้ที่ preset: ดูตัวอย่างบนภาพก่อนใช้
   const [previewAdjust, setPreviewAdjust] = useState<Adjust | null>(null);
+  // ค่าที่วาดบนภาพ: ระหว่างชี้ที่ preset ใช้ค่าของ preset (memo ไว้ ไม่ให้วาดซ้ำทุกครั้งที่ฮิสโตแกรมอัปเดต)
+  const shown = useMemo(() => (previewAdjust ? { ...settings, adjust: previewAdjust } : settings), [settings, previewAdjust]);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const { source, failed } = useSource(details.id);
   const dirty = !sameSettings(settings, saved);
@@ -186,13 +209,15 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
       if (event.key === 'Escape' && !confirmDiscard && !nested) {
         event.preventDefault();
         event.stopPropagation();
-        if (dirty) setConfirmDiscard(true);
+        // Esc ระหว่างใช้หลอดดูดสี = เลิกเลือกจุด ไม่ใช่ปิดหน้าแต่งภาพ
+        if (picking) setPicking(false);
+        else if (dirty) setConfirmDiscard(true);
         else onClose();
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [dirty, confirmDiscard, onClose]);
+  }, [dirty, confirmDiscard, onClose, picking]);
 
   const chooseAspect = (a: Aspect, upright = portrait) => {
     setAspect(a);
@@ -251,7 +276,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
         <EditCanvas
           source={source}
           failed={failed}
-          settings={previewAdjust ? { ...settings, adjust: previewAdjust } : settings}
+          settings={shown}
           frameAspect={frameAspect}
           ratio={ratio}
           mode={tab}
@@ -259,6 +284,23 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
           before={before}
           faces={faces}
           onCrop={(next) => setSettings((s) => ({ ...s, crop: next }))}
+          onHistogram={setHist}
+          picking={picking}
+          onPick={(fx, fy) => {
+            setPicking(false);
+            if (!source) return;
+            // สีของจุดนั้นก่อนปรับแสงสี (วาดส่วนที่เห็นแบบไม่ปรับ แล้วเฉลี่ยรอบจุด)
+            const probe = document.createElement('canvas');
+            const crop = settings.crop ?? FULL;
+            const aspectNow = (frameAspect * crop.w) / crop.h;
+            probe.width = aspectNow >= 1 ? 800 : Math.max(1, Math.round(800 * aspectNow));
+            probe.height = aspectNow >= 1 ? Math.max(1, Math.round(800 / aspectNow)) : 800;
+            paint(probe, source, settings, crop, false);
+            const rgb = sampleAround(probe, fx, fy);
+            if (!rgb) return;
+            setAdjust(neutralize(...rgb));
+            toast.success('ตั้งสมดุลแสงขาวจากจุดที่เลือกแล้ว');
+          }}
         />
 
         <aside aria-label="เครื่องมือแต่งภาพ" className="flex w-[312px] shrink-0 flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-card">
@@ -267,6 +309,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
               value={tab}
               onChange={(next) => {
                 setPreviewAdjust(null);
+                setPicking(false);
                 setTab(next);
               }}
               items={[
@@ -383,6 +426,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
               </>
             ) : tab === 'light' ? (
               <>
+                <HistogramView data={hist} />
                 <div className="flex gap-1.5">
                   <Button size="sm" icon={<Wand2 className="size-4" aria-hidden />} onClick={auto} disabled={!source} className="flex-1" data-testid="editor-auto">
                     ปรับอัตโนมัติ
@@ -392,9 +436,31 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
                   </Button>
                 </div>
                 <SliderGroup title="แสง" icon={<Sun className="size-4 text-muted" aria-hidden />} specs={LIGHT} adjust={settings.adjust} onChange={setAdjust} />
+                <LevelsPanel adjust={settings.adjust} onChange={setAdjust} />
                 <ToneCurvePanel adjust={settings.adjust} onChange={setAdjust} />
-                <SliderGroup title="สี" icon={<Palette className="size-4 text-muted" aria-hidden />} specs={COLOR} adjust={settings.adjust} onChange={setAdjust} />
+                <SliderGroup
+                  title="สี"
+                  icon={<Palette className="size-4 text-muted" aria-hidden />}
+                  specs={COLOR}
+                  adjust={settings.adjust}
+                  onChange={setAdjust}
+                  action={
+                    <Button
+                      size="sm"
+                      variant={picking ? 'primary' : 'ghost'}
+                      icon={<Pipette className="size-4" aria-hidden />}
+                      disabled={!source}
+                      onClick={() => setPicking((v) => !v)}
+                      aria-pressed={picking}
+                      data-testid="editor-wb-picker"
+                    >
+                      {picking ? 'คลิกจุดสีเทาบนภาพ' : 'หลอดดูดสี'}
+                    </Button>
+                  }
+                />
                 <HslPanel adjust={settings.adjust} onChange={setAdjust} />
+                <ColorGradingPanel adjust={settings.adjust} onChange={setAdjust} />
+                <VignettePanel adjust={settings.adjust} onChange={setAdjust} />
                 <BeforeButton disabled={isNeutral(settings.adjust)} onHold={setBefore} />
               </>
             ) : (
@@ -432,13 +498,31 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
   );
 }
 
-function SliderGroup({ title, icon, specs, adjust, onChange }: { title: string; icon?: React.ReactNode; specs: SliderSpec[]; adjust: Adjust; onChange: (patch: Partial<Adjust>) => void }) {
+function SliderGroup({
+  title,
+  icon,
+  specs,
+  adjust,
+  onChange,
+  action,
+}: {
+  title: string;
+  icon?: React.ReactNode;
+  specs: SliderSpec[];
+  adjust: Adjust;
+  onChange: (patch: Partial<Adjust>) => void;
+  /** ปุ่มเสริมท้ายหัวข้อ */
+  action?: React.ReactNode;
+}) {
   return (
     <section>
-      <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-ink">
-        {icon}
-        {title}
-      </h3>
+      <div className="mb-2 flex min-h-8 items-center justify-between gap-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-ink">
+          {icon}
+          {title}
+        </h3>
+        {action}
+      </div>
       <div className="space-y-3">
         {specs.map((spec) => (
           <SliderRow
@@ -489,10 +573,15 @@ interface EditCanvasProps {
   before: boolean;
   faces: { face: PhotoDetails['faces'][number]; box: UnitRect; cut: boolean }[];
   onCrop: (crop: UnitRect) => void;
+  /** ฮิสโตแกรมของภาพที่แสดงหลังวาดแต่ละครั้ง */
+  onHistogram: (h: Histogram | null) => void;
+  /** โหมดหลอดดูดสี: คลิกบนภาพแล้วส่งตำแหน่ง (สัดส่วนของภาพที่แสดง) */
+  picking: boolean;
+  onPick: (fx: number, fy: number) => void;
 }
 
 /** ตัวอย่างภาพที่แต่ง: แท็บตัดและหมุนแสดงทั้งกรอบพร้อมกรอบตัดที่ลากได้ · แท็บแสงและสีแสดงเฉพาะส่วนที่ตัดพร้อมแสงสี */
-function EditCanvas({ source, failed, settings, frameAspect, ratio, mode, straightening, before, faces, onCrop }: EditCanvasProps) {
+function EditCanvas({ source, failed, settings, frameAspect, ratio, mode, straightening, before, faces, onCrop, onHistogram, picking, onPick }: EditCanvasProps) {
   const area = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -529,9 +618,9 @@ function EditCanvas({ source, failed, settings, frameAspect, ratio, mode, straig
         el.width = w;
         el.height = h;
       }
-      paint(el, source, settings, view, !before);
+      onHistogram(paint(el, source, settings, view, !before, mode !== 'crop', true));
     });
-  }, [source, settings, view, before, boxW, boxH]);
+  }, [source, settings, view, before, boxW, boxH, mode, onHistogram]);
   useEffect(() => {
     redraw();
     return () => cancelAnimationFrame(frame.current);
@@ -563,6 +652,18 @@ function EditCanvas({ source, failed, settings, frameAspect, ratio, mode, straig
       {source && boxW > 0 && (
         <div className="relative" style={{ width: boxW, height: boxH }} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
           <canvas ref={canvas} className="absolute inset-0 size-full" aria-label="ตัวอย่างภาพที่แต่ง" data-testid="editor-preview" />
+          {picking && mode !== 'crop' && (
+            <button
+              type="button"
+              aria-label="คลิกจุดที่ควรเป็นสีขาวหรือสีเทา"
+              className="absolute inset-0 cursor-crosshair"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                onPick((e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+              }}
+              data-testid="editor-wb-target"
+            />
+          )}
           {mode === 'crop' && (
             <>
               {straightening && (
@@ -624,6 +725,11 @@ function EditCanvas({ source, failed, settings, frameAspect, ratio, mode, straig
       )}
       {before && (
         <p className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-[13px] font-semibold text-white">ก่อนปรับแสงและสี</p>
+      )}
+      {picking && mode !== 'crop' && (
+        <p className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 rounded-full bg-black/75 px-3 py-1 text-[13px] font-semibold text-white">
+          คลิกจุดที่ควรเป็นสีขาวหรือสีเทา · Esc เพื่อยกเลิก
+        </p>
       )}
     </div>
   );
