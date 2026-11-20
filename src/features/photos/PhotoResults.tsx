@@ -4,6 +4,7 @@ import { useViewer } from '@/app/navigation';
 import { ErrorState, LoadingBlock } from '@/components/ui/Feedback';
 import { ExportDialog } from '@/features/export/ExportDialog';
 import { ShrinkDialog } from '@/features/export/ShrinkDialog';
+import { ApplyPresetDialog } from './ApplyPresetDialog';
 import { PasteEditDialog } from './PasteEditDialog';
 import type { Coverage, PhotoResult } from '@/lib/ipc/types';
 import { usePhotoList, type PhotoQuery } from '@/lib/queries';
@@ -50,6 +51,7 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
   const [exporting, setExporting] = useState(false);
   const [shrinking, setShrinking] = useState(false);
   const [pasting, setPasting] = useState(false);
+  const [applyingPreset, setApplyingPreset] = useState(false);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
@@ -146,6 +148,7 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
         onExport={() => setExporting(true)}
         onShrink={() => setShrinking(true)}
         onPasteEdit={() => setPasting(true)}
+        onApplyPreset={() => setApplyingPreset(true)}
         actions={selectionActions?.({
           photos: selection.kind === 'explicit' ? list.items.filter((p) => selection.ids.has(p.id)) : null,
           clear: () => setSelection(EMPTY_SELECTION),
@@ -154,6 +157,7 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
       <ExportDialog open={exporting} onOpenChange={setExporting} selection={toSelectionSpec(selection)} count={count} previewPhotoId={previewPhotoId} />
       <ShrinkDialog open={shrinking} onOpenChange={setShrinking} selection={toSelectionSpec(selection)} count={count} />
       <PasteEditDialog open={pasting} onOpenChange={setPasting} selection={toSelectionSpec(selection)} count={count} />
+      <ApplyPresetDialog open={applyingPreset} onOpenChange={setApplyingPreset} selection={toSelectionSpec(selection)} count={count} />
     </>
   );
 }

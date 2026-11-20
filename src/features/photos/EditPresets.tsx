@@ -19,8 +19,17 @@ import { IDENTITY } from './editGeometry';
 const PRESETS_KEY = ['edit-presets'] as const;
 const collator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
 
+/** preset ทั้งหมด เรียงแบบพจนานุกรมไทย (สระนำ ใ ไ เ แ โ นับตามพยัญชนะ) และตัวเลขตามค่า */
+export function usePresets() {
+  return useQuery({
+    queryKey: PRESETS_KEY,
+    queryFn: () => call('list_edit_presets', {}),
+    select: (list) => [...list].sort((a, b) => collator.compare(a.name, b.name)),
+  });
+}
+
 /** สรุปค่าใน preset (แสง · สี) */
-function summary(adjust: Adjust): string {
+export function presetSummary(adjust: Adjust): string {
   const d = describeEdit({ ...IDENTITY, adjust });
   return [d.light, d.color].filter(Boolean).join(' · ');
 }
@@ -37,7 +46,7 @@ interface EditPresetsProps {
 export function EditPresets({ adjust, onApply, onPreview }: EditPresetsProps) {
   const qc = useQueryClient();
   const choose = useFolderChooser();
-  const presets = useQuery({ queryKey: PRESETS_KEY, queryFn: () => call('list_edit_presets', {}) });
+  const presets = usePresets();
   const [naming, setNaming] = useState<{ mode: 'save' } | { mode: 'rename'; preset: EditPreset } | null>(null);
   const [deleting, setDeleting] = useState<EditPreset | null>(null);
   const [imported, setImported] = useState<EditPreset | null>(null);
@@ -92,8 +101,7 @@ export function EditPresets({ adjust, onApply, onPreview }: EditPresetsProps) {
     if (path) importXmp.mutate(path);
   };
 
-  // เรียงแบบพจนานุกรมไทย (สระนำ ใ ไ เ แ โ นับตามพยัญชนะ) และตัวเลขตามค่า
-  const list = [...(presets.data ?? [])].sort((a, b) => collator.compare(a.name, b.name));
+  const list = presets.data ?? [];
   const canSave = !isNeutral(adjust);
 
   return (
@@ -184,7 +192,7 @@ export function EditPresets({ adjust, onApply, onPreview }: EditPresetsProps) {
         key={naming ? (naming.mode === 'rename' ? naming.preset.id : 'save') : 'closed'}
         open={naming !== null}
         title={naming?.mode === 'rename' ? 'เปลี่ยนชื่อ preset' : 'บันทึกเป็น preset'}
-        description={naming?.mode === 'save' ? summary(adjust) || undefined : undefined}
+        description={naming?.mode === 'save' ? presetSummary(adjust) || undefined : undefined}
         initial={naming?.mode === 'rename' ? naming.preset.name : ''}
         confirmLabel={naming?.mode === 'rename' ? 'เปลี่ยนชื่อ' : 'บันทึก preset'}
         busy={save.isPending || rename.isPending}
@@ -228,7 +236,7 @@ export function EditPresets({ adjust, onApply, onPreview }: EditPresetsProps) {
           <div className="space-y-3" data-testid="preset-imported">
             <div>
               <p className="text-sm font-semibold text-ink">นำเข้าได้</p>
-              <p className="mt-0.5 text-[13px] text-muted">{summary(imported.adjust)}</p>
+              <p className="mt-0.5 text-[13px] text-muted">{presetSummary(imported.adjust)}</p>
             </div>
             {imported.unsupported.length > 0 && (
               <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />}>
