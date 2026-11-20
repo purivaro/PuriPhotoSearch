@@ -41,7 +41,8 @@ struct Inner {
     pending: Option<(Update, Vec<u8>)>,
 }
 
-const BUSY: [&str; 4] = ["checking", "downloading", "ready", "installing"];
+/// สถานะที่ถามเซิร์ฟเวอร์ซ้ำไม่ได้ — `ready` ถามได้: ระหว่างรอผู้ใช้กดติดตั้ง อาจมีรุ่นที่ใหม่กว่าออกมาอีก
+const BUSY: [&str; 3] = ["checking", "downloading", "installing"];
 
 fn supported() -> bool {
     !cfg!(debug_assertions) || std::env::var_os("PURI_UPDATE_ENDPOINT").is_some()
@@ -99,8 +100,12 @@ async fn find(app: &AppHandle) -> Result<Option<Update>, Error> {
     builder.build()?.check().await
 }
 
+/// รุ่นที่ดาวน์โหลดไว้แล้วกับสถานะของมัน — เก็บไว้ระหว่างดาวน์โหลดรุ่นที่ใหม่กว่า
+type Fallback = (Update, Vec<u8>, UpdateStatus);
+
 /// ดาวน์โหลดเบื้องหลังจนพร้อมติดตั้ง (`Update::download` ตรวจลายเซ็นก่อนคืนไฟล์)
-fn download(app: AppHandle, update: Update) {
+/// ดาวน์โหลดไม่สำเร็จและมีรุ่นที่รอติดตั้งอยู่ก่อน (`fallback`): กลับไปเสนอรุ่นนั้นตามเดิม ไม่ทิ้งให้ผู้ใช้ไม่มีอะไรให้กด
+fn download(app: AppHandle, update: Update, fallback: Option<Fallback>) {
     tauri::async_runtime::spawn(async move {
         let mut downloaded = 0u64;
         let mut reported = 0u64;
@@ -123,9 +128,15 @@ fn download(app: AppHandle, update: Update) {
                 inner(&app).pending = Some((update, bytes));
                 set(&app, |s| s.state = "ready");
             }
-            Err(e) => {
-                set(&app, |s| (s.state, s.message) = ("failed", Some(describe(&e))));
-            }
+            Err(e) => match fallback {
+                Some((previous, bytes, status)) => {
+                    inner(&app).pending = Some((previous, bytes));
+                    set(&app, |s| *s = status);
+                }
+                None => {
+                    set(&app, |s| (s.state, s.message) = ("failed", Some(describe(&e))));
+                }
+            },
         }
     });
 }
@@ -136,18 +147,51 @@ pub fn update_status(app: AppHandle) -> UpdateStatus {
 }
 
 /// ตรวจหารุ่นใหม่; พบแล้วเริ่มดาวน์โหลดเบื้องหลังเอง คืนสถานะหลังตรวจเสร็จ (ไม่รอดาวน์โหลด)
+///
+/// ถ้ามีรุ่นที่ดาวน์โหลดไว้รอติดตั้งอยู่แล้ว (`ready`) ถามเงียบ ๆ ไม่เปลี่ยนสถานะที่ผู้ใช้เห็น:
+/// พบรุ่นที่ใหม่กว่า → ทิ้งรุ่นที่รอไว้แล้วดาวน์โหลดรุ่นล่าสุดแทน ผู้ใช้จึงอัปเดตไปรุ่นล่าสุดได้ในครั้งเดียว ไม่ต้องไล่ทีละรุ่น
 #[tauri::command]
 pub async fn update_check(app: AppHandle) -> UpdateStatus {
-    {
+    let waiting = {
         let mut guard = inner(&app);
         if !supported() || BUSY.contains(&guard.status.state) {
             return guard.status.clone();
         }
-        guard.status.state = "checking";
-        guard.status.message = None;
+        let waiting = guard.status.state == "ready";
+        if !waiting {
+            guard.status.state = "checking";
+            guard.status.message = None;
+        }
+        waiting
+    };
+    if !waiting {
+        set(&app, |_| {});
     }
-    set(&app, |_| {});
-    match find(&app).await {
+    let found = find(&app).await;
+    let mut fallback = None;
+    if waiting {
+        let mut guard = inner(&app);
+        // ระหว่างถาม ผู้ใช้อาจกดติดตั้งไปแล้ว: ไม่แตะสถานะนั้น
+        if guard.status.state != "ready" {
+            return guard.status.clone();
+        }
+        let newer = match &found {
+            Ok(Some(update)) => guard.pending.as_ref().is_some_and(|(pending, _)| pending.version != update.version),
+            // ถามไม่ได้ หรือเซิร์ฟเวอร์ไม่มีรุ่นที่ใหม่กว่า: รุ่นที่รอไว้ยังติดตั้งได้ตามเดิม
+            _ => false,
+        };
+        if !newer {
+            drop(guard);
+            return set(&app, |s| {
+                if found.is_ok() {
+                    s.checked_at = Some(now_ms());
+                }
+            });
+        }
+        let status = guard.status.clone();
+        fallback = guard.pending.take().map(|(previous, bytes)| (previous, bytes, status));
+    }
+    match found {
         // รุ่นที่เคยพบแต่ดาวน์โหลดไม่สำเร็จอาจถูกถอนไปแล้ว: ไม่ค้างเลขรุ่นนั้นไว้
         Ok(None) => set(&app, |s| {
             (s.state, s.checked_at) = ("up_to_date", Some(now_ms()));
@@ -155,12 +199,12 @@ pub async fn update_check(app: AppHandle) -> UpdateStatus {
         }),
         Ok(Some(update)) => {
             let status = set(&app, |s| {
-                s.state = "downloading";
+                (s.state, s.message) = ("downloading", None);
                 s.version = Some(update.version.clone());
                 s.notes = update.body.clone().filter(|notes| !notes.trim().is_empty());
                 (s.downloaded, s.total, s.checked_at) = (0, None, Some(now_ms()));
             });
-            download(app, update);
+            download(app, update, fallback);
             status
         }
         Err(e) => set(&app, |s| (s.state, s.message) = ("failed", Some(describe(&e)))),

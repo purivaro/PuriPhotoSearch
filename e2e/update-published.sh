@@ -67,7 +67,10 @@ dialog=$(seen)
 printf '%s\n' "$dialog" | grep -A8 "อัปเดตเป็นรุ่น" | sed 's/^/      /' || true
 has "$dialog" "อัปเดตเป็นรุ่น $NEW" || fail "กล่องยืนยันไม่ได้บอกรุ่น $NEW"
 old_pid=$(pid)
-press "$old_pid" "อัปเดตและเปิดใหม่" >/dev/null || fail "กดปุ่ม “อัปเดตและเปิดใหม่” ไม่ได้"
+# กล่องยืนยันเพิ่งเปิด: ต้นไม้ accessibility อาจยังไม่มีปุ่มนั้นในการถามครั้งแรก จึงลองซ้ำ
+pressed=""
+for _ in 1 2 3 4 5; do if press "$old_pid" "อัปเดตและเปิดใหม่" >/dev/null 2>&1; then pressed=1; break; fi; sleep 1; done
+[ -n "$pressed" ] || fail "กดปุ่ม “อัปเดตและเปิดใหม่” ไม่ได้"
 echo "  · กด “อัปเดตและเปิดใหม่”"
 for _ in $(seq 1 60); do
   sleep 1
