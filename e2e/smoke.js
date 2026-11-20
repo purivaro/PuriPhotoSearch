@@ -269,7 +269,9 @@
     await waitFor(() => tids('preset-item').some((b) => b.getAttribute('aria-pressed') === 'true'), 'preset ที่นำเข้าถูกใช้อยู่');
     // ปรับเพิ่มแล้วบันทึกเป็น preset ของตัวเอง
     await click(tid('editor-tab-light'), 'แท็บแสงและสี');
-    await click(tid('editor-hsl-toggle'), 'เปิดส่วน HSL');
+    // preset ที่ใช้อยู่มีค่า HSL ส่วนนี้จึงเปิดเองแล้ว (เปิดเฉพาะเมื่อยังพับอยู่)
+    if (tid('editor-hsl-toggle').getAttribute('aria-expanded') !== 'true') await click(tid('editor-hsl-toggle'), 'เปิดส่วน HSL');
+    expect(tid('editor-hsl-toggle').getAttribute('aria-expanded') === 'true', 'ส่วน HSL เปิดเองเมื่อมีค่าที่ปรับไว้');
     await type(await see('editor-hsl-lum-1'), '45');
     await click(tid('editor-tab-presets'), 'แท็บ Preset');
     await click(await see('preset-save'), 'บันทึกค่าปัจจุบัน');
