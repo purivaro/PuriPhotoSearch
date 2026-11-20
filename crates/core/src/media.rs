@@ -286,9 +286,304 @@ pub fn write_cache_file(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+// ───────────────────────── ย่อรูปตอนส่งออก ─────────────────────────
+
+/// คุณภาพ JPEG ของสำเนาที่ย่อ: สูงพอที่ดูด้วยตาแยกจากต้นฉบับไม่ออก
+const EXPORT_QUALITY: u8 = 90;
+/// คุณภาพสูงสุดเมื่อไล่ใช้งบขนาดไฟล์ที่เหลือให้คุ้ม
+const EXPORT_QUALITY_MAX: u8 = 95;
+/// ด้านยาวเล็กสุดที่ยอมย่อลงไปเพื่อให้ได้ขนาดไฟล์ตามที่ขอ ต่ำกว่านี้รูปใช้งานไม่ได้แล้ว
+const MIN_FIT_EDGE: u32 = 200;
+/// ไบต์ต่อพิกเซลโดยเฉลี่ยของรูปถ่ายเมื่อบันทึกเป็น JPEG คุณภาพ 90 (วัดจากรูปกิจกรรมจริง 12 รูป: 0.19–0.25)
+pub const BYTES_PER_PIXEL_GUESS: f64 = 0.22;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fit {
+    /// ด้านยาวไม่เกินกี่พิกเซล (ไม่ขยายรูปที่เล็กกว่า)
+    LongEdge(u32),
+    /// ขนาดไฟล์ไม่เกินกี่ไบต์
+    MaxBytes(u64),
+}
+
+/// สำเนา JPEG ที่ย่อแล้วจาก bytes ของต้นฉบับ: หมุนให้ตั้งตรงแล้ว และเก็บ EXIF (วันถ่าย กล้อง ฯลฯ)
+/// กับโปรไฟล์สีของต้นฉบับไว้ เพื่อให้แอปรูปภาพอื่นเรียงวันที่และแสดงสีถูก
+///
+/// ขนาดไฟล์ (แนวทางเดียวกับ PuriSlim): ย่อขนาดภาพโดยคงคุณภาพสูงไว้ แล้วจึงไล่เพิ่มคุณภาพให้เต็มงบ
+/// — ให้รูปคมกว่าการกดคุณภาพ JPEG ลงอย่างเดียว
+pub fn export_jpeg(bytes: &[u8], fit: Fit) -> Result<Vec<u8>> {
+    let orientation = read_exif(bytes).orientation;
+    let mut meta = metadata_segments(bytes);
+    match fit {
+        Fit::LongEdge(edge) => {
+            let base = decode_for_export(bytes, edge)?;
+            let img = render(&base, edge, orientation);
+            Ok(splice_metadata(&encode_jpeg(&img, EXPORT_QUALITY)?, &meta))
+        }
+        Fit::MaxBytes(max) => {
+            // EXIF ที่ใหญ่ผิดปกติ (เช่น maker note ยาว) กินงบเกินควรเมื่อขอไฟล์เล็กมาก: ยอมตัดข้อมูลแทนการย่อภาพจนเสีย
+            let mut meta_len: u64 = meta.iter().map(|s| s.len() as u64).sum();
+            if meta_len > max / 4 {
+                meta.clear();
+                meta_len = 0;
+            }
+            let budget = (max - meta_len) as usize;
+            let (full_w, full_h) = match jpeg_dimensions(bytes) {
+                Some(dims) => dims,
+                None => ImageReader::new(Cursor::new(bytes))
+                    .with_guessed_format()
+                    .map_err(decode_error)?
+                    .into_dimensions()
+                    .map_err(decode_error)?,
+            };
+            let full_long = full_w.max(full_h);
+            // เดาจำนวนพิกเซลแรกจากอัตราไบต์ต่อพิกเซลของ JPEG คุณภาพ 90 กับรูปถ่ายทั่วไป
+            // (เดาจากขนาดไฟล์ต้นฉบับไม่ได้ เพราะกล้องแต่ละรุ่นบีบอัดต่างกันหลายเท่า)
+            let full_px = full_w as f64 * full_h as f64;
+            let ratio = (budget as f64 / BYTES_PER_PIXEL_GUESS / full_px.max(1.0)).sqrt().min(1.0);
+            let mut target = ((full_long as f64 * ratio) as u32).clamp(MIN_FIT_EDGE.min(full_long), full_long);
+            // ถอดเผื่อไว้ครึ่งเท่าของค่าที่เดา เผื่อขยายขึ้นได้เมื่อเดาต่ำไป (ไม่ถอดเต็มทุกพิกเซลโดยไม่จำเป็น)
+            let base = decode_for_export(bytes, (target.saturating_mul(3) / 2).min(full_long))?;
+            let base_long = base.width().max(base.height());
+            target = target.min(base_long);
+
+            // หาด้านยาวที่ใหญ่ที่สุดที่ยังไม่เกินงบ: เดาจากสัดส่วนขนาดไฟล์ ถ้าค่าที่เดาหลุดช่วง
+            // [ด้านที่พอดี, ด้านที่เกินงบ] ให้แบ่งครึ่งช่วงแทน
+            let mut best: Option<(u32, DynamicImage, Vec<u8>)> = None;
+            let mut too_big = base_long + 1;
+            for _ in 0..8 {
+                let img = render(&base, target, orientation);
+                let out = encode_jpeg(&img, EXPORT_QUALITY)?;
+                let len = out.len();
+                if len <= budget {
+                    best = Some((target, img, out));
+                } else {
+                    too_big = target;
+                }
+                let fits_at = best.as_ref().map_or(0, |b| b.0);
+                // ใช้งบเกือบเต็มแล้ว หรือช่วงที่เหลือแคบกว่า 5%: พอแล้ว
+                if (len <= budget && len * 100 >= budget * 85)
+                    || (fits_at > 0 && too_big.saturating_sub(fits_at) <= fits_at / 20)
+                {
+                    break;
+                }
+                let guess = (target as f64 * (budget as f64 / len as f64).sqrt() * 0.97) as u32;
+                let next = if guess > fits_at && guess < too_big { guess } else { (fits_at + too_big) / 2 };
+                let next = next.min(base_long);
+                if next <= fits_at || next >= too_big {
+                    break;
+                }
+                if best.is_none() && next < MIN_FIT_EDGE {
+                    return Err(AppError::invalid("ขนาดไฟล์ที่ตั้งไว้เล็กเกินไปสำหรับรูปนี้ ลองตั้งให้ใหญ่ขึ้น"));
+                }
+                target = next;
+            }
+            let (_, img, mut out) =
+                best.ok_or_else(|| AppError::invalid("ย่อรูปนี้ให้ได้ขนาดไฟล์ตามที่ตั้งไว้ไม่สำเร็จ ลองตั้งให้ใหญ่ขึ้น"))?;
+            // ได้ขนาดภาพแล้ว: หาคุณภาพสูงสุดที่ยังไม่เกินงบ
+            let (mut lo, mut hi) = (EXPORT_QUALITY + 1, EXPORT_QUALITY_MAX);
+            while lo <= hi {
+                let mid = (lo + hi) / 2;
+                let candidate = encode_jpeg(&img, mid)?;
+                if candidate.len() <= budget {
+                    out = candidate;
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            Ok(splice_metadata(&out, &meta))
+        }
+    }
+}
+
+/// ถอดรหัสให้ได้ภาพที่ด้านยาวอย่างน้อย `edge` (JPEG ใช้การย่อระหว่างถอด ไม่ต้องถอดทุกพิกเซล)
+fn decode_for_export(bytes: &[u8], edge: u32) -> Result<DynamicImage> {
+    match decode_jpeg_scaled(bytes, edge) {
+        Some((img, _)) => Ok(img),
+        None => decode(bytes),
+    }
+}
+
+/// ย่อให้ด้านยาวไม่เกิน `edge` (ไม่ขยาย) หมุนให้ตั้งตรง และปูพื้นขาวใต้ส่วนโปร่งใส (JPEG ไม่มีความโปร่งใส)
+fn render(base: &DynamicImage, edge: u32, orientation: u8) -> DynamicImage {
+    let mut img = if base.width().max(base.height()) > edge {
+        base.resize(edge, edge, image::imageops::FilterType::Lanczos3)
+    } else {
+        base.clone()
+    };
+    orient(&mut img, orientation);
+    if img.color().has_alpha() {
+        let rgba = img.to_rgba8();
+        let flat = image::RgbImage::from_fn(rgba.width(), rgba.height(), |x, y| {
+            let [r, g, b, a] = rgba.get_pixel(x, y).0;
+            let mix = |c: u8| ((c as u32 * a as u32 + 255 * (255 - a as u32)) / 255) as u8;
+            image::Rgb([mix(r), mix(g), mix(b)])
+        });
+        img = DynamicImage::ImageRgb8(flat);
+    }
+    img
+}
+
+/// segment EXIF (APP1 "Exif") และโปรไฟล์สี (APP2 "ICC_PROFILE") จากหัวไฟล์ JPEG ต้นฉบับ
+/// EXIF ถูกแก้ Orientation เป็น 1 เพราะภาพที่เขียนใหม่หมุนตั้งตรงแล้ว (ไม่งั้นแอปอื่นจะหมุนซ้ำ)
+fn metadata_segments(src: &[u8]) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    if !src.starts_with(&[0xFF, 0xD8]) {
+        return out;
+    }
+    let (mut i, mut has_exif) = (2usize, false);
+    while i + 4 <= src.len() && src[i] == 0xFF {
+        let marker = src[i + 1];
+        if marker == 0xFF {
+            i += 1; // fill byte
+            continue;
+        }
+        // SOS / EOI: หมดส่วนหัวแล้ว
+        if marker == 0xDA || marker == 0xD9 {
+            break;
+        }
+        let len = u16::from_be_bytes([src[i + 2], src[i + 3]]) as usize;
+        if len < 2 || i + 2 + len > src.len() {
+            break;
+        }
+        let segment = &src[i..i + 2 + len];
+        let payload = &segment[4..];
+        if marker == 0xE1 && payload.starts_with(b"Exif\0\0") && !has_exif {
+            let mut seg = segment.to_vec();
+            set_orientation_upright(&mut seg[10..]);
+            out.push(seg);
+            has_exif = true;
+        } else if marker == 0xE2 && payload.starts_with(b"ICC_PROFILE\0") {
+            out.push(segment.to_vec());
+        }
+        i += 2 + len;
+    }
+    out
+}
+
+/// แก้ค่า Orientation (tag 0x0112) ใน IFD0 ของข้อมูล TIFF/EXIF เป็น 1 ถ้ามี
+fn set_orientation_upright(tiff: &mut [u8]) {
+    let le = match tiff.get(0..2) {
+        Some(b"II") => true,
+        Some(b"MM") => false,
+        _ => return,
+    };
+    let u16_at = |b: &[u8], o: usize| -> Option<u16> {
+        let v = [*b.get(o)?, *b.get(o + 1)?];
+        Some(if le { u16::from_le_bytes(v) } else { u16::from_be_bytes(v) })
+    };
+    let Some(ifd) = tiff.get(4..8).map(|v| {
+        let v = [v[0], v[1], v[2], v[3]];
+        (if le { u32::from_le_bytes(v) } else { u32::from_be_bytes(v) }) as usize
+    }) else {
+        return;
+    };
+    let Some(count) = u16_at(tiff, ifd) else { return };
+    for k in 0..count as usize {
+        let entry = ifd + 2 + 12 * k;
+        if entry + 12 > tiff.len() {
+            return;
+        }
+        // tag 0x0112 ชนิด SHORT (3) จำนวน 1: ค่าอยู่ใน 2 ไบต์แรกของช่องค่า
+        if u16_at(tiff, entry) == Some(0x0112) && u16_at(tiff, entry + 2) == Some(3) {
+            let one = if le { 1u16.to_le_bytes() } else { 1u16.to_be_bytes() };
+            tiff[entry + 8..entry + 10].copy_from_slice(&one);
+            return;
+        }
+    }
+}
+
+/// วาง segment ของต้นฉบับต่อจาก SOI ของไฟล์ที่เข้ารหัสใหม่ (ตัด JFIF APP0 ของตัวเข้ารหัสออก
+/// เพราะมาตรฐาน EXIF ให้ APP1 ตามหลัง SOI ทันที)
+fn splice_metadata(encoded: &[u8], segments: &[Vec<u8>]) -> Vec<u8> {
+    if segments.is_empty() || !encoded.starts_with(&[0xFF, 0xD8]) {
+        return encoded.to_vec();
+    }
+    let mut rest = 2;
+    if encoded.len() > 6 && encoded[2] == 0xFF && encoded[3] == 0xE0 {
+        rest += 2 + u16::from_be_bytes([encoded[4], encoded[5]]) as usize;
+    }
+    let mut out = Vec::with_capacity(encoded.len() + segments.iter().map(Vec::len).sum::<usize>());
+    out.extend_from_slice(&encoded[..2]);
+    for s in segments {
+        out.extend_from_slice(s);
+    }
+    out.extend_from_slice(&encoded[rest.min(encoded.len())..]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// JPEG ขนาด w×h ที่มี EXIF (Orientation + DateTimeOriginal) และ ICC segment ปลอม
+    fn camera_jpeg(w: u32, h: u32, orientation: u16) -> Vec<u8> {
+        // ลายละเอียดสุ่มเทียม ให้ขนาดไฟล์ใกล้รูปจริงกว่าสีเรียบ
+        let mut seed = 12345u32;
+        let img = image::RgbImage::from_fn(w, h, |x, y| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            let n = (seed >> 24) as u8 / 4;
+            image::Rgb([(x * 255 / w) as u8 ^ n, (y * 255 / h) as u8, n.wrapping_mul(3)])
+        });
+        let plain = encode_jpeg(&DynamicImage::ImageRgb8(img), 96).unwrap();
+        let mut tiff: Vec<u8> = b"II*\0".to_vec();
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.extend_from_slice(&2u16.to_le_bytes());
+        let entry = |tag: u16, typ: u16, count: u32, value: u32| {
+            [tag.to_le_bytes().as_slice(), &typ.to_le_bytes(), &count.to_le_bytes(), &value.to_le_bytes()].concat()
+        };
+        tiff.extend(entry(0x0112, 3, 1, orientation as u32));
+        tiff.extend(entry(0x8769, 4, 1, 38));
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        // Exif IFD: DateTimeOriginal
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend(entry(0x9003, 2, 20, 56));
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(b"2026:11:18 10:20:30\0");
+        let app1 = [b"Exif\0\0".as_slice(), &tiff].concat();
+        let icc = [b"ICC_PROFILE\0\x01\x01".as_slice(), &[7u8; 64]].concat();
+        let mut out = plain[..2].to_vec();
+        for (marker, payload) in [(0xE1u8, &app1), (0xE2, &icc)] {
+            out.extend_from_slice(&[0xFF, marker]);
+            out.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+            out.extend_from_slice(payload);
+        }
+        out.extend_from_slice(&plain[2..]);
+        out
+    }
+
+    #[test]
+    fn export_by_long_edge_keeps_date_and_colour_profile_and_stands_upright() {
+        // ต้นฉบับ 1200×800 ที่กล้องบอกให้หมุน 90° (orientation 6): ภาพจริงเป็นแนวตั้ง 800×1200
+        let src = camera_jpeg(1200, 800, 6);
+        let out = export_jpeg(&src, Fit::LongEdge(600)).unwrap();
+        let img = image::load_from_memory(&out).unwrap();
+        assert_eq!((img.width(), img.height()), (400, 600), "ด้านยาวตามที่ขอ และหมุนตั้งตรงแล้ว");
+        let exif = read_exif(&out);
+        assert_eq!(exif.orientation, 1, "ไม่ให้แอปอื่นหมุนซ้ำ");
+        assert_eq!(exif.taken_at_local.as_deref(), Some("2026-11-18T10:20:30"), "เก็บวันถ่ายไว้");
+        let segments = metadata_segments(&out);
+        assert!(segments.iter().any(|s| s[4..].starts_with(b"ICC_PROFILE\0")), "เก็บโปรไฟล์สีไว้");
+        assert!(out.len() < src.len());
+
+        // รูปที่เล็กกว่าค่าที่ขอไม่ถูกขยาย
+        let small = export_jpeg(&src, Fit::LongEdge(5000)).unwrap();
+        let img = image::load_from_memory(&small).unwrap();
+        assert_eq!((img.width(), img.height()), (800, 1200));
+    }
+
+    #[test]
+    fn export_by_file_size_fits_the_budget_and_uses_it() {
+        let src = camera_jpeg(2400, 1600, 1);
+        for max in [150_000u64, 400_000] {
+            let out = export_jpeg(&src, Fit::MaxBytes(max)).unwrap();
+            assert!(out.len() as u64 <= max, "{} > {max}", out.len());
+            assert!(out.len() as u64 > max / 2, "ใช้งบให้คุ้ม ไม่ย่อจนเล็กเกินจำเป็น: {} จาก {max}", out.len());
+            assert_eq!(read_exif(&out).taken_at_local.as_deref(), Some("2026-11-18T10:20:30"));
+        }
+        let tiny = export_jpeg(&src, Fit::MaxBytes(2_000));
+        assert_eq!(tiny.unwrap_err().code, "INVALID_INPUT", "ตั้งเล็กจนรูปใช้ไม่ได้: แจ้งผู้ใช้ ไม่สร้างไฟล์จิ๋ว");
+    }
 
     #[test]
     fn exif_datetime_rules() {

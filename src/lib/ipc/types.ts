@@ -550,6 +550,9 @@ export interface SelectionSnapshot {
   dataRevision: number;
 }
 
+/** วิธีสร้างสำเนา: คัดลอกไฟล์เดิม หรือย่อเป็น JPEG (รูปที่เล็กพออยู่แล้วคัดลอกไฟล์เดิม) */
+export type ExportResize = { mode: 'original' } | { mode: 'long_edge'; px: number } | { mode: 'max_bytes'; bytes: number };
+
 export interface ExportPlan {
   planId: Id;
   destination: string;
@@ -560,7 +563,13 @@ export interface ExportPlan {
   unavailableInputs: number;
   /** ไฟล์ที่ชื่อชนและจะถูกเติมเลขท้าย */
   renamedCount: number;
+  /** ขนาดรวมโดยประมาณ (โหมดขนาดไฟล์: เพดาน) */
   estimatedBytes: number;
+  /** ขนาดรวมของต้นฉบับที่จะส่งออก */
+  sourceBytes: number;
+  resize: ExportResize;
+  /** ไฟล์ที่จะถูกย่อ ที่เหลือเล็กพออยู่แล้วจึงคัดลอกไฟล์เดิม */
+  resizedCount: number;
   sampleNames: { source: string; output: string }[];
   canStart: boolean;
   blockedReason: string | null;
@@ -582,6 +591,10 @@ export interface ExportReport {
   failed: number;
   unavailable: number;
   cancelled: number;
+  resize: ExportResize;
+  /** ขนาดรวมของต้นฉบับและของสำเนา เฉพาะรูปที่ส่งออกสำเร็จ */
+  sourceBytes: number;
+  outputBytes: number;
   items: ExportReportItem[];
 }
 
@@ -740,7 +753,7 @@ export interface Commands {
 
   /** แช่แข็งผลค้นหาทั้งหมด ณ ตอนนี้ (ไม่ใช่เฉพาะหน้าที่โหลด) */
   create_selection: [SearchParams, SelectionSnapshot];
-  preview_export: [{ selection: SelectionSpec; destination: string }, ExportPlan];
+  preview_export: [{ selection: SelectionSpec; destination: string; resize?: ExportResize }, ExportPlan];
   start_export: [{ planId: Id; requestId: Id }, JobSnapshot];
   get_export_report: [{ jobId: Id }, ExportReport];
   /** แสดงโฟลเดอร์ปลายทางของงานส่งออกในตัวจัดการไฟล์ */

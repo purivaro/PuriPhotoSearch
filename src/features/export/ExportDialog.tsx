@@ -8,9 +8,12 @@ import { ErrorState, InlineNotice, LoadingBlock, ProgressBar } from '@/component
 import { jobStateLabel } from '@/features/jobs/jobText';
 import { errorMessage, formatBytes, formatCount, isErrorCode, newRequestId } from '@/lib/format';
 import { call } from '@/lib/ipc/client';
-import type { ExportPlan, ExportReport, Id, JobSnapshot, SelectionSpec } from '@/lib/ipc/types';
+import type { ExportPlan, ExportReport, ExportResize, Id, JobSnapshot, SelectionSpec } from '@/lib/ipc/types';
 import { qk } from '@/lib/queries';
+import { useSettings } from '@/stores/settings';
 import { toast } from 'sonner';
+import { ResizePicker } from './ResizePicker';
+import { toResize } from './resizeChoice';
 
 interface ExportDialogProps {
   open: boolean;
@@ -23,6 +26,14 @@ interface ExportDialogProps {
 
 const FINISHED: JobSnapshot['state'][] = ['completed', 'completed_with_errors', 'cancelled', 'failed'];
 
+/** ตัวแทนค่าของวิธีย่อ — เทียบด้วยค่า ไม่ใช่ JSON เพราะลำดับ key ที่ Rust ส่งกลับมาไม่เหมือนที่ส่งไป */
+function resizeKeyOf(r: ExportResize | null): string {
+  if (!r) return '';
+  if (r.mode === 'long_edge') return `edge:${r.px}`;
+  if (r.mode === 'max_bytes') return `bytes:${r.bytes}`;
+  return 'original';
+}
+
 /** S18 — ส่งออกสำเนา: เลือกปลายทาง → ตรวจแผน → คัดลอก → รายงานรายไฟล์ (ต้นฉบับไม่ถูกย้ายหรือแก้) */
 export function ExportDialog({ open, onOpenChange, selection, count, onFinished }: ExportDialogProps) {
   const qc = useQueryClient();
@@ -30,6 +41,11 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
   const [plan, setPlan] = useState<ExportPlan | null>(null);
   const [jobId, setJobId] = useState<Id | null>(null);
   const requestId = useRef(newRequestId());
+  const choice = useSettings((s) => s.exportResize);
+  const setChoice = useSettings((s) => s.setExportResize);
+  const parsed = toResize(choice);
+  const resize = 'resize' in parsed ? parsed.resize : null;
+  const resizeError = 'error' in parsed ? parsed.error : null;
 
   useEffect(() => {
     if (open) return;
@@ -40,9 +56,21 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
   }, [open]);
 
   const preview = useMutation({
-    mutationFn: (destination: string) => call('preview_export', { selection, destination }),
+    mutationFn: (args: { destination: string; resize: ExportResize }) => call('preview_export', { selection, ...args }),
     onSuccess: (result) => setPlan(result),
   });
+
+  // เปลี่ยนขนาดหลังเห็นแผนแล้ว: ตรวจแผนใหม่ (รอพิมพ์เสร็จสักครู่) เพราะชื่อไฟล์ จำนวนที่ย่อ และขนาดรวมเปลี่ยนตาม
+  const resizeKey = resizeKeyOf(resize);
+  const planDestination = plan?.destination;
+  const planResizeKey = plan ? resizeKeyOf(plan.resize) : null;
+  const previewMutate = preview.mutate;
+  useEffect(() => {
+    if (!planDestination || !resize || resizeKey === planResizeKey || jobId) return;
+    const timer = window.setTimeout(() => previewMutate({ destination: planDestination, resize }), 450);
+    return () => window.clearTimeout(timer);
+    // ใช้ resizeKey แทน object `resize` ที่สร้างใหม่ทุก render จะได้ไม่ตรวจแผนซ้ำโดยค่าไม่เปลี่ยน
+  }, [resizeKey, planDestination, planResizeKey, jobId, previewMutate]);
 
   const start = useMutation({
     mutationFn: (planId: Id) => call('start_export', { planId, requestId: requestId.current }),
@@ -81,10 +109,11 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
       title: 'เลือกโฟลเดอร์ปลายทาง',
       hint: 'สำเนาจะถูกคัดลอกไปไว้ที่นี่ เลือกโฟลเดอร์ที่อยู่นอกโฟลเดอร์กิจกรรมในคลัง',
     });
-    if (!destination) return;
+    if (!destination || !resize) return;
     start.reset();
-    preview.mutate(destination);
+    preview.mutate({ destination, resize });
   };
+  const resizing = (plan?.resize ?? resize)?.mode !== 'original';
 
   const stale = isErrorCode(start.error, 'PREVIEW_STALE');
   let body: React.ReactNode;
@@ -102,7 +131,7 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
           <p className="text-[15px] font-semibold text-ink" aria-live="polite">
             {snapshot.state === 'cancel_requested'
               ? 'กำลังยกเลิกหลังไฟล์ที่กำลังคัดลอก…'
-              : `คัดลอกแล้ว ${formatCount(processed)} จาก ${formatCount(snapshot.counts.total)} ไฟล์`}
+              : `${resizing ? 'ส่งออกแล้ว' : 'คัดลอกแล้ว'} ${formatCount(processed)} จาก ${formatCount(snapshot.counts.total)} ไฟล์`}
           </p>
           <ProgressBar value={processed} max={snapshot.counts.total} label="ความคืบหน้าการส่งออก" />
           <p className="text-[13.5px] text-muted">
@@ -132,12 +161,15 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
         </Button>
       );
     }
-  } else if (preview.isPending) {
+  } else if (preview.isPending && !plan) {
     body = <LoadingBlock label="กำลังตรวจแผนการส่งออก…" className="py-10" />;
     footer = <Button onClick={() => onOpenChange(false)}>ยกเลิก</Button>;
   } else if (plan) {
+    // แผนที่แสดงยังไม่ตรงกับขนาดที่เลือกล่าสุด (กำลังตรวจใหม่ หรือค่าที่กรอกยังไม่ถูกต้อง): ยังไม่ให้เริ่ม
+    const outdated = preview.isPending || resizeKeyOf(plan.resize) !== resizeKey;
+    const kept = plan.plannedOutputCount - plan.resizedCount;
     body = (
-      <div className="space-y-4" data-testid="export-plan">
+      <div className="space-y-4" data-testid="export-plan" aria-busy={preview.isPending || undefined}>
         <div className="rounded-xl border border-line bg-canvas px-4 py-3">
           <p className="text-[13px] font-semibold text-muted">โฟลเดอร์ปลายทาง</p>
           <p className="break-all text-sm text-ink select-text" data-selectable>
@@ -147,11 +179,28 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
             เปลี่ยนปลายทาง
           </button>
         </div>
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-2.5 text-sm sm:grid-cols-3">
+        <ResizePicker value={choice} onChange={setChoice} error={resizeError} />
+        <dl className={`grid grid-cols-2 gap-x-6 gap-y-2.5 text-sm transition-opacity sm:grid-cols-3 ${outdated ? 'opacity-50' : ''}`} data-testid="export-plan-stats">
           <PlanStat label="รูปที่เลือก" value={`${formatCount(plan.inputCount)} รูป`} />
           <PlanStat label="ไฟล์ที่จะสร้าง" value={`${formatCount(plan.plannedOutputCount)} สำเนา`} />
-          <PlanStat label="ขนาดโดยประมาณ" value={plan.plannedOutputCount > 0 ? formatBytes(plan.estimatedBytes) : '—'} />
+          <PlanStat
+            label={plan.resize.mode === 'max_bytes' && plan.resizedCount > 0 ? 'ขนาดรวมไม่เกิน' : 'ขนาดรวมโดยประมาณ'}
+            value={plan.plannedOutputCount > 0 ? formatBytes(plan.estimatedBytes) : '—'}
+            note={plan.resizedCount > 0 ? `ต้นฉบับ ${formatBytes(plan.sourceBytes)}` : undefined}
+          />
         </dl>
+        {plan.resize.mode !== 'original' && plan.plannedOutputCount > 0 && !outdated && (
+          <InlineNotice tone="info" icon={<Info aria-hidden />}>
+            {plan.resizedCount === 0
+              ? 'ทุกรูปเล็กกว่าขนาดที่เลือกอยู่แล้ว จะคัดลอกไฟล์เดิมโดยไม่ย่อ'
+              : `จะย่อ ${formatCount(plan.resizedCount)} รูป${kept > 0 ? ` · อีก ${formatCount(kept)} รูปเล็กพออยู่แล้ว จะคัดลอกไฟล์เดิม` : ''}`}
+          </InlineNotice>
+        )}
+        {preview.isError && (
+          <InlineNotice tone="danger" icon={<CircleAlert aria-hidden />}>
+            {errorMessage(preview.error)}
+          </InlineNotice>
+        )}
         {plan.unavailableInputs > 0 && (
           <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />}>
             มี {formatCount(plan.unavailableInputs)} รูปที่ไฟล์ต้นฉบับไม่พร้อม จะไม่ถูกส่งออกในรอบนี้ (ไม่ใช้ภาพย่อแทน) เชื่อมต่อไดรฟ์ต้นทางแล้วส่งออกอีกครั้งได้
@@ -187,7 +236,7 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
             icon={<TriangleAlert aria-hidden />}
             action={
               stale ? (
-                <Button size="sm" onClick={() => preview.mutate(plan.destination)}>
+                <Button size="sm" disabled={!resize} onClick={() => resize && preview.mutate({ destination: plan.destination, resize })}>
                   ตรวจแผนใหม่
                 </Button>
               ) : undefined
@@ -197,7 +246,8 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
           </InlineNotice>
         )}
         <p className="flex items-center gap-1.5 text-[13px] text-muted">
-          <Info className="size-4 shrink-0" aria-hidden /> คัดลอกไฟล์ต้นฉบับแบบไม่แปลงไฟล์ รูปต้นฉบับไม่ถูกย้าย เปลี่ยนชื่อ หรือแก้ไข
+          <Info className="size-4 shrink-0" aria-hidden />
+          {plan.resizedCount === 0 ? 'คัดลอกไฟล์ต้นฉบับแบบไม่แปลงไฟล์' : 'สร้างสำเนาที่ย่อแล้วเป็นไฟล์ใหม่'} รูปต้นฉบับไม่ถูกย้าย เปลี่ยนชื่อ หรือแก้ไข
         </p>
       </div>
     );
@@ -207,7 +257,7 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
         <Button
           variant="primary"
           data-testid="export-confirm"
-          disabled={!plan.canStart || plan.plannedOutputCount === 0}
+          disabled={!plan.canStart || plan.plannedOutputCount === 0 || outdated}
           busy={start.isPending}
           onClick={() => start.mutate(plan.planId)}
         >
@@ -219,14 +269,22 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
     body = (
       <div className="space-y-4 py-1">
         <p className="text-sm text-muted">
-          เลือกโฟลเดอร์ที่จะวางสำเนาของ {formatCount(count)} รูปที่เลือก แอปจะแสดงแผนให้ตรวจก่อนเริ่มคัดลอก
+          เลือกขนาดและโฟลเดอร์ที่จะวางสำเนาของ {formatCount(count)} รูปที่เลือก แอปจะแสดงแผนให้ตรวจก่อนเริ่ม
         </p>
+        <ResizePicker value={choice} onChange={setChoice} error={resizeError} />
         {preview.isError && (
           <InlineNotice tone="danger" icon={<CircleAlert aria-hidden />}>
             {errorMessage(preview.error)}
           </InlineNotice>
         )}
-        <Button variant="primary" size="lg" icon={<FolderOpen className="size-5" aria-hidden />} onClick={() => void pickDestination()} data-testid="export-pick-destination">
+        <Button
+          variant="primary"
+          size="lg"
+          icon={<FolderOpen className="size-5" aria-hidden />}
+          disabled={!resize}
+          onClick={() => void pickDestination()}
+          data-testid="export-pick-destination"
+        >
           เลือกโฟลเดอร์ปลายทาง
         </Button>
         <p className="flex items-center gap-1.5 text-[13px] text-muted">
@@ -244,11 +302,14 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
   );
 }
 
-function PlanStat({ label, value }: { label: string; value: string }) {
+function PlanStat({ label, value, note }: { label: string; value: string; note?: string }) {
   return (
     <div>
       <dt className="text-[13px] text-muted">{label}</dt>
-      <dd className="text-lg font-bold text-ink">{value}</dd>
+      <dd className="text-lg font-bold text-ink">
+        {value}
+        {note && <span className="ml-1.5 text-[13px] font-normal text-muted">{note}</span>}
+      </dd>
     </div>
   );
 }
@@ -265,11 +326,16 @@ const ITEM_STATUS: Record<ExportReport['items'][number]['status'], string> = {
 export function ExportReportView({ report }: { report: ExportReport }) {
   const notDone = report.failed + report.unavailable + report.cancelled;
   const problems = report.items.filter((item) => item.status !== 'copied');
+  const resized = report.resize.mode !== 'original';
+  const saved = report.sourceBytes > 0 ? Math.round((1 - report.outputBytes / report.sourceBytes) * 100) : 0;
   return (
     <div className="space-y-4" data-testid="export-report">
       {notDone === 0 ? (
         <InlineNotice tone="ok" icon={<CircleCheck aria-hidden />}>
-          <span className="font-semibold">คัดลอกครบ {formatCount(report.copied)} ไฟล์</span> จาก {formatCount(report.inputCount)} รูปที่เลือก
+          <span className="font-semibold">
+            {resized ? 'ส่งออกครบ' : 'คัดลอกครบ'} {formatCount(report.copied)} ไฟล์
+          </span>{' '}
+          จาก {formatCount(report.inputCount)} รูปที่เลือก
         </InlineNotice>
       ) : (
         <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />}>
@@ -279,11 +345,17 @@ export function ExportReportView({ report }: { report: ExportReport }) {
         </InlineNotice>
       )}
       <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
-        <PlanStat label="คัดลอกแล้ว" value={formatCount(report.copied)} />
+        <PlanStat label={resized ? 'ส่งออกแล้ว' : 'คัดลอกแล้ว'} value={formatCount(report.copied)} />
         <PlanStat label="ไม่สำเร็จ" value={formatCount(report.failed)} />
         <PlanStat label="ต้นฉบับไม่พร้อม" value={formatCount(report.unavailable)} />
         <PlanStat label="ถูกยกเลิก" value={formatCount(report.cancelled)} />
       </dl>
+      {resized && report.copied > 0 && (
+        <p className="text-sm text-muted" data-testid="export-report-size">
+          ขนาดรวม {formatBytes(report.sourceBytes)} → <span className="font-semibold text-ink">{formatBytes(report.outputBytes)}</span>
+          {saved > 0 ? ` (เล็กลง ${saved}%)` : ''}
+        </p>
+      )}
       <div className="rounded-xl border border-line bg-canvas px-4 py-3">
         <p className="text-[13px] font-semibold text-muted">โฟลเดอร์ปลายทาง</p>
         <p className="break-all text-sm text-ink select-text" data-selectable>

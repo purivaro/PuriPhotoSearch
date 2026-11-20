@@ -714,6 +714,96 @@ fn t27_export_copies_without_overwriting_and_reports_every_input() {
 }
 
 #[test]
+fn t27c_export_resized_copies_keep_dates_and_leave_originals_alone() {
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-18 งานย่อ");
+    std::fs::create_dir_all(&root).unwrap();
+    // กล้องบอกให้หมุน 90° (orientation 6): ภาพจริงเป็นแนวตั้ง 1200×1600
+    std::fs::write(root.join("IMG_A.jpg"), jpeg_with_exif(1600, 1200, 6, "2026:11:18 09:15:00")).unwrap();
+    write_jpeg(&root.join("IMG_B.jpg"), 2); // 64×48 เล็กกว่าที่ขอ: คัดลอกไฟล์เดิม
+    std::fs::write(root.join("scan.png"), {
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(1000, 800, |x, y| image::Rgb([x as u8, y as u8, 90])))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        png
+    })
+    .unwrap();
+    lib.import(&root, "single_event", |_| true);
+    let before = tree_state(&root);
+    let ids: Vec<Value> = arr(&lib.query(json!({}))["items"]).iter().map(|i| i["id"].clone()).collect();
+    let selection = json!({ "kind": "explicit", "photoIds": ids });
+    let dest = lib.tmp.path().join("ส่งออกย่อ");
+    std::fs::create_dir_all(&dest).unwrap();
+
+    // ค่าที่อยู่นอกช่วงถูกปฏิเสธตั้งแต่ตรวจแผน
+    let bad = lib.try_call(
+        "preview_export",
+        json!({ "selection": selection, "destination": dest, "resize": { "mode": "long_edge", "px": 100 } }),
+    );
+    assert_eq!(bad.unwrap_err().code, "INVALID_INPUT");
+
+    let plan = lib.call(
+        "preview_export",
+        json!({ "selection": selection, "destination": dest, "resize": { "mode": "long_edge", "px": 640 } }),
+    );
+    assert_eq!((plan["plannedOutputCount"].as_i64(), plan["resizedCount"].as_i64()), (Some(3), Some(2)));
+    assert_eq!(plan["resize"], json!({ "mode": "long_edge", "px": 640 }));
+    assert!(
+        arr(&plan["sampleNames"]).iter().any(|s| s["source"] == "scan.png" && s["output"] == "scan.jpg"),
+        "สำเนาที่ย่อเป็น JPEG: {plan}"
+    );
+    let job = lib.call("start_export", json!({ "planId": plan["planId"], "requestId": new_id() }));
+    assert!(job["title"].as_str().unwrap().contains("ย่อขนาด"));
+    lib.run_jobs();
+    let report = lib.call("get_export_report", json!({ "jobId": job["id"] }));
+    assert_eq!((report["copied"].as_i64(), report["failed"].as_i64()), (Some(3), Some(0)), "{report}");
+    assert_eq!(report["resize"]["mode"], "long_edge");
+    assert!(report["outputBytes"].as_u64().unwrap() < report["sourceBytes"].as_u64().unwrap());
+
+    // หมุนตั้งตรง ด้านยาว 640 เก็บวันถ่ายไว้ และแอปอื่นไม่หมุนซ้ำ
+    let out = std::fs::read(dest.join("IMG_A.jpg")).unwrap();
+    let img = image::load_from_memory(&out).unwrap();
+    assert_eq!((img.width(), img.height()), (480, 640));
+    let exif = exif::Reader::new().read_from_container(&mut std::io::Cursor::new(&out)).unwrap();
+    assert_eq!(exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY).unwrap().value.get_uint(0), Some(1));
+    assert_eq!(
+        exif.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY).unwrap().display_value().to_string(),
+        "2026-11-18 09:15:00"
+    );
+    assert_eq!(
+        std::fs::metadata(dest.join("IMG_A.jpg")).unwrap().modified().unwrap(),
+        std::fs::metadata(root.join("IMG_A.jpg")).unwrap().modified().unwrap(),
+        "เวลาแก้ไขไฟล์เท่าต้นฉบับ"
+    );
+    assert_eq!(std::fs::read(dest.join("IMG_B.jpg")).unwrap(), std::fs::read(root.join("IMG_B.jpg")).unwrap());
+    let scan =
+        image::load_from_memory_with_format(&std::fs::read(dest.join("scan.jpg")).unwrap(), image::ImageFormat::Jpeg)
+            .unwrap();
+    assert_eq!((scan.width(), scan.height()), (640, 512));
+    assert_eq!(tree_state(&root), before, "ต้นฉบับไม่ถูกแก้ ย้าย หรือเปลี่ยนเวลา");
+
+    // ขนาดไฟล์ไม่เกินที่ตั้ง: รูปที่ใหญ่กว่าถูกย่อจนพอดี รูปที่เล็กพออยู่แล้วคัดลอกไฟล์เดิม
+    let dest2 = lib.tmp.path().join("ส่งออกขนาดไฟล์");
+    std::fs::create_dir_all(&dest2).unwrap();
+    let limit = 60_000u64;
+    let plan = lib.call(
+        "preview_export",
+        json!({ "selection": selection, "destination": dest2, "resize": { "mode": "max_bytes", "bytes": limit } }),
+    );
+    let job = lib.call("start_export", json!({ "planId": plan["planId"], "requestId": new_id() }));
+    lib.run_jobs();
+    let report = lib.call("get_export_report", json!({ "jobId": job["id"] }));
+    assert_eq!(report["copied"], 3, "{report}");
+    for name in ["IMG_A.jpg", "IMG_B.jpg"] {
+        let src = std::fs::metadata(root.join(name)).unwrap().len();
+        let out = std::fs::metadata(dest2.join(name)).unwrap().len();
+        assert!(out <= limit.max(src) && out <= src, "{name}: {out} (ต้นฉบับ {src})");
+    }
+    assert_eq!(tree_state(&root), before);
+}
+
+#[test]
 fn t27b_export_refuses_source_changed_since_import_and_cancel_keeps_finished_copies() {
     let lib = Lib::new();
     let (root, dest) = export_fixture(&lib);
