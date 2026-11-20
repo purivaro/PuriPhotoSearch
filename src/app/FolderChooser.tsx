@@ -5,14 +5,14 @@ import { Button } from '@/components/ui/Button';
 import { Dialog } from '@/components/ui/Dialog';
 import { StatusBadge } from '@/components/ui/Feedback';
 import { Field, TextInput } from '@/components/ui/Form';
-import { pickFolder, pickImage } from '@/lib/ipc/client';
+import { pickFolder, pickImage, pickPreset } from '@/lib/ipc/client';
 import { useCapabilities } from '@/lib/queries';
 
 interface ChooseOptions {
   title: string;
   hint?: string;
-  /** เลือกโฟลเดอร์ (ค่าเริ่มต้น) หรือไฟล์รูปหนึ่งไฟล์ */
-  kind?: 'folder' | 'image';
+  /** เลือกโฟลเดอร์ (ค่าเริ่มต้น) ไฟล์รูปหนึ่งไฟล์ หรือไฟล์ preset ของ Lightroom */
+  kind?: 'folder' | 'image' | 'preset';
 }
 
 type ChooseFolder = (options: ChooseOptions) => Promise<string | null>;
@@ -40,9 +40,10 @@ export function FolderChooserProvider({ children }: { children: ReactNode }) {
     async (options) => {
       if (capabilities?.folderPicker === 'native') {
         try {
-          return await (options.kind === 'image' ? pickImage : pickFolder)(options.title);
+          const pick = options.kind === 'image' ? pickImage : options.kind === 'preset' ? pickPreset : pickFolder;
+          return await pick(options.title);
         } catch {
-          toast.error(options.kind === 'image' ? 'เปิดหน้าต่างเลือกไฟล์ไม่สำเร็จ กรุณาลองใหม่' : 'เปิดหน้าต่างเลือกโฟลเดอร์ไม่สำเร็จ กรุณาลองใหม่');
+          toast.error(options.kind && options.kind !== 'folder' ? 'เปิดหน้าต่างเลือกไฟล์ไม่สำเร็จ กรุณาลองใหม่' : 'เปิดหน้าต่างเลือกโฟลเดอร์ไม่สำเร็จ กรุณาลองใหม่');
           return null;
         }
       }
@@ -57,7 +58,7 @@ export function FolderChooserProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(() => choose, [choose]);
   const trimmed = path.trim();
-  const image = request?.kind === 'image';
+  const image = request?.kind === 'image' || request?.kind === 'preset';
 
   return (
     <FolderChooserContext.Provider value={value}>
@@ -98,7 +99,7 @@ export function FolderChooserProvider({ children }: { children: ReactNode }) {
                 data-testid="dev-folder-input"
                 value={path}
                 onChange={(event) => setPath(event.target.value)}
-                placeholder={image ? '/Users/…/Pictures/logo.png' : '/Users/…/Photos/2569/691118 งานอบรม AI'}
+                placeholder={request?.kind === 'preset' ? '/Users/…/Presets/PuriBright.xmp' : image ? '/Users/…/Pictures/logo.png' : '/Users/…/Photos/2569/691118 งานอบรม AI'}
                 spellCheck={false}
                 autoComplete="off"
               />

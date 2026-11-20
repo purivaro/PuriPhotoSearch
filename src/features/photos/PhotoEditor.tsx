@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Crop, Eye, Info, RotateCcw, RotateCw, ScanFace, Sun, TriangleAlert, Wand2 } from 'lucide-react';
+import { Crop, Eye, Info, Palette, RotateCcw, RotateCw, ScanFace, Sun, TriangleAlert, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
 import { InlineNotice, Spinner } from '@/components/ui/Feedback';
@@ -10,7 +10,9 @@ import { cn } from '@/lib/cn';
 import { errorMessage, formatCount } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
 import type { EditSettings, PhotoDetails, UnitRect } from '@/lib/ipc/types';
-import { NEUTRAL, applyToPixels, autoAdjust, isNeutral, type Adjust } from './adjust';
+import { NEUTRAL, applyToPixels, autoAdjust, isNeutral, type Adjust, type SliderKey } from './adjust';
+import { HslPanel, SliderRow, ToneCurvePanel } from './AdjustControls';
+import { EditPresets } from './EditPresets';
 import {
   FULL,
   IDENTITY,
@@ -29,7 +31,7 @@ import {
 } from './editGeometry';
 
 type Aspect = 'free' | 'original' | '1:1' | '4:5' | '4:3' | '3:2' | '16:9';
-type Tab = 'crop' | 'light';
+type Tab = 'crop' | 'light' | 'presets';
 
 const ASPECTS: { value: Aspect; label: string; ratio: number | null }[] = [
   { value: 'free', label: 'อิสระ', ratio: null },
@@ -44,7 +46,7 @@ const ASPECTS: { value: Aspect; label: string; ratio: number | null }[] = [
 const HANDLES: Handle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 
 interface SliderSpec {
-  key: keyof Adjust;
+  key: SliderKey;
   label: string;
   min: number;
   max: number;
@@ -53,8 +55,6 @@ interface SliderSpec {
   ends?: [string, string];
   format?: (v: number) => string;
 }
-
-const signed = (v: number) => (v > 0 ? `+${v}` : `${v}`);
 
 const LIGHT: SliderSpec[] = [
   { key: 'exposure', label: 'ค่าแสง', min: -3, max: 3, step: 0.05, format: (v) => `${v > 0 ? '+' : ''}${v.toFixed(2)} EV` },
@@ -151,6 +151,8 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
   const [portrait, setPortrait] = useState(false);
   const [straightening, setStraightening] = useState(false);
   const [before, setBefore] = useState(false);
+  // ชี้ที่ preset: ดูตัวอย่างบนภาพก่อนใช้
+  const [previewAdjust, setPreviewAdjust] = useState<Adjust | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const { source, failed } = useSource(details.id);
   const dirty = !sameSettings(settings, saved);
@@ -179,7 +181,9 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !confirmDiscard) {
+      // กล่องหรือเมนูที่เปิดซ้อนบนหน้าแต่งภาพ (ตั้งชื่อ preset ฯลฯ) ปิดด้วย Esc ของมันเอง
+      const nested = (event.target as Element | null)?.closest?.('[role="dialog"]:not([data-testid="photo-editor"]), [role="menu"]');
+      if (event.key === 'Escape' && !confirmDiscard && !nested) {
         event.preventDefault();
         event.stopPropagation();
         if (dirty) setConfirmDiscard(true);
@@ -247,7 +251,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
         <EditCanvas
           source={source}
           failed={failed}
-          settings={settings}
+          settings={previewAdjust ? { ...settings, adjust: previewAdjust } : settings}
           frameAspect={frameAspect}
           ratio={ratio}
           mode={tab}
@@ -261,10 +265,14 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
           <div className="border-b border-line px-3 pt-2">
             <Tabs<Tab>
               value={tab}
-              onChange={setTab}
+              onChange={(next) => {
+                setPreviewAdjust(null);
+                setTab(next);
+              }}
               items={[
                 { value: 'crop', label: 'ตัดและหมุน' },
                 { value: 'light', label: 'แสงและสี' },
+                { value: 'presets', label: 'Preset' },
               ]}
               label="เครื่องมือแต่งภาพ"
               testId="editor-tab"
@@ -373,7 +381,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
                   </InlineNotice>
                 )}
               </>
-            ) : (
+            ) : tab === 'light' ? (
               <>
                 <div className="flex gap-1.5">
                   <Button size="sm" icon={<Wand2 className="size-4" aria-hidden />} onClick={auto} disabled={!source} className="flex-1" data-testid="editor-auto">
@@ -384,20 +392,15 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
                   </Button>
                 </div>
                 <SliderGroup title="แสง" icon={<Sun className="size-4 text-muted" aria-hidden />} specs={LIGHT} adjust={settings.adjust} onChange={setAdjust} />
-                <SliderGroup title="สี" specs={COLOR} adjust={settings.adjust} onChange={setAdjust} />
-                <button
-                  type="button"
-                  onPointerDown={() => setBefore(true)}
-                  onPointerUp={() => setBefore(false)}
-                  onPointerLeave={() => setBefore(false)}
-                  onKeyDown={(e) => e.key === ' ' && setBefore(true)}
-                  onKeyUp={() => setBefore(false)}
-                  disabled={isNeutral(settings.adjust)}
-                  className="flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-line-strong text-[13px] font-semibold text-ink hover:bg-sunken disabled:opacity-50"
-                  data-testid="editor-before"
-                >
-                  <Eye className="size-4" aria-hidden /> กดค้างเพื่อดูก่อนปรับแสงและสี
-                </button>
+                <ToneCurvePanel adjust={settings.adjust} onChange={setAdjust} />
+                <SliderGroup title="สี" icon={<Palette className="size-4 text-muted" aria-hidden />} specs={COLOR} adjust={settings.adjust} onChange={setAdjust} />
+                <HslPanel adjust={settings.adjust} onChange={setAdjust} />
+                <BeforeButton disabled={isNeutral(settings.adjust)} onHold={setBefore} />
+              </>
+            ) : (
+              <>
+                <EditPresets adjust={settings.adjust} onApply={(adjust) => setSettings((s) => ({ ...s, adjust }))} onPreview={setPreviewAdjust} />
+                <BeforeButton disabled={isNeutral(settings.adjust)} onHold={setBefore} />
               </>
             )}
 
@@ -437,41 +440,41 @@ function SliderGroup({ title, icon, specs, adjust, onChange }: { title: string; 
         {title}
       </h3>
       <div className="space-y-3">
-        {specs.map((spec) => {
-          const value = adjust[spec.key];
-          const id = `editor-${spec.key}`;
-          return (
-            <div key={spec.key}>
-              <div className="flex items-baseline justify-between">
-                {/* ดับเบิลคลิกชื่อหรือแถบเพื่อคืนเป็น 0 แบบ Lightroom */}
-                <label htmlFor={id} className="cursor-default text-[13.5px] text-ink select-none" onDoubleClick={() => onChange({ [spec.key]: 0 })} title="ดับเบิลคลิกเพื่อคืนเป็น 0">
-                  {spec.label}
-                </label>
-                <span className={cn('text-[13px] tabular-nums', value === 0 ? 'text-muted' : 'font-semibold text-action')}>{spec.format ? spec.format(value) : signed(value)}</span>
-              </div>
-              <input
-                id={id}
-                type="range"
-                min={spec.min}
-                max={spec.max}
-                step={spec.step}
-                value={value}
-                onChange={(e) => onChange({ [spec.key]: Number(e.target.value) })}
-                onDoubleClick={() => onChange({ [spec.key]: 0 })}
-                className="h-1.5 w-full cursor-pointer accent-[var(--action)]"
-                data-testid={id}
-              />
-              {spec.ends && (
-                <div className="flex justify-between text-[11.5px] text-muted">
-                  <span>{spec.ends[0]}</span>
-                  <span>{spec.ends[1]}</span>
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {specs.map((spec) => (
+          <SliderRow
+            key={spec.key}
+            id={`editor-${spec.key}`}
+            label={spec.label}
+            value={adjust[spec.key]}
+            min={spec.min}
+            max={spec.max}
+            step={spec.step}
+            ends={spec.ends}
+            format={spec.format}
+            onChange={(v) => onChange({ [spec.key]: v })}
+          />
+        ))}
       </div>
     </section>
+  );
+}
+
+/** กดค้างเพื่อดูภาพก่อนปรับแสงและสี (เมาส์ หรือ Space ค้าง) */
+function BeforeButton({ disabled, onHold }: { disabled: boolean; onHold: (holding: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onPointerDown={() => onHold(true)}
+      onPointerUp={() => onHold(false)}
+      onPointerLeave={() => onHold(false)}
+      onKeyDown={(e) => e.key === ' ' && onHold(true)}
+      onKeyUp={() => onHold(false)}
+      disabled={disabled}
+      className="flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-line-strong text-[13px] font-semibold text-ink hover:bg-sunken disabled:opacity-50"
+      data-testid="editor-before"
+    >
+      <Eye className="size-4" aria-hidden /> กดค้างเพื่อดูก่อนปรับแสงและสี
+    </button>
   );
 }
 

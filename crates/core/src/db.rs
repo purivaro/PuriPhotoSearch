@@ -14,6 +14,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (4, include_str!("../migrations/0004_shrink_originals.sql")),
     (5, include_str!("../migrations/0005_watermarks.sql")),
     (6, include_str!("../migrations/0006_photo_edits.sql")),
+    (7, include_str!("../migrations/0007_edit_presets.sql")),
 ];
 
 pub fn latest_version() -> i64 {

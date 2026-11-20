@@ -298,6 +298,29 @@ export interface EditAdjust {
   tint: number;
   vibrance: number;
   saturation: number;
+  /** HSL ต่อช่วงสี [แดง ส้ม เหลือง เขียว ฟ้าน้ำทะเล น้ำเงิน ม่วง ม่วงแดง] (−100 ถึง 100) */
+  hue: number[];
+  sat: number[];
+  lum: number[];
+  /** Parametric curve [เงา มืด สว่าง ส่วนสว่างมาก] */
+  parametric: number[];
+  /** จุดแบ่งช่วงของ Parametric curve (null = 25/50/75) */
+  parametricSplit: number[] | null;
+  /** เส้นโค้งโทนแบบจุด (เข้า, ออก) 0–255 — ว่าง = เส้นตรง */
+  curve: [number, number][];
+  curveRed: [number, number][];
+  curveGreen: [number, number][];
+  curveBlue: [number, number][];
+}
+
+/** preset ของค่าแสงและสี (บันทึกเองหรือนำเข้าจาก Lightroom) */
+export interface EditPreset {
+  id: Id;
+  name: string;
+  adjust: EditAdjust;
+  source: 'user' | 'lightroom';
+  /** ส่วนของ preset ที่นำเข้าไม่ได้ (แสดงตามจริง) */
+  unsupported: string[];
 }
 
 /** ค่าที่แต่งของรูปหนึ่ง (ไฟล์ต้นฉบับไม่ถูกแตะ) — DECISIONS ข้อ 17–18 */
@@ -903,6 +926,12 @@ export interface Commands {
   save_photo_edit: [{ photoId: Id; settings: EditSettings }, PhotoDetails];
   reset_photo_edit: [{ photoId: Id }, PhotoDetails];
   apply_photo_edits: [{ selection: SelectionSpec; settings: EditSettings; parts: EditParts }, ApplyEditsResult];
+  list_edit_presets: [Record<string, never>, EditPreset[]];
+  save_edit_preset: [{ name: string; adjust: EditAdjust }, EditPreset];
+  /** คืนรายการทั้งหมดหลังเปลี่ยน */
+  rename_edit_preset: [{ id: Id; name: string }, EditPreset[]];
+  delete_edit_preset: [{ id: Id }, EditPreset[]];
+  import_lightroom_preset: [{ path: string }, EditPreset];
   list_watermarks: [Record<string, never>, WatermarkInfo[]];
   add_watermark: [{ path: string }, WatermarkInfo];
   /** คืนรายการที่เหลือ */

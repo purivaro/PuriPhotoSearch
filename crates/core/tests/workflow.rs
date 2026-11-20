@@ -1312,6 +1312,93 @@ fn edit_paste_to_many_photos_replaces_only_the_chosen_parts() {
     assert_eq!(tree_state(&root), before, "วางการแต่งไม่แตะไฟล์ต้นฉบับ");
 }
 
+/// preset .xmp แบบที่ Lightroom Classic ส่งออก (ย่อ) — สมดุลแสงขาวแบบเพิ่ม/ลด HSL เส้นโค้ง และส่วนที่เรายังทำไม่ได้
+const LIGHTROOM_XMP: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-c000">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:Version="17.0" crs:ProcessVersion="15.4" crs:WhiteBalance="Custom"
+   crs:IncrementalTemperature="+12" crs:IncrementalTint="-6"
+   crs:Exposure2012="+0.40" crs:Contrast2012="+10" crs:Shadows2012="+25"
+   crs:Texture="+15" crs:Vibrance="+20"
+   crs:LuminanceAdjustmentOrange="+30" crs:SaturationAdjustmentBlue="-25">
+   <crs:Name><rdf:Alt><rdf:li xml:lang="x-default">PuriBright เทสต์</rdf:li></rdf:Alt></crs:Name>
+   <crs:Look><rdf:Description crs:Name="Adobe Vivid" crs:Amount="1"/></crs:Look>
+   <crs:ToneCurvePV2012><rdf:Seq><rdf:li>0, 12</rdf:li><rdf:li>128, 136</rdf:li><rdf:li>255, 250</rdf:li></rdf:Seq></crs:ToneCurvePV2012>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+#[test]
+fn edit_presets_save_import_rename_delete_and_survive_restart() {
+    let lib = Lib::new();
+    assert_eq!(lib.call("list_edit_presets", json!({})), json!([]));
+
+    // บันทึก: ต้องมีชื่อ และต้องปรับอะไรสักอย่าง
+    let adjust = json!({ "exposure": 0.5, "lum": [0.0, 40.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "parametric": [0.0, 10.0, 0.0, 0.0] });
+    let err = lib.try_call("save_edit_preset", json!({ "name": "  ", "adjust": adjust })).unwrap_err();
+    assert_eq!(err.code, "INVALID_INPUT");
+    let err = lib.try_call("save_edit_preset", json!({ "name": "เปล่า", "adjust": {} })).unwrap_err();
+    assert_eq!(err.code, "INVALID_INPUT");
+    let mine = lib.call("save_edit_preset", json!({ "name": " ในอาคาร ไฟเหลือง ", "adjust": adjust }));
+    assert_eq!((mine["name"].as_str(), mine["source"].as_str()), (Some("ในอาคาร ไฟเหลือง"), Some("user")));
+    assert_eq!(mine["adjust"]["lum"][1].as_f64(), Some(40.0));
+
+    // นำเข้า .xmp: ได้ค่าที่ทำได้ · ที่ทำไม่ได้แสดงตามจริง · ไฟล์ต้นทางไม่ถูกแตะ
+    let dir = lib.photos().join("presets");
+    std::fs::create_dir_all(&dir).unwrap();
+    let xmp = dir.join("PuriBright.xmp");
+    std::fs::write(&xmp, LIGHTROOM_XMP).unwrap();
+    let imported = lib.call("import_lightroom_preset", json!({ "path": xmp.to_string_lossy() }));
+    let a = &imported["adjust"];
+    assert_eq!((imported["name"].as_str(), imported["source"].as_str()), (Some("PuriBright เทสต์"), Some("lightroom")));
+    assert_eq!(
+        (a["exposure"].as_f64(), a["shadows"].as_f64(), a["temperature"].as_f64()),
+        (Some(0.4), Some(25.0), Some(12.0))
+    );
+    assert_eq!((a["lum"][1].as_f64(), a["sat"][5].as_f64()), (Some(30.0), Some(-25.0)));
+    assert_eq!(a["curve"], json!([[0.0, 12.0], [128.0, 136.0], [255.0, 250.0]]));
+    assert_eq!(imported["unsupported"], json!(["Profile “Adobe Vivid”", "Texture +15"]));
+    assert_eq!(std::fs::read_to_string(&xmp).unwrap(), LIGHTROOM_XMP);
+    // ไฟล์ที่ไม่ใช่ preset หรือไม่มีอยู่ → ปฏิเสธพร้อมเหตุผล
+    let photo = dir.join("not-a-preset.jpg");
+    std::fs::write(&photo, jpeg_with_exif(64, 48, 1, "2026:11:21 10:00:00")).unwrap();
+    let err = lib.try_call("import_lightroom_preset", json!({ "path": photo.to_string_lossy() })).unwrap_err();
+    assert_eq!(err.code, "UNSUPPORTED_FORMAT");
+    let err =
+        lib.try_call("import_lightroom_preset", json!({ "path": dir.join("gone.xmp").to_string_lossy() })).unwrap_err();
+    assert_eq!(err.code, "SOURCE_UNAVAILABLE");
+
+    // ใช้ preset กับรูป แล้วลบ preset: รูปยังเก็บค่าที่แต่งไว้
+    let root = lib.photos().join("2026-11-21 preset");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.jpg"), jpeg_with_exif(400, 300, 1, "2026:11:21 10:00:00")).unwrap();
+    lib.import(&root, "single_event", |_| true);
+    let photo_id = lib.photo_id("a.jpg");
+    lib.call("save_photo_edit", json!({ "photoId": photo_id, "settings": { "adjust": imported["adjust"] } }));
+
+    // ลำดับที่แสดงเรียงแบบพจนานุกรมไทยที่ UI · ที่นี่ตรวจแค่ว่ามีชื่อไหนบ้าง
+    let names = |list: &Value| {
+        let mut v =
+            list.as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        v.sort();
+        v
+    };
+    let list = lib.call("rename_edit_preset", json!({ "id": imported["id"], "name": "สว่างใส" }));
+    assert_eq!(names(&list), ["สว่างใส", "ในอาคาร ไฟเหลือง"]);
+    let err = lib.try_call("rename_edit_preset", json!({ "id": "missing", "name": "x" })).unwrap_err();
+    assert_eq!(err.code, "NOT_FOUND");
+    let list = lib.call("delete_edit_preset", json!({ "id": imported["id"] }));
+    assert_eq!(names(&list), ["ในอาคาร ไฟเหลือง"]);
+    let edit = lib.call("get_photo_details", json!({ "photoId": photo_id }))["edit"]["settings"].clone();
+    assert_eq!(edit["adjust"]["lum"][1].as_f64(), Some(30.0), "ลบ preset แล้วรูปที่ใช้ไปไม่เปลี่ยน");
+
+    // ปิดแล้วเปิดคลังใหม่: preset ยังอยู่ครบ
+    let lib = lib.reopen();
+    let list = lib.call("list_edit_presets", json!({}));
+    assert_eq!(names(&list), ["ในอาคาร ไฟเหลือง"]);
+    assert_eq!(list[0]["adjust"]["parametric"][1].as_f64(), Some(10.0));
+}
+
 #[test]
 fn t27b_export_refuses_source_changed_since_import_and_cancel_keeps_finished_copies() {
     let lib = Lib::new();

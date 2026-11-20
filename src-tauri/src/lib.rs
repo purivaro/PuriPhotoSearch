@@ -44,6 +44,7 @@ macro_rules! domain_commands {
                 $($name,)*
                 pick_folder,
                 pick_image,
+                pick_preset,
                 restart_app,
                 e2e_report,
                 updater::update_status,
@@ -104,6 +105,11 @@ domain_commands!(
     save_photo_edit,
     reset_photo_edit,
     apply_photo_edits,
+    list_edit_presets,
+    save_edit_preset,
+    rename_edit_preset,
+    delete_edit_preset,
+    import_lightroom_preset,
     list_watermarks,
     add_watermark,
     delete_watermark,
@@ -141,6 +147,27 @@ async fn pick_image(app: tauri::AppHandle, title: String) -> Option<String> {
             .file()
             .set_title(title)
             .add_filter("รูปภาพ (PNG, JPEG)", &["png", "jpg", "jpeg"])
+            .blocking_pick_file()
+            .and_then(|p| p.into_path().ok())
+    })
+    .await
+    .ok()
+    .flatten()
+    .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// เปิด native file picker สำหรับ preset ของ Lightroom (.xmp); คืน path หรือ None เมื่อยกเลิก
+#[tauri::command]
+async fn pick_preset(app: tauri::AppHandle, title: String) -> Option<String> {
+    #[cfg(debug_assertions)]
+    if let Some(answer) = e2e::next_pick() {
+        return answer;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title(title)
+            .add_filter("Lightroom preset (.xmp)", &["xmp"])
             .blocking_pick_file()
             .and_then(|p| p.into_path().ok())
     })

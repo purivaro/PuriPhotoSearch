@@ -307,9 +307,9 @@ pub(crate) fn preview_jpeg(bytes: &[u8], s: &EditSettings, max_edge: u32, qualit
 pub struct EditParts {
     /// ตัด หมุน ปรับเอียง (แต่ละรูปมักตัดต่างกัน — UI ไม่ติ๊กไว้ก่อน)
     pub geometry: bool,
-    /// ค่าแสง คอนทราสต์ ส่วนสว่าง เงา จุดขาว จุดดำ
+    /// ค่าแสง คอนทราสต์ ส่วนสว่าง เงา จุดขาว จุดดำ และเส้นโค้งโทน
     pub light: bool,
-    /// อุณหภูมิสี โทนสี ความสดของสี ความอิ่มสี
+    /// อุณหภูมิสี โทนสี ความสดของสี ความอิ่มสี และ HSL
     pub color: bool,
 }
 
@@ -323,9 +323,13 @@ impl EditParts {
         if self.light {
             (a.exposure, a.contrast, a.highlights, a.shadows, a.whites, a.blacks) =
                 (f.exposure, f.contrast, f.highlights, f.shadows, f.whites, f.blacks);
+            (a.parametric, a.parametric_split) = (f.parametric, f.parametric_split);
+            (a.curve, a.curve_red, a.curve_green, a.curve_blue) =
+                (f.curve.clone(), f.curve_red.clone(), f.curve_green.clone(), f.curve_blue.clone());
         }
         if self.color {
             (a.temperature, a.tint, a.vibrance, a.saturation) = (f.temperature, f.tint, f.vibrance, f.saturation);
+            (a.hue, a.sat, a.lum) = (f.hue, f.sat, f.lum);
         }
         base
     }
