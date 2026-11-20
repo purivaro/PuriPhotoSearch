@@ -5,6 +5,7 @@
 use crate::error::{AppError, Result};
 use crate::import::{remember, replay};
 use crate::jobs::{self, Control, JobCtx, JobSnapshot, Outcome};
+use crate::watermark::WatermarkSpec;
 use crate::{db, media, util, App};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -83,16 +84,24 @@ fn jpeg_name(filename: &str) -> String {
 /// ขนาดไฟล์โดยประมาณของสำเนา: ย่อด้านยาวคิดจากจำนวนพิกเซลของสำเนา × ไบต์ต่อพิกเซลของ JPEG คุณภาพ 90
 /// (ไม่เกินขนาดต้นฉบับ) · โหมดขนาดไฟล์ใช้เพดานที่ตั้งไว้
 pub(crate) fn estimate_bytes(fit: Option<media::Fit>, size: u64, width: u32, height: u32) -> u64 {
-    match fit {
-        None => size,
-        Some(media::Fit::MaxBytes(max)) => max,
-        Some(media::Fit::LongEdge(px)) if width > 0 && height > 0 => {
-            let scale = (px as f64 / width.max(height) as f64).min(1.0);
-            let pixels = width as f64 * height as f64 * scale * scale;
-            ((pixels * media::BYTES_PER_PIXEL_GUESS) as u64).min(size)
-        }
-        Some(media::Fit::LongEdge(_)) => size,
+    let px = match fit {
+        None => return size,
+        Some(media::Fit::MaxBytes(max)) => return max,
+        Some(media::Fit::LongEdge(px)) => px,
+        Some(media::Fit::Original) => u32::MAX,
+    };
+    if width == 0 || height == 0 {
+        return size;
     }
+    let scale = (px as f64 / width.max(height) as f64).min(1.0);
+    let pixels = width as f64 * height as f64 * scale * scale;
+    ((pixels * media::BYTES_PER_PIXEL_GUESS) as u64).min(size)
+}
+
+/// วิธีเขียนสำเนาของรูปนี้ (None = คัดลอกไฟล์เดิมทุกไบต์) — ใส่ลายน้ำต้องบันทึกใหม่เสมอแม้ไม่ย่อ
+/// ใช้ทั้งตอนวางแผนและตอนทำ นามสกุลที่วางแผนไว้จึงตรงกับไฟล์ที่เขียน
+fn fit_with(resize: Resize, watermark: bool, size: u64, width: u32, height: u32) -> Option<media::Fit> {
+    resize.fit_for(size, width, height).or(watermark.then_some(media::Fit::Original))
 }
 
 struct PlanItem {
@@ -108,6 +117,7 @@ struct PlanItem {
 pub struct PlanData {
     destination: PathBuf,
     resize: Resize,
+    watermark: Option<WatermarkSpec>,
     items: Vec<PlanItem>,
     created: Instant,
 }
@@ -133,8 +143,10 @@ pub struct ExportPlan {
     pub source_bytes: u64,
     /// วิธีสร้างสำเนาของแผนนี้
     pub resize: Resize,
-    /// ไฟล์ที่จะถูกย่อ (ที่เหลือเล็กพออยู่แล้ว คัดลอกไฟล์เดิม)
+    /// ไฟล์ที่จะถูกย่อ (ที่เหลือเล็กพออยู่แล้ว คัดลอกไฟล์เดิม หรือบันทึกใหม่ขนาดเดิมเมื่อใส่ลายน้ำ)
     pub resized_count: usize,
+    /// ลายน้ำของแผนนี้ (ใส่ทุกสำเนา)
+    pub watermark: Option<WatermarkSpec>,
     pub sample_names: Vec<SampleName>,
     pub can_start: bool,
     pub blocked_reason: Option<String>,
@@ -243,8 +255,17 @@ pub(crate) fn inside_tracked_source(conn: &Connection, dest: &Path) -> Result<bo
     Ok(roots.iter().any(|root| dest.starts_with(root)))
 }
 
-pub fn preview(app: &App, selection: &SelectionSpec, destination: &str, resize: Resize) -> Result<ExportPlan> {
+pub fn preview(
+    app: &App,
+    selection: &SelectionSpec,
+    destination: &str,
+    resize: Resize,
+    watermark: Option<WatermarkSpec>,
+) -> Result<ExportPlan> {
     resize.validate()?;
+    if let Some(w) = &watermark {
+        w.validate(&app.db())?;
+    }
     let dest = util::canonical(destination)
         .map_err(|_| AppError::new("SOURCE_UNAVAILABLE", "ไม่พบโฟลเดอร์ปลายทาง กรุณาเลือกโฟลเดอร์อีกครั้ง"))?;
     if !dest.is_dir() {
@@ -264,13 +285,13 @@ pub fn preview(app: &App, selection: &SelectionSpec, destination: &str, resize: 
     let (mut bytes, mut source_bytes) = (0u64, 0u64);
     for SourceRow { photo_id, revision_id, filename, source_path, size, width, height } in rows {
         let planned_name = if Path::new(&source_path).is_file() {
-            let fit = resize.fit_for(size, width, height);
+            let fit = fit_with(resize, watermark.is_some(), size, width, height);
             let wanted = if fit.is_some() { jpeg_name(&filename) } else { filename.clone() };
             let name = unique_name(&wanted, &mut taken);
             planned += 1;
             bytes += estimate_bytes(fit, size, width, height);
             source_bytes += size;
-            resized += fit.is_some() as usize;
+            resized += resize.fit_for(size, width, height).is_some() as usize;
             if name != wanted {
                 renamed += 1;
             }
@@ -311,13 +332,17 @@ pub fn preview(app: &App, selection: &SelectionSpec, destination: &str, resize: 
         source_bytes,
         resize,
         resized_count: resized,
+        watermark: watermark.clone(),
         sample_names: samples,
         can_start: blocked_reason.is_none(),
         blocked_reason,
     };
     let mut plans = app.export_plans.lock().unwrap_or_else(|e| e.into_inner());
     plans.retain(|_, p| p.created.elapsed() < PLAN_TTL);
-    plans.insert(plan.plan_id.clone(), PlanData { destination: dest, resize, items, created: Instant::now() });
+    plans.insert(
+        plan.plan_id.clone(),
+        PlanData { destination: dest, resize, watermark, items, created: Instant::now() },
+    );
     Ok(plan)
 }
 
@@ -349,9 +374,14 @@ pub fn start(app: &App, plan_id: &str, request_id: &str) -> Result<JobSnapshot> 
         }
         let (job_id, run_id, now) = (util::new_id(), util::new_id(), util::now());
         let planned = plan.items.iter().filter(|i| i.planned_name.is_some()).count();
-        let title = match plan.resize {
-            Resize::Original => format!("ส่งออกสำเนา {planned} รูป"),
-            _ => format!("ส่งออกสำเนาแบบย่อขนาด {planned} รูป"),
+        if let Some(w) = &plan.watermark {
+            w.validate(&tx)?;
+        }
+        let title = match (plan.resize != Resize::Original, plan.watermark.is_some()) {
+            (false, false) => format!("ส่งออกสำเนา {planned} รูป"),
+            (true, false) => format!("ส่งออกสำเนาแบบย่อขนาด {planned} รูป"),
+            (false, true) => format!("ส่งออกสำเนาใส่ลายน้ำ {planned} รูป"),
+            (true, true) => format!("ส่งออกสำเนาแบบย่อขนาดและใส่ลายน้ำ {planned} รูป"),
         };
         tx.execute(
             "INSERT INTO jobs(id, kind, state, stage, title, dedup_key, total, skipped, total_known, created_at, updated_at)
@@ -359,9 +389,10 @@ pub fn start(app: &App, plan_id: &str, request_id: &str) -> Result<JobSnapshot> 
             params![job_id, title, format!("export:{run_id}"), planned as i64, (plan.items.len() - planned) as i64, now],
         )?;
         let resize = (plan.resize != Resize::Original).then(|| serde_json::to_string(&plan.resize)).transpose()?;
+        let watermark = plan.watermark.as_ref().map(serde_json::to_string).transpose()?;
         tx.execute(
-            "INSERT INTO export_runs(id, job_id, destination, created_at, resize) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![run_id, job_id, plan.destination.to_string_lossy(), now, resize],
+            "INSERT INTO export_runs(id, job_id, destination, created_at, resize, watermark) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![run_id, job_id, plan.destination.to_string_lossy(), now, resize, watermark],
         )?;
         for (ord, item) in plan.items.iter().enumerate() {
             tx.execute(
@@ -455,13 +486,20 @@ fn write_copy(src: &Path, stamp: media::FileStamp, sha: Option<&str>, tmp: &Path
 }
 
 /// อ่านต้นฉบับทั้งไฟล์ ตรวจว่าตรงกับที่คลังรู้จัก แล้วเขียนสำเนาที่ย่อแล้วลง `tmp` (เวลาแก้ไขไฟล์เท่าต้นฉบับ)
-fn write_resized(src: &Path, stamp: media::FileStamp, sha: Option<&str>, fit: media::Fit, tmp: &Path) -> Result<u64> {
+fn write_resized(
+    src: &Path,
+    stamp: media::FileStamp,
+    sha: Option<&str>,
+    fit: media::Fit,
+    watermark: Option<&media::Watermark>,
+    tmp: &Path,
+) -> Result<u64> {
     let bytes = media::read_file(src)?;
     let same_file = bytes.len() as u64 == stamp.size && media::stamp(src).ok() == Some(stamp);
     if !same_file || sha.is_some_and(|s| s != util::hex(&Sha256::digest(&bytes))) {
         return Err(revision_changed());
     }
-    let jpeg = media::export_jpeg(&bytes, fit)?;
+    let jpeg = media::export_jpeg(&bytes, fit, watermark)?;
     drop(bytes);
     let mut output = OpenOptions::new().write(true).create_new(true).open(tmp)?;
     output.write_all(&jpeg)?;
@@ -490,7 +528,13 @@ pub(crate) fn load_revision(conn: &Connection, revision_id: &str) -> Result<Revi
 }
 
 /// คืน (ไฟล์ที่สร้าง, จำนวนไบต์ที่เขียน) — ไม่แตะฐานข้อมูล จึงทำหลายรูปพร้อมกันได้
-fn copy_one(item: &CopyItem, rev: &Revision, dest: &Path, resize: Resize) -> Result<(PathBuf, u64)> {
+fn copy_one(
+    item: &CopyItem,
+    rev: &Revision,
+    dest: &Path,
+    resize: Resize,
+    watermark: Option<&media::Watermark>,
+) -> Result<(PathBuf, u64)> {
     let Revision { size, mtime_ns, ref sha, width, height } = *rev;
     let src = Path::new(&item.source_path);
     let stamp = media::stamp(src)?;
@@ -501,8 +545,8 @@ fn copy_one(item: &CopyItem, rev: &Revision, dest: &Path, resize: Resize) -> Res
     // เขียนไฟล์ชั่วคราวในปลายทางก่อน แล้วค่อยเปลี่ยนเป็นชื่อจริงเมื่อครบ: ไฟล์ชื่อจริงจึงสมบูรณ์เสมอ
     // วิธีย่อตัดสินจากข้อมูลของ revision เดียวกับตอนวางแผน จึงตรงกับนามสกุลที่วางแผนไว้
     let tmp = dest.join(format!(".puri-export-{}.part", util::new_id()));
-    let written = match resize.fit_for(size as u64, width, height) {
-        Some(fit) => write_resized(src, stamp, sha.as_deref(), fit, &tmp),
+    let written = match fit_with(resize, watermark.is_some(), size as u64, width, height) {
+        Some(fit) => write_resized(src, stamp, sha.as_deref(), fit, watermark, &tmp),
         None => write_copy(src, stamp, sha.as_deref(), &tmp),
     };
     let written = match written {
@@ -535,15 +579,29 @@ fn copy_one(item: &CopyItem, rev: &Revision, dest: &Path, resize: Resize) -> Res
 
 pub(crate) fn run(ctx: &JobCtx) -> Result<Outcome> {
     let conn = ctx.conn;
-    let (run_id, destination, resize): (String, String, Option<String>) =
-        conn.query_row("SELECT id, destination, resize FROM export_runs WHERE job_id = ?1", [&ctx.job.id], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })?;
+    let (run_id, destination, resize, watermark): (String, String, Option<String>, Option<String>) = conn.query_row(
+        "SELECT id, destination, resize, watermark FROM export_runs WHERE job_id = ?1",
+        [&ctx.job.id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
     let resize: Resize = resize.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
     let dest = PathBuf::from(destination);
     if !dest.is_dir() {
         return Ok(Outcome::Blocked("โฟลเดอร์ปลายทางไม่พร้อมใช้งาน เชื่อมต่อไดรฟ์แล้วสั่งทำต่อ".into()));
     }
+    // โหลดโลโก้ครั้งเดียวต่องาน · ถูกลบไปแล้ว: ไม่ส่งออกสำเนาที่ไม่มีลายน้ำแทนโดยไม่บอก
+    let watermark = match watermark.as_deref().map(serde_json::from_str::<WatermarkSpec>).transpose()? {
+        Some(spec) => match spec.load(conn)? {
+            Some(w) => Some(w),
+            None => {
+                return Ok(Outcome::Blocked(
+                    "ไม่พบลายน้ำที่เลือก (ถูกลบออกจากรายการแล้ว) ยกเลิกงานนี้แล้วส่งออกใหม่พร้อมเลือกลายน้ำ".into(),
+                ))
+            }
+        },
+        None => None,
+    };
+    let watermark = watermark.as_ref();
     let items: Vec<CopyItem> = conn
         .prepare(
             "SELECT ord, photo_id, revision_id, filename, source_path, planned_name FROM export_items
@@ -581,7 +639,7 @@ pub(crate) fn run(ctx: &JobCtx) -> Result<Outcome> {
                 .zip(revisions)
                 .map(|(item, rev)| {
                     let dest = &dest;
-                    scope.spawn(move || rev.and_then(|rev| copy_one(item, &rev, dest, resize)))
+                    scope.spawn(move || rev.and_then(|rev| copy_one(item, &rev, dest, resize, watermark)))
                 })
                 .collect();
             handles
@@ -640,6 +698,7 @@ pub struct ExportReport {
     pub unavailable: usize,
     pub cancelled: usize,
     pub resize: Resize,
+    pub watermark: Option<WatermarkSpec>,
     /// ขนาดรวมของต้นฉบับและของสำเนา (เฉพาะรูปที่ส่งออกสำเร็จ)
     pub source_bytes: u64,
     pub output_bytes: u64,
@@ -648,13 +707,14 @@ pub struct ExportReport {
 
 /// รายงานผลครบทุกรูปที่เลือก (N inputs): สำเร็จ / ผิดพลาด / ต้นฉบับไม่พร้อม / ถูกยกเลิก
 pub fn report(conn: &Connection, job_id: &str) -> Result<ExportReport> {
-    let (run_id, destination, resize): (String, String, Option<String>) = conn
-        .query_row("SELECT id, destination, resize FROM export_runs WHERE job_id = ?1", [job_id], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+    let (run_id, destination, resize, watermark): (String, String, Option<String>, Option<String>) = conn
+        .query_row("SELECT id, destination, resize, watermark FROM export_runs WHERE job_id = ?1", [job_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
         })
         .optional()?
         .ok_or_else(|| AppError::not_found("งานส่งออก"))?;
     let resize: Resize = resize.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
+    let watermark: Option<WatermarkSpec> = watermark.as_deref().map(serde_json::from_str).transpose()?;
     // งานที่ทำก่อนมีคอลัมน์ output_bytes คัดลอกไฟล์เดิมเสมอ: ขนาดสำเนาเท่าต้นฉบับ
     // งานที่ทำก่อนมี source_bytes ใช้ขนาดปัจจุบันของ revision (ตรงเว้นแต่ต้นฉบับถูกย่อในที่เดิมภายหลัง)
     let (source_bytes, output_bytes): (i64, i64) = conn.query_row(
@@ -688,6 +748,7 @@ pub fn report(conn: &Connection, job_id: &str) -> Result<ExportReport> {
         unavailable: count("unavailable"),
         cancelled: count("cancelled"),
         resize,
+        watermark,
         source_bytes: source_bytes as u64,
         output_bytes: output_bytes as u64,
         items,

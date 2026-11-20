@@ -43,6 +43,7 @@ macro_rules! domain_commands {
             builder.invoke_handler(tauri::generate_handler![
                 $($name,)*
                 pick_folder,
+                pick_image,
                 restart_app,
                 e2e_report,
                 updater::update_status,
@@ -100,6 +101,9 @@ domain_commands!(
     start_export,
     get_export_report,
     reveal_export_destination,
+    list_watermarks,
+    add_watermark,
+    delete_watermark,
     preview_shrink,
     start_shrink,
     get_shrink_report,
@@ -121,6 +125,27 @@ domain_commands!(
     reject_suggestions,
     restore_suggestions,
 );
+
+/// เปิด native file picker สำหรับไฟล์รูป (ลายน้ำ); คืน path ที่ผู้ใช้เลือกเอง (หรือ None เมื่อยกเลิก)
+#[tauri::command]
+async fn pick_image(app: tauri::AppHandle, title: String) -> Option<String> {
+    #[cfg(debug_assertions)]
+    if let Some(answer) = e2e::next_pick() {
+        return answer;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title(title)
+            .add_filter("รูปภาพ (PNG, JPEG)", &["png", "jpg", "jpeg"])
+            .blocking_pick_file()
+            .and_then(|p| p.into_path().ok())
+    })
+    .await
+    .ok()
+    .flatten()
+    .map(|p| p.to_string_lossy().into_owned())
+}
 
 /// เปิด native folder picker; คืน path ที่ผู้ใช้เลือกเอง (หรือ None เมื่อยกเลิก)
 #[tauri::command]

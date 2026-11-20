@@ -23,6 +23,7 @@ pub mod review;
 pub mod setup;
 pub mod shrink;
 pub mod util;
+pub mod watermark;
 
 pub use error::{AppError, Result};
 

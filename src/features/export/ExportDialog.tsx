@@ -8,12 +8,14 @@ import { ErrorState, InlineNotice, LoadingBlock, ProgressBar } from '@/component
 import { jobStateLabel } from '@/features/jobs/jobText';
 import { errorMessage, formatBytes, formatCount, isErrorCode, newRequestId } from '@/lib/format';
 import { call } from '@/lib/ipc/client';
-import type { ExportPlan, ExportReport, ExportResize, Id, JobSnapshot, SelectionSpec } from '@/lib/ipc/types';
+import type { ExportPlan, ExportReport, ExportResize, Id, JobSnapshot, SelectionSpec, WatermarkSpec } from '@/lib/ipc/types';
 import { qk } from '@/lib/queries';
 import { useSettings } from '@/stores/settings';
 import { toast } from 'sonner';
-import { ResizePicker } from './ResizePicker';
-import { toResize } from './resizeChoice';
+import { ResizePicker, type ResizeHints } from './ResizePicker';
+import { EXPORT_OPTIONS, EXPORT_WATERMARK_OPTIONS, toResize } from './resizeChoice';
+import { WatermarkRow, useWatermarks } from './WatermarkDialog';
+import { toWatermarkSpec, watermarkKeyOf } from './watermarkChoice';
 
 interface ExportDialogProps {
   open: boolean;
@@ -21,10 +23,19 @@ interface ExportDialogProps {
   selection: SelectionSpec;
   /** จำนวนรูปที่ผู้ใช้เห็นว่าเลือกไว้ (ยอดจริงใช้จากแผนของ Rust) */
   count: number;
+  /** รูปที่ใช้แสดงตัวอย่างลายน้ำ (รูปแรกที่เลือก) */
+  previewPhotoId?: Id | null;
   onFinished?: () => void;
 }
 
 const FINISHED: JobSnapshot['state'][] = ['completed', 'completed_with_errors', 'cancelled', 'failed'];
+
+/** คำอธิบายขนาดเมื่อใส่ลายน้ำ: ทุกสำเนาถูกบันทึกใหม่ ไม่มีการคัดลอกไฟล์เดิม */
+const WATERMARK_HINTS: ResizeHints = {
+  original: 'ขนาดภาพเท่าต้นฉบับ บันทึกใหม่เป็น JPEG คุณภาพสูงเพื่อใส่ลายน้ำ เก็บวันที่ถ่ายและข้อมูลกล้องไว้',
+  long_edge: 'ย่อเฉพาะรูปที่ใหญ่กว่านี้ (รูปที่เล็กกว่าคงขนาดเดิม) · ทุกสำเนาบันทึกเป็น JPEG คุณภาพสูงพร้อมลายน้ำ เก็บวันที่ถ่ายไว้',
+  max: 'ย่อเฉพาะรูปที่ไฟล์ใหญ่กว่านี้ ลดขนาดภาพก่อนแล้วใช้คุณภาพสูงสุดที่ยังไม่เกิน · ทุกสำเนามีลายน้ำ',
+};
 
 /** ตัวแทนค่าของวิธีย่อ — เทียบด้วยค่า ไม่ใช่ JSON เพราะลำดับ key ที่ Rust ส่งกลับมาไม่เหมือนที่ส่งไป */
 function resizeKeyOf(r: ExportResize | null): string {
@@ -35,7 +46,7 @@ function resizeKeyOf(r: ExportResize | null): string {
 }
 
 /** S18 — ส่งออกสำเนา: เลือกปลายทาง → ตรวจแผน → คัดลอก → รายงานรายไฟล์ (ต้นฉบับไม่ถูกย้ายหรือแก้) */
-export function ExportDialog({ open, onOpenChange, selection, count, onFinished }: ExportDialogProps) {
+export function ExportDialog({ open, onOpenChange, selection, count, previewPhotoId = null, onFinished }: ExportDialogProps) {
   const qc = useQueryClient();
   const choose = useFolderChooser();
   const [plan, setPlan] = useState<ExportPlan | null>(null);
@@ -46,6 +57,15 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
   const parsed = toResize(choice);
   const resize = 'resize' in parsed ? parsed.resize : null;
   const resizeError = 'error' in parsed ? parsed.error : null;
+  const watermarkChoice = useSettings((s) => s.exportWatermark);
+  const setWatermarkChoice = useSettings((s) => s.setExportWatermark);
+  const watermarks = useWatermarks();
+  const parsedWatermark = toWatermarkSpec(watermarkChoice, watermarks.data);
+  // undefined = เปิดลายน้ำไว้แต่ยังเลือกไม่ครบ: ยังตรวจแผนไม่ได้
+  const watermark = 'spec' in parsedWatermark ? parsedWatermark.spec : undefined;
+  const watermarkError = 'error' in parsedWatermark ? parsedWatermark.error : null;
+  const options = resize && watermark !== undefined ? { resize, watermark } : null;
+  const pickerOptions = watermarkChoice.enabled ? { options: EXPORT_WATERMARK_OPTIONS, hints: WATERMARK_HINTS } : { options: EXPORT_OPTIONS };
 
   useEffect(() => {
     if (open) return;
@@ -56,21 +76,21 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
   }, [open]);
 
   const preview = useMutation({
-    mutationFn: (args: { destination: string; resize: ExportResize }) => call('preview_export', { selection, ...args }),
+    mutationFn: (args: { destination: string; resize: ExportResize; watermark: WatermarkSpec | null }) => call('preview_export', { selection, ...args }),
     onSuccess: (result) => setPlan(result),
   });
 
-  // เปลี่ยนขนาดหลังเห็นแผนแล้ว: ตรวจแผนใหม่ (รอพิมพ์เสร็จสักครู่) เพราะชื่อไฟล์ จำนวนที่ย่อ และขนาดรวมเปลี่ยนตาม
-  const resizeKey = resizeKeyOf(resize);
+  // เปลี่ยนขนาดหรือลายน้ำหลังเห็นแผนแล้ว: ตรวจแผนใหม่ (รอพิมพ์/เลื่อนเสร็จสักครู่) เพราะชื่อไฟล์ จำนวนที่ย่อ และขนาดรวมเปลี่ยนตาม
+  const optionsKey = options ? `${resizeKeyOf(options.resize)}|${watermarkKeyOf(options.watermark)}` : '';
   const planDestination = plan?.destination;
-  const planResizeKey = plan ? resizeKeyOf(plan.resize) : null;
+  const planKey = plan ? `${resizeKeyOf(plan.resize)}|${watermarkKeyOf(plan.watermark)}` : null;
   const previewMutate = preview.mutate;
   useEffect(() => {
-    if (!planDestination || !resize || resizeKey === planResizeKey || jobId) return;
-    const timer = window.setTimeout(() => previewMutate({ destination: planDestination, resize }), 450);
+    if (!planDestination || !options || optionsKey === planKey || jobId) return;
+    const timer = window.setTimeout(() => previewMutate({ destination: planDestination, ...options }), 450);
     return () => window.clearTimeout(timer);
-    // ใช้ resizeKey แทน object `resize` ที่สร้างใหม่ทุก render จะได้ไม่ตรวจแผนซ้ำโดยค่าไม่เปลี่ยน
-  }, [resizeKey, planDestination, planResizeKey, jobId, previewMutate]);
+    // ใช้ optionsKey แทน object ที่สร้างใหม่ทุก render จะได้ไม่ตรวจแผนซ้ำโดยค่าไม่เปลี่ยน
+  }, [optionsKey, planDestination, planKey, jobId, previewMutate]);
 
   const start = useMutation({
     mutationFn: (planId: Id) => call('start_export', { planId, requestId: requestId.current }),
@@ -109,11 +129,12 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
       title: 'เลือกโฟลเดอร์ปลายทาง',
       hint: 'สำเนาจะถูกคัดลอกไปไว้ที่นี่ เลือกโฟลเดอร์ที่อยู่นอกโฟลเดอร์กิจกรรมในคลัง',
     });
-    if (!destination || !resize) return;
+    if (!destination || !options) return;
     start.reset();
-    preview.mutate({ destination, resize });
+    preview.mutate({ destination, ...options });
   };
-  const resizing = (plan?.resize ?? resize)?.mode !== 'original';
+  // สร้างไฟล์ใหม่ (ย่อหรือใส่ลายน้ำ) แทนการคัดลอกไฟล์เดิม
+  const converting = (plan?.resize ?? resize)?.mode !== 'original' || Boolean(plan ? plan.watermark : watermark);
 
   const stale = isErrorCode(start.error, 'PREVIEW_STALE');
   let body: React.ReactNode;
@@ -131,7 +152,7 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
           <p className="text-[15px] font-semibold text-ink" aria-live="polite">
             {snapshot.state === 'cancel_requested'
               ? 'กำลังยกเลิกหลังไฟล์ที่กำลังคัดลอก…'
-              : `${resizing ? 'ส่งออกแล้ว' : 'คัดลอกแล้ว'} ${formatCount(processed)} จาก ${formatCount(snapshot.counts.total)} ไฟล์`}
+              : `${converting ? 'ส่งออกแล้ว' : 'คัดลอกแล้ว'} ${formatCount(processed)} จาก ${formatCount(snapshot.counts.total)} ไฟล์`}
           </p>
           <ProgressBar value={processed} max={snapshot.counts.total} label="ความคืบหน้าการส่งออก" />
           <p className="text-[13.5px] text-muted">
@@ -166,8 +187,9 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
     footer = <Button onClick={() => onOpenChange(false)}>ยกเลิก</Button>;
   } else if (plan) {
     // แผนที่แสดงยังไม่ตรงกับขนาดที่เลือกล่าสุด (กำลังตรวจใหม่ หรือค่าที่กรอกยังไม่ถูกต้อง): ยังไม่ให้เริ่ม
-    const outdated = preview.isPending || resizeKeyOf(plan.resize) !== resizeKey;
+    const outdated = preview.isPending || planKey !== optionsKey;
     const kept = plan.plannedOutputCount - plan.resizedCount;
+    const sizeNote = plan.resizedCount > 0 ? ` · ย่อ ${formatCount(plan.resizedCount)} รูป` : '';
     body = (
       <div className="space-y-4" data-testid="export-plan" aria-busy={preview.isPending || undefined}>
         <div className="rounded-xl border border-line bg-canvas px-4 py-3">
@@ -179,21 +201,24 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
             เปลี่ยนปลายทาง
           </button>
         </div>
-        <ResizePicker value={choice} onChange={setChoice} error={resizeError} />
+        <ResizePicker value={choice} onChange={setChoice} error={resizeError} {...pickerOptions} />
+        <WatermarkRow choice={watermarkChoice} onChange={setWatermarkChoice} error={watermarkError} previewPhotoId={previewPhotoId} />
         <dl className={`grid grid-cols-2 gap-x-6 gap-y-2.5 text-sm transition-opacity sm:grid-cols-3 ${outdated ? 'opacity-50' : ''}`} data-testid="export-plan-stats">
           <PlanStat label="รูปที่เลือก" value={`${formatCount(plan.inputCount)} รูป`} />
           <PlanStat label="ไฟล์ที่จะสร้าง" value={`${formatCount(plan.plannedOutputCount)} สำเนา`} />
           <PlanStat
             label={plan.resize.mode === 'max_bytes' && plan.resizedCount > 0 ? 'ขนาดรวมไม่เกิน' : 'ขนาดรวมโดยประมาณ'}
             value={plan.plannedOutputCount > 0 ? formatBytes(plan.estimatedBytes) : '—'}
-            note={plan.resizedCount > 0 ? `ต้นฉบับ ${formatBytes(plan.sourceBytes)}` : undefined}
+            note={plan.resizedCount > 0 || plan.watermark ? `ต้นฉบับ ${formatBytes(plan.sourceBytes)}` : undefined}
           />
         </dl>
-        {plan.resize.mode !== 'original' && plan.plannedOutputCount > 0 && !outdated && (
+        {(plan.resize.mode !== 'original' || plan.watermark) && plan.plannedOutputCount > 0 && !outdated && (
           <InlineNotice tone="info" icon={<Info aria-hidden />}>
-            {plan.resizedCount === 0
-              ? 'ทุกรูปเล็กกว่าขนาดที่เลือกอยู่แล้ว จะคัดลอกไฟล์เดิมโดยไม่ย่อ'
-              : `จะย่อ ${formatCount(plan.resizedCount)} รูป${kept > 0 ? ` · อีก ${formatCount(kept)} รูปเล็กพออยู่แล้ว จะคัดลอกไฟล์เดิม` : ''}`}
+            {plan.watermark
+              ? `ใส่ลายน้ำทุกสำเนา${sizeNote}`
+              : plan.resizedCount === 0
+                ? 'ทุกรูปเล็กกว่าขนาดที่เลือกอยู่แล้ว จะคัดลอกไฟล์เดิมโดยไม่ย่อ'
+                : `จะย่อ ${formatCount(plan.resizedCount)} รูป${kept > 0 ? ` · อีก ${formatCount(kept)} รูปเล็กพออยู่แล้ว จะคัดลอกไฟล์เดิม` : ''}`}
           </InlineNotice>
         )}
         {preview.isError && (
@@ -236,7 +261,7 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
             icon={<TriangleAlert aria-hidden />}
             action={
               stale ? (
-                <Button size="sm" disabled={!resize} onClick={() => resize && preview.mutate({ destination: plan.destination, resize })}>
+                <Button size="sm" disabled={!options} onClick={() => options && preview.mutate({ destination: plan.destination, ...options })}>
                   ตรวจแผนใหม่
                 </Button>
               ) : undefined
@@ -247,7 +272,8 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
         )}
         <p className="flex items-center gap-1.5 text-[13px] text-muted">
           <Info className="size-4 shrink-0" aria-hidden />
-          {plan.resizedCount === 0 ? 'คัดลอกไฟล์ต้นฉบับแบบไม่แปลงไฟล์' : 'สร้างสำเนาที่ย่อแล้วเป็นไฟล์ใหม่'} รูปต้นฉบับไม่ถูกย้าย เปลี่ยนชื่อ หรือแก้ไข
+          {plan.watermark ? 'สร้างสำเนาใหม่ที่ใส่ลายน้ำ' : plan.resizedCount === 0 ? 'คัดลอกไฟล์ต้นฉบับแบบไม่แปลงไฟล์' : 'สร้างสำเนาที่ย่อแล้วเป็นไฟล์ใหม่'}{' '}
+          รูปต้นฉบับไม่ถูกย้าย เปลี่ยนชื่อ หรือแก้ไข
         </p>
       </div>
     );
@@ -271,7 +297,8 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
         <p className="text-sm text-muted">
           เลือกขนาดและโฟลเดอร์ที่จะวางสำเนาของ {formatCount(count)} รูปที่เลือก แอปจะแสดงแผนให้ตรวจก่อนเริ่ม
         </p>
-        <ResizePicker value={choice} onChange={setChoice} error={resizeError} />
+        <ResizePicker value={choice} onChange={setChoice} error={resizeError} {...pickerOptions} />
+        <WatermarkRow choice={watermarkChoice} onChange={setWatermarkChoice} error={watermarkError} previewPhotoId={previewPhotoId} />
         {preview.isError && (
           <InlineNotice tone="danger" icon={<CircleAlert aria-hidden />}>
             {errorMessage(preview.error)}
@@ -281,7 +308,7 @@ export function ExportDialog({ open, onOpenChange, selection, count, onFinished 
           variant="primary"
           size="lg"
           icon={<FolderOpen className="size-5" aria-hidden />}
-          disabled={!resize}
+          disabled={!options}
           onClick={() => void pickDestination()}
           data-testid="export-pick-destination"
         >
@@ -326,7 +353,7 @@ const ITEM_STATUS: Record<ExportReport['items'][number]['status'], string> = {
 export function ExportReportView({ report }: { report: ExportReport }) {
   const notDone = report.failed + report.unavailable + report.cancelled;
   const problems = report.items.filter((item) => item.status !== 'copied');
-  const resized = report.resize.mode !== 'original';
+  const resized = report.resize.mode !== 'original' || report.watermark !== null;
   const saved = report.sourceBytes > 0 ? Math.round((1 - report.outputBytes / report.sourceBytes) * 100) : 0;
   return (
     <div className="space-y-4" data-testid="export-report">
@@ -352,7 +379,8 @@ export function ExportReportView({ report }: { report: ExportReport }) {
       </dl>
       {resized && report.copied > 0 && (
         <p className="text-sm text-muted" data-testid="export-report-size">
-          ขนาดรวม {formatBytes(report.sourceBytes)} → <span className="font-semibold text-ink">{formatBytes(report.outputBytes)}</span>
+          {report.watermark && 'ใส่ลายน้ำแล้ว · '}ขนาดรวม {formatBytes(report.sourceBytes)} →{' '}
+          <span className="font-semibold text-ink">{formatBytes(report.outputBytes)}</span>
           {saved > 0 ? ` (เล็กลง ${saved}%)` : ''}
         </p>
       )}

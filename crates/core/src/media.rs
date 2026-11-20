@@ -299,10 +299,77 @@ pub const BYTES_PER_PIXEL_GUESS: f64 = 0.22;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fit {
+    /// ขนาดภาพเท่าเดิม (บันทึกใหม่เพื่อใส่ลายน้ำ)
+    Original,
     /// ด้านยาวไม่เกินกี่พิกเซล (ไม่ขยายรูปที่เล็กกว่า)
     LongEdge(u32),
     /// ขนาดไฟล์ไม่เกินกี่ไบต์
     MaxBytes(u64),
+}
+
+/// ลายน้ำที่พร้อมวาดลงสำเนา: โลโก้แบบ premultiplied alpha (ย่อแล้วไม่มีขอบดำรอบส่วนโปร่งใส)
+pub struct Watermark {
+    logo: image::RgbaImage,
+    /// (แนวนอน, แนวตั้ง): 0 = ซ้าย/บน · 1 = กลาง · 2 = ขวา/ล่าง
+    anchor: (u8, u8),
+    /// ด้านยาวของโลโก้เป็นสัดส่วนของด้านสั้นของภาพ
+    scale: f32,
+    opacity: f32,
+}
+
+/// ขอบระหว่างลายน้ำกับขอบภาพ เป็นสัดส่วนของด้านสั้นของภาพ (เท่า PuriSlim)
+pub const WATERMARK_MARGIN: f32 = 0.03;
+
+/// ตำแหน่งและขนาดของลายน้ำบนภาพ `width`×`height` → (x, y, กว้าง, สูง) — สูตรเดียวกับตัวอย่างใน UI (`watermarkRect`)
+pub fn watermark_rect(
+    width: u32,
+    height: u32,
+    logo_w: u32,
+    logo_h: u32,
+    scale: f32,
+    anchor: (u8, u8),
+) -> (u32, u32, u32, u32) {
+    let short = width.min(height) as f32;
+    let ratio = (short * scale).max(1.0) / logo_w.max(logo_h).max(1) as f32;
+    let lw = ((logo_w as f32 * ratio).round() as u32).clamp(1, width.max(1));
+    let lh = ((logo_h as f32 * ratio).round() as u32).clamp(1, height.max(1));
+    let margin = (short * WATERMARK_MARGIN).round() as u32;
+    let place = |at: u8, size: u32, room: u32| match at {
+        0 => margin.min(room.saturating_sub(size)),
+        1 => room.saturating_sub(size) / 2,
+        _ => room.saturating_sub(size + margin),
+    };
+    (place(anchor.0, lw, width), place(anchor.1, lh, height), lw, lh)
+}
+
+impl Watermark {
+    /// `scale_pct`/`opacity_pct` เป็นเปอร์เซ็นต์ (ตรวจช่วงแล้วที่ watermark::WatermarkSpec)
+    pub fn new(image_bytes: &[u8], anchor: (u8, u8), scale_pct: u32, opacity_pct: u32) -> Result<Self> {
+        let mut logo = image::load_from_memory(image_bytes).map_err(decode_error)?.to_rgba8();
+        for p in logo.pixels_mut() {
+            let [r, g, b, a] = p.0;
+            let times_alpha = |v: u8| ((v as u32 * a as u32 + 127) / 255) as u8;
+            p.0 = [times_alpha(r), times_alpha(g), times_alpha(b), a];
+        }
+        Ok(Watermark { logo, anchor, scale: scale_pct as f32 / 100.0, opacity: opacity_pct as f32 / 100.0 })
+    }
+
+    fn apply(&self, img: &mut image::RgbImage) {
+        let (w, h) = img.dimensions();
+        let (x, y, lw, lh) = watermark_rect(w, h, self.logo.width(), self.logo.height(), self.scale, self.anchor);
+        let logo = image::imageops::resize(&self.logo, lw, lh, image::imageops::FilterType::Lanczos3);
+        for (i, j, p) in logo.enumerate_pixels() {
+            let a = p.0[3] as f32 / 255.0 * self.opacity;
+            if a <= 0.0 || x + i >= w || y + j >= h {
+                continue;
+            }
+            // premultiplied: สีของโลโก้คูณ alpha มาแล้ว (zip หยุดที่สามช่องสีของภาพ)
+            for (dst, src) in img.get_pixel_mut(x + i, y + j).0.iter_mut().zip(p.0) {
+                let v = *dst as f32 * (1.0 - a) + src as f32 * self.opacity;
+                *dst = v.round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
 }
 
 /// สำเนา JPEG ที่ย่อแล้วจาก bytes ของต้นฉบับ: หมุนให้ตั้งตรงแล้ว และเก็บ EXIF (วันถ่าย กล้อง ฯลฯ)
@@ -310,13 +377,19 @@ pub enum Fit {
 ///
 /// ขนาดไฟล์ (แนวทางเดียวกับ PuriSlim): ย่อขนาดภาพโดยคงคุณภาพสูงไว้ แล้วจึงไล่เพิ่มคุณภาพให้เต็มงบ
 /// — ให้รูปคมกว่าการกดคุณภาพ JPEG ลงอย่างเดียว
-pub fn export_jpeg(bytes: &[u8], fit: Fit) -> Result<Vec<u8>> {
+///
+/// `watermark` วาดลงหลังย่อและหมุนแล้ว ขนาดจึงเป็นสัดส่วนเดียวกันทุกขนาดสำเนา
+pub fn export_jpeg(bytes: &[u8], fit: Fit, watermark: Option<&Watermark>) -> Result<Vec<u8>> {
     let orientation = read_exif(bytes).orientation;
     let mut meta = metadata_segments(bytes);
     match fit {
-        Fit::LongEdge(edge) => {
+        Fit::Original | Fit::LongEdge(_) => {
+            let edge = if let Fit::LongEdge(edge) = fit { edge } else { u32::MAX };
             let base = decode_for_export(bytes, edge)?;
-            let img = render(&base, edge, orientation);
+            drop_gray_profile(&mut meta, &base, watermark);
+            // ไม่ต้องย่อ: ใช้ภาพที่ถอดแล้วต่อเลย ไม่คัดลอกภาพเต็มอีกชุด
+            let img = if base.width().max(base.height()) > edge { scaled(&base, edge) } else { base };
+            let img = finish(img, orientation, watermark);
             Ok(splice_metadata(&encode_jpeg(&img, EXPORT_QUALITY)?, &meta))
         }
         Fit::MaxBytes(max) => {
@@ -343,6 +416,7 @@ pub fn export_jpeg(bytes: &[u8], fit: Fit) -> Result<Vec<u8>> {
             let mut target = ((full_long as f64 * ratio) as u32).clamp(MIN_FIT_EDGE.min(full_long), full_long);
             // ถอดเผื่อไว้ครึ่งเท่าของค่าที่เดา เผื่อขยายขึ้นได้เมื่อเดาต่ำไป (ไม่ถอดเต็มทุกพิกเซลโดยไม่จำเป็น)
             let base = decode_for_export(bytes, (target.saturating_mul(3) / 2).min(full_long))?;
+            drop_gray_profile(&mut meta, &base, watermark);
             let base_long = base.width().max(base.height());
             target = target.min(base_long);
 
@@ -351,7 +425,7 @@ pub fn export_jpeg(bytes: &[u8], fit: Fit) -> Result<Vec<u8>> {
             let mut best: Option<(u32, DynamicImage, Vec<u8>)> = None;
             let mut too_big = base_long + 1;
             for _ in 0..8 {
-                let img = render(&base, target, orientation);
+                let img = render(&base, target, orientation, watermark);
                 let out = encode_jpeg(&img, EXPORT_QUALITY)?;
                 let len = out.len();
                 if len <= budget {
@@ -404,13 +478,25 @@ fn decode_for_export(bytes: &[u8], edge: u32) -> Result<DynamicImage> {
     }
 }
 
-/// ย่อให้ด้านยาวไม่เกิน `edge` (ไม่ขยาย) หมุนให้ตั้งตรง และปูพื้นขาวใต้ส่วนโปร่งใส (JPEG ไม่มีความโปร่งใส)
-fn render(base: &DynamicImage, edge: u32, orientation: u8) -> DynamicImage {
-    let mut img = if base.width().max(base.height()) > edge {
-        base.resize(edge, edge, image::imageops::FilterType::Lanczos3)
-    } else {
-        base.clone()
-    };
+fn scaled(base: &DynamicImage, edge: u32) -> DynamicImage {
+    base.resize(edge, edge, image::imageops::FilterType::Lanczos3)
+}
+
+/// ภาพขาวดำที่ใส่ลายน้ำสีกลายเป็นภาพสี: โปรไฟล์สีแบบขาวดำของต้นฉบับใช้กับภาพสีไม่ได้ จึงไม่ติดไปด้วย
+fn drop_gray_profile(meta: &mut Vec<Vec<u8>>, base: &DynamicImage, watermark: Option<&Watermark>) {
+    if watermark.is_some() && !base.color().has_color() {
+        meta.retain(|s| !s.get(4..).is_some_and(|p| p.starts_with(b"ICC_PROFILE\0")));
+    }
+}
+
+/// ย่อให้ด้านยาวไม่เกิน `edge` (ไม่ขยาย) แล้ว [`finish`]
+fn render(base: &DynamicImage, edge: u32, orientation: u8, watermark: Option<&Watermark>) -> DynamicImage {
+    let img = if base.width().max(base.height()) > edge { scaled(base, edge) } else { base.clone() };
+    finish(img, orientation, watermark)
+}
+
+/// หมุนให้ตั้งตรง ปูพื้นขาวใต้ส่วนโปร่งใส (JPEG ไม่มีความโปร่งใส) แล้ววาดลายน้ำ
+fn finish(mut img: DynamicImage, orientation: u8, watermark: Option<&Watermark>) -> DynamicImage {
     orient(&mut img, orientation);
     if img.color().has_alpha() {
         let rgba = img.to_rgba8();
@@ -420,6 +506,14 @@ fn render(base: &DynamicImage, edge: u32, orientation: u8) -> DynamicImage {
             image::Rgb([mix(r), mix(g), mix(b)])
         });
         img = DynamicImage::ImageRgb8(flat);
+    }
+    if let Some(wm) = watermark {
+        let mut rgb = match img {
+            DynamicImage::ImageRgb8(buf) => buf,
+            other => other.to_rgb8(),
+        };
+        wm.apply(&mut rgb);
+        img = DynamicImage::ImageRgb8(rgb);
     }
     img
 }
@@ -561,7 +655,7 @@ mod tests {
     fn export_by_long_edge_keeps_date_and_colour_profile_and_stands_upright() {
         // ต้นฉบับ 1200×800 ที่กล้องบอกให้หมุน 90° (orientation 6): ภาพจริงเป็นแนวตั้ง 800×1200
         let src = camera_jpeg(1200, 800, 6);
-        let out = export_jpeg(&src, Fit::LongEdge(600)).unwrap();
+        let out = export_jpeg(&src, Fit::LongEdge(600), None).unwrap();
         let img = image::load_from_memory(&out).unwrap();
         assert_eq!((img.width(), img.height()), (400, 600), "ด้านยาวตามที่ขอ และหมุนตั้งตรงแล้ว");
         let exif = read_exif(&out);
@@ -572,7 +666,7 @@ mod tests {
         assert!(out.len() < src.len());
 
         // รูปที่เล็กกว่าค่าที่ขอไม่ถูกขยาย
-        let small = export_jpeg(&src, Fit::LongEdge(5000)).unwrap();
+        let small = export_jpeg(&src, Fit::LongEdge(5000), None).unwrap();
         let img = image::load_from_memory(&small).unwrap();
         assert_eq!((img.width(), img.height()), (800, 1200));
     }
@@ -581,13 +675,53 @@ mod tests {
     fn export_by_file_size_fits_the_budget_and_uses_it() {
         let src = camera_jpeg(2400, 1600, 1);
         for max in [150_000u64, 400_000] {
-            let out = export_jpeg(&src, Fit::MaxBytes(max)).unwrap();
+            let out = export_jpeg(&src, Fit::MaxBytes(max), None).unwrap();
             assert!(out.len() as u64 <= max, "{} > {max}", out.len());
             assert!(out.len() as u64 > max / 2, "ใช้งบให้คุ้ม ไม่ย่อจนเล็กเกินจำเป็น: {} จาก {max}", out.len());
             assert_eq!(read_exif(&out).taken_at_local.as_deref(), Some("2026-11-18T10:20:30"));
         }
-        let tiny = export_jpeg(&src, Fit::MaxBytes(2_000));
+        let tiny = export_jpeg(&src, Fit::MaxBytes(2_000), None);
         assert_eq!(tiny.unwrap_err().code, "INVALID_INPUT", "ตั้งเล็กจนรูปใช้ไม่ได้: แจ้งผู้ใช้ ไม่สร้างไฟล์จิ๋ว");
+    }
+
+    #[test]
+    fn watermark_lands_where_the_preview_shows_it_and_keeps_clear_parts_clear() {
+        // สูตรตำแหน่งเดียวกับ watermarkRect ฝั่ง UI: ด้านยาวของโลโก้ = ด้านสั้น × scale, ขอบ 3% ของด้านสั้น
+        assert_eq!(watermark_rect(1000, 800, 200, 100, 0.25, (2, 2)), (776, 676, 200, 100));
+        assert_eq!(watermark_rect(1000, 800, 200, 100, 0.25, (0, 0)), (24, 24, 200, 100));
+        assert_eq!(watermark_rect(1000, 800, 200, 100, 0.25, (1, 1)), (400, 350, 200, 100));
+        // โลโก้แนวกว้างที่ 100%: ไม่ล้นภาพ
+        assert_eq!(watermark_rect(1000, 800, 4000, 1000, 1.0, (2, 2)), (176, 576, 800, 200));
+
+        // พื้นขาว 1000×800 · โลโก้ 100×100: ครึ่งซ้ายแดงทึบ ครึ่งขวาโปร่งใส
+        let white =
+            encode_jpeg(&DynamicImage::ImageRgb8(image::RgbImage::from_pixel(1000, 800, image::Rgb([255; 3]))), 95)
+                .unwrap();
+        let logo = image::RgbaImage::from_fn(100, 100, |x, _| {
+            image::Rgba(if x < 50 { [255, 0, 0, 255] } else { [0, 0, 0, 0] })
+        });
+        let mut png = Vec::new();
+        DynamicImage::ImageRgba8(logo).write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let pixel = |out: &[u8], x: u32, y: u32| image::load_from_memory(out).unwrap().to_rgb8().get_pixel(x, y).0;
+        let near = |p: [u8; 3], want: [u8; 3]| p.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 14);
+
+        let wm = Watermark::new(&png, (2, 2), 25, 100).unwrap();
+        let out = export_jpeg(&white, Fit::Original, Some(&wm)).unwrap();
+        assert_eq!(jpeg_dimensions(&out), Some((1000, 800)), "ใส่ลายน้ำอย่างเดียวไม่ย่อภาพ");
+        // กรอบโลโก้ = (776, 576) ขนาด 200×200
+        assert!(near(pixel(&out, 826, 676), [255, 0, 0]), "ส่วนทึบของโลโก้: {:?}", pixel(&out, 826, 676));
+        assert!(near(pixel(&out, 936, 676), [255, 255, 255]), "ส่วนโปร่งใสไม่มีขอบดำ: {:?}", pixel(&out, 936, 676));
+        assert!(near(pixel(&out, 700, 676), [255, 255, 255]), "นอกกรอบไม่ถูกแตะ");
+
+        let half = Watermark::new(&png, (2, 2), 25, 50).unwrap();
+        let out = export_jpeg(&white, Fit::Original, Some(&half)).unwrap();
+        assert!(near(pixel(&out, 826, 676), [255, 128, 128]), "ความทึบ 50%: {:?}", pixel(&out, 826, 676));
+
+        // ย่อขนาดด้วย: ลายน้ำวาดบนภาพที่ย่อแล้ว สัดส่วนเท่าเดิม (กรอบ = (388, 288) ขนาด 100×100)
+        let out = export_jpeg(&white, Fit::LongEdge(500), Some(&wm)).unwrap();
+        assert_eq!(jpeg_dimensions(&out), Some((500, 400)));
+        assert!(near(pixel(&out, 413, 338), [255, 0, 0]));
+        assert!(near(pixel(&out, 470, 338), [255, 255, 255]));
     }
 
     #[test]

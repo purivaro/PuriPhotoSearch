@@ -116,6 +116,13 @@ export async function pickFolder(title: string): Promise<string | null> {
   return invoke<string | null>('pick_folder', { title });
 }
 
+/** เลือกไฟล์รูปหนึ่งไฟล์ (PNG/JPEG) ผ่าน native picker — ใช้เพิ่มลายน้ำ */
+export async function pickImage(title: string): Promise<string | null> {
+  if (!isTauri) throw new Error('pickImage ใช้ได้เฉพาะในแอป');
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string | null>('pick_image', { title });
+}
+
 /** ฟังการเปลี่ยนข้อมูลจาก Rust; ใน dev bridge ไม่มี event ให้ UI ใช้ polling ตามปกติ */
 export async function onDataChanged(handler: (e: DataChangedEvent) => void): Promise<() => void> {
   if (!isTauri) return () => {};

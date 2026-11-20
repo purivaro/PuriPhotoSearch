@@ -5,12 +5,14 @@ import { Button } from '@/components/ui/Button';
 import { Dialog } from '@/components/ui/Dialog';
 import { StatusBadge } from '@/components/ui/Feedback';
 import { Field, TextInput } from '@/components/ui/Form';
-import { pickFolder } from '@/lib/ipc/client';
+import { pickFolder, pickImage } from '@/lib/ipc/client';
 import { useCapabilities } from '@/lib/queries';
 
 interface ChooseOptions {
   title: string;
   hint?: string;
+  /** เลือกโฟลเดอร์ (ค่าเริ่มต้น) หรือไฟล์รูปหนึ่งไฟล์ */
+  kind?: 'folder' | 'image';
 }
 
 type ChooseFolder = (options: ChooseOptions) => Promise<string | null>;
@@ -38,9 +40,9 @@ export function FolderChooserProvider({ children }: { children: ReactNode }) {
     async (options) => {
       if (capabilities?.folderPicker === 'native') {
         try {
-          return await pickFolder(options.title);
+          return await (options.kind === 'image' ? pickImage : pickFolder)(options.title);
         } catch {
-          toast.error('เปิดหน้าต่างเลือกโฟลเดอร์ไม่สำเร็จ กรุณาลองใหม่');
+          toast.error(options.kind === 'image' ? 'เปิดหน้าต่างเลือกไฟล์ไม่สำเร็จ กรุณาลองใหม่' : 'เปิดหน้าต่างเลือกโฟลเดอร์ไม่สำเร็จ กรุณาลองใหม่');
           return null;
         }
       }
@@ -55,6 +57,7 @@ export function FolderChooserProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(() => choose, [choose]);
   const trimmed = path.trim();
+  const image = request?.kind === 'image';
 
   return (
     <FolderChooserContext.Provider value={value}>
@@ -68,7 +71,7 @@ export function FolderChooserProvider({ children }: { children: ReactNode }) {
           <>
             <Button onClick={() => finish(null)}>ยกเลิก</Button>
             <Button variant="primary" form="dev-folder-form" type="submit" disabled={!trimmed}>
-              ใช้โฟลเดอร์นี้
+              {image ? 'ใช้ไฟล์นี้' : 'ใช้โฟลเดอร์นี้'}
             </Button>
           </>
         }
@@ -85,9 +88,9 @@ export function FolderChooserProvider({ children }: { children: ReactNode }) {
             โหมดพัฒนา
           </StatusBadge>
           <p className="text-sm text-muted">
-            หน้านี้กำลังรันในเบราว์เซอร์ จึงไม่มีหน้าต่างเลือกโฟลเดอร์ของระบบ ในแอปจริงจะเปิดหน้าต่างเลือกโฟลเดอร์ให้โดยอัตโนมัติ
+            หน้านี้กำลังรันในเบราว์เซอร์ จึงไม่มีหน้าต่างเลือก{image ? 'ไฟล์' : 'โฟลเดอร์'}ของระบบ ในแอปจริงจะเปิดหน้าต่างเลือก{image ? 'ไฟล์' : 'โฟลเดอร์'}ให้โดยอัตโนมัติ
           </p>
-          <Field label="ตำแหน่งโฟลเดอร์บนเครื่อง">
+          <Field label={image ? 'ตำแหน่งไฟล์บนเครื่อง' : 'ตำแหน่งโฟลเดอร์บนเครื่อง'}>
             {(props) => (
               <TextInput
                 {...props}
@@ -95,7 +98,7 @@ export function FolderChooserProvider({ children }: { children: ReactNode }) {
                 data-testid="dev-folder-input"
                 value={path}
                 onChange={(event) => setPath(event.target.value)}
-                placeholder="/Users/…/Photos/2569/691118 งานอบรม AI"
+                placeholder={image ? '/Users/…/Pictures/logo.png' : '/Users/…/Photos/2569/691118 งานอบรม AI'}
                 spellCheck={false}
                 autoComplete="off"
               />

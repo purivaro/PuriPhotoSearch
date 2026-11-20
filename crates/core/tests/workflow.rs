@@ -944,7 +944,7 @@ fn t27e_shrink_interrupted_at_any_step_finishes_or_reverts_on_next_open() {
 
     // จำลองแอปปิดตรงแต่ละขั้น ด้วยไฟล์และสถานะเดียวกับที่งานจริงทิ้งไว้
     let original = std::fs::read(root.join("a.jpg")).unwrap();
-    let resized = puri_core::media::export_jpeg(&original, puri_core::media::Fit::LongEdge(1600)).unwrap();
+    let resized = puri_core::media::export_jpeg(&original, puri_core::media::Fit::LongEdge(1600), None).unwrap();
     let sha = puri_core::util::hex(&sha2::Sha256::digest(&resized));
     let (w, h) = image::load_from_memory(&resized).map(|i| (i.width(), i.height())).unwrap();
     let conn = rusqlite::Connection::open(lib.tmp.path().join("data/library.sqlite")).unwrap();
@@ -1006,6 +1006,89 @@ fn t27e_shrink_interrupted_at_any_step_finishes_or_reverts_on_next_open() {
     lib.run_jobs();
     assert_eq!(lib.count("SELECT COUNT(*) FROM photo_revisions"), 4, "ไม่มีรูปถูกมองเป็นเนื้อหาใหม่");
     assert_eq!(lib.filenames(json!({ "text": "คุณเอ" })), ["a.jpg"]);
+}
+
+#[test]
+fn t27f_export_with_watermark_marks_every_copy_and_never_the_original() {
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-20 ลายน้ำ");
+    std::fs::create_dir_all(&root).unwrap();
+    // กล้องสั่งหมุน 90°: ภาพที่เห็นเป็นแนวตั้ง 1200×1600
+    std::fs::write(root.join("IMG_A.jpg"), jpeg_with_exif(1600, 1200, 6, "2026:11:20 10:00:00")).unwrap();
+    write_jpeg(&root.join("IMG_B.jpg"), 2);
+    write_png(&root.join("scan.png"));
+    lib.import(&root, "single_event", |_| true);
+    let before = tree_state(&root);
+
+    // โลโก้ PNG 400×200: ครึ่งซ้ายน้ำเงินทึบ ครึ่งขวาโปร่งใส · ไฟล์ที่ไม่ใช่รูปถูกปฏิเสธ
+    let logo = lib.tmp.path().join("โลโก้วัด.png");
+    image::RgbaImage::from_fn(400, 200, |x, _| image::Rgba(if x < 200 { [0, 0, 255, 255] } else { [0, 0, 0, 0] }))
+        .save_with_format(&logo, image::ImageFormat::Png)
+        .unwrap();
+    let junk = lib.tmp.path().join("notes.txt");
+    std::fs::write(&junk, "hello").unwrap();
+    assert_eq!(lib.try_call("add_watermark", json!({ "path": junk })).unwrap_err().code, "UNSUPPORTED_FORMAT");
+    let wm = lib.call("add_watermark", json!({ "path": logo }));
+    assert_eq!(
+        (wm["name"].as_str(), wm["transparent"].as_bool(), wm["width"].as_i64()),
+        (Some("โลโก้วัด"), Some(true), Some(400))
+    );
+    assert_eq!(arr(&lib.call("list_watermarks", json!({}))).len(), 1);
+    let id = wm["id"].as_str().unwrap().to_string();
+    let png = puri_core::api::asset(&lib.app, &format!("watermark/{id}")).unwrap();
+    assert_eq!((png.mime, image::load_from_memory(&png.bytes).unwrap().width()), ("image/png", 400));
+
+    let ids: Vec<Value> = arr(&lib.query(json!({}))["items"]).iter().map(|i| i["id"].clone()).collect();
+    let selection = json!({ "kind": "explicit", "photoIds": ids });
+    let spec = |id: &str, scale: u32| json!({ "id": id, "anchor": "bottom_right", "scale": scale, "opacity": 100 });
+    let plan_for = |dest: &Path, watermark: Value| {
+        std::fs::create_dir_all(dest).unwrap();
+        lib.try_call("preview_export", json!({ "selection": selection, "destination": dest, "watermark": watermark }))
+    };
+    let dest = lib.tmp.path().join("ส่งออกลายน้ำ");
+    assert_eq!(plan_for(&dest, spec(&id, 200)).unwrap_err().code, "INVALID_INPUT");
+    assert_eq!(plan_for(&dest, spec("ไม่มีจริง", 25)).unwrap_err().code, "NOT_FOUND");
+
+    // ขนาดเดิม + ลายน้ำ: ทุกรูปถูกบันทึกใหม่ (PNG เป็น .jpg) แต่ไม่มีรูปไหนถูกย่อ
+    let plan = plan_for(&dest, spec(&id, 25)).unwrap();
+    assert_eq!((plan["plannedOutputCount"].as_i64(), plan["resizedCount"].as_i64()), (Some(3), Some(0)), "{plan}");
+    assert_eq!(plan["watermark"]["anchor"], "bottom_right");
+    assert!(arr(&plan["sampleNames"]).iter().any(|s| s["output"] == "scan.jpg"), "{plan}");
+    let job = lib.call("start_export", json!({ "planId": plan["planId"], "requestId": new_id() }));
+    assert!(job["title"].as_str().unwrap().contains("ลายน้ำ"));
+    lib.run_jobs();
+    let report = lib.call("get_export_report", json!({ "jobId": job["id"] }));
+    assert_eq!((report["copied"].as_i64(), report["failed"].as_i64()), (Some(3), Some(0)), "{report}");
+    assert_eq!(report["watermark"]["id"], id.as_str());
+
+    // ขนาดเดิมและตั้งตรง วันถ่ายอยู่ครบ · โลโก้กว้าง 300 (25% ของด้านสั้น 1200) ชิดขวาล่าง ขอบ 36 → กรอบเริ่มที่ (864, 1414)
+    let out = std::fs::read(dest.join("IMG_A.jpg")).unwrap();
+    let img = image::load_from_memory(&out).unwrap().to_rgb8();
+    assert_eq!(img.dimensions(), (1200, 1600));
+    let far = |p: [u8; 3], q: [u8; 3]| p.iter().zip(q).map(|(a, b)| a.abs_diff(b)).max().unwrap();
+    assert!(far(img.get_pixel(900, 1489).0, [0, 0, 255]) <= 20, "ส่วนทึบของโลโก้: {:?}", img.get_pixel(900, 1489));
+    assert!(far(img.get_pixel(1100, 1489).0, [0, 0, 255]) > 50, "ส่วนโปร่งใสเห็นรูปเดิม");
+    let exif = exif::Reader::new().read_from_container(&mut std::io::Cursor::new(&out)).unwrap();
+    assert_eq!(exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY).unwrap().value.get_uint(0), Some(1));
+    assert!(exif.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY).is_some());
+    assert_eq!(image::load_from_memory(&std::fs::read(dest.join("IMG_B.jpg")).unwrap()).unwrap().width(), 64);
+    assert_eq!(tree_state(&root), before, "ต้นฉบับไม่ถูกแตะ");
+
+    // ลบลายน้ำหลังตรวจแผน: เริ่มงานไม่ได้ · ลบหลังเริ่มงาน: งานหยุดรอพร้อมเหตุผล ไม่ส่งออกสำเนาที่ไม่มีลายน้ำแทน
+    let stale = plan_for(&lib.tmp.path().join("ส่งออก2"), spec(&id, 25)).unwrap();
+    assert_eq!(arr(&lib.call("delete_watermark", json!({ "id": id }))).len(), 0);
+    let err = lib.try_call("start_export", json!({ "planId": stale["planId"], "requestId": new_id() })).unwrap_err();
+    assert_eq!(err.code, "NOT_FOUND");
+    let id2 = lib.call("add_watermark", json!({ "path": logo }))["id"].as_str().unwrap().to_string();
+    let dest3 = lib.tmp.path().join("ส่งออก3");
+    let plan = plan_for(&dest3, spec(&id2, 25)).unwrap();
+    let job = lib.call("start_export", json!({ "planId": plan["planId"], "requestId": new_id() }));
+    lib.call("delete_watermark", json!({ "id": id2 }));
+    lib.run_jobs();
+    let job = lib.call("get_job", json!({ "jobId": job["id"] }));
+    assert_eq!(job["state"], "blocked", "{job}");
+    assert!(job["blockedReason"].as_str().unwrap().contains("ลายน้ำ"));
+    assert_eq!(std::fs::read_dir(&dest3).unwrap().count(), 0);
 }
 
 #[test]

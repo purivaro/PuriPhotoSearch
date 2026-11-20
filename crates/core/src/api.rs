@@ -7,7 +7,7 @@
 use crate::error::{AppError, Result};
 use crate::{
     ai, assets, backup, catalog, db, export, faces, import, jobs, legacy, media, people, platform, relink, review,
-    setup, shrink, App,
+    setup, shrink, watermark, App,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -168,6 +168,15 @@ enum Command {
         /// ไม่ส่งมา = คัดลอกต้นฉบับ (เหมือนรุ่นก่อน)
         #[serde(default)]
         resize: export::Resize,
+        #[serde(default)]
+        watermark: Option<watermark::WatermarkSpec>,
+    },
+    ListWatermarks {},
+    AddWatermark {
+        path: String,
+    },
+    DeleteWatermark {
+        id: String,
     },
     #[serde(rename_all = "camelCase")]
     StartExport {
@@ -308,6 +317,9 @@ pub const COMMAND_NAMES: &[&str] = &[
     "start_export",
     "get_export_report",
     "reveal_export_destination",
+    "list_watermarks",
+    "add_watermark",
+    "delete_watermark",
     "preview_shrink",
     "start_shrink",
     "get_shrink_report",
@@ -455,7 +467,15 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         RetryFailedItems { job_id } => ok(jobs::retry_failed(app, &job_id)?),
 
         CreateSelection(p) => ok(catalog::create_selection(app, &p)?),
-        PreviewExport { selection, destination, resize } => ok(export::preview(app, &selection, &destination, resize)?),
+        PreviewExport { selection, destination, resize, watermark } => {
+            ok(export::preview(app, &selection, &destination, resize, watermark)?)
+        }
+        ListWatermarks {} => ok(watermark::list(&app.db())?),
+        AddWatermark { path } => ok(watermark::add(app, &path)?),
+        DeleteWatermark { id } => {
+            watermark::delete(app, &id)?;
+            ok(watermark::list(&app.db())?)
+        }
         StartExport { plan_id, request_id } => ok(export::start(app, &plan_id, &request_id)?),
         GetExportReport { job_id } => ok(export::report(&app.db(), &job_id)?),
         PreviewShrink { selection, resize } => ok(shrink::preview(app, &selection, resize)?),
