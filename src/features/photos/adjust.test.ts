@@ -1,8 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { NEUTRAL, applyToPixels, autoAdjust, curves, pixel, type Adjust } from './adjust';
+import { NEUTRAL, applyToPixels, autoAdjust, curves, isNeutral, pixel, type Adjust } from './adjust';
 
 // ค่าเดียวกับ adjust::tests::sample ใน Rust
-const sample: Adjust = { exposure: 0.5, contrast: 30, highlights: -40, shadows: 50, whites: 10, blacks: -10, temperature: 20, tint: -10, vibrance: 25, saturation: 10 };
+const sample: Adjust = { ...NEUTRAL, exposure: 0.5, contrast: 30, highlights: -40, shadows: 50, whites: 10, blacks: -10, temperature: 20, tint: -10, vibrance: 25, saturation: 10 };
+// ค่าเดียวกับ adjust::tests::sample_full (แบบ preset "more white skin": HSL + เส้นโค้ง + parametric)
+const sampleFull: Adjust = {
+  ...sample,
+  hue: [0, 3, -1, 7, 0, 5, 0, 0],
+  sat: [32, -3, -13, -33, 15, -9, 0, 0],
+  lum: [20, 42, 2, 11, 25, 0, 5, 6],
+  parametric: [-5, 4, 12, 0],
+  curve: [
+    [2, 11],
+    [60, 60],
+    [138, 145],
+    [255, 255],
+  ],
+};
 
 describe('แสงและสี (สูตรเดียวกับ Rust)', () => {
   it('ได้ค่าเดียวกับ adjust::tests::matches_the_ui_formula ทุกพิกเซล', () => {
@@ -10,6 +24,25 @@ describe('แสงและสี (สูตรเดียวกับ Rust)',
     expect(pixel(sample, t, 10, 20, 30)).toEqual([11, 30, 47]);
     expect(pixel(sample, t, 120, 90, 200)).toEqual([148, 108, 251]);
     expect(pixel(sample, t, 240, 230, 220)).toEqual([255, 255, 252]);
+    const full = curves(sampleFull);
+    expect([pixel(sampleFull, full, 10, 20, 30), pixel(sampleFull, full, 200, 130, 80), pixel(sampleFull, full, 60, 140, 90)]).toEqual([
+      [20, 37, 53],
+      [255, 190, 135],
+      [77, 179, 116],
+    ]);
+  });
+
+  it('HSL และเส้นโค้ง: ส้ม (ผิว) สว่างขึ้น สีเทาไม่เปลี่ยน · เส้นตรง = ไม่ปรับ', () => {
+    const skin: Adjust = { ...NEUTRAL, lum: [0, 100, 0, 0, 0, 0, 0, 0] };
+    const t = curves(skin);
+    const lit = pixel(skin, t, 200, 130, 80);
+    expect(lit[1]).toBeGreaterThan(130);
+    expect(lit[2]).toBeGreaterThan(80);
+    expect(pixel(skin, t, 100, 100, 100)).toEqual([100, 100, 100]);
+    expect(pixel(skin, t, 40, 60, 200)).toEqual([40, 60, 200]);
+    expect(isNeutral({ ...NEUTRAL, curve: [[0, 0], [255, 255]] })).toBe(true);
+    const lifted: Adjust = { ...NEUTRAL, curve: [[0, 30], [255, 255]] };
+    expect(pixel(lifted, curves(lifted), 0, 0, 0)).toEqual([30, 30, 30]);
   });
 
   it('ไม่ปรับ = ภาพเดิม · ขาวดำ = ความสว่างเดิม', () => {
@@ -50,5 +83,11 @@ describe('แสงและสี (สูตรเดียวกับ Rust)',
     expect([...data.slice(0, 3)]).toEqual(pixel(sample, t, 10, 20, 30));
     expect([...data.slice(4, 7)]).toEqual(pixel(sample, t, 120, 90, 200));
     expect([...data.slice(8, 11)]).toEqual(pixel(sample, t, 240, 230, 220));
+    // ทางที่มี HSL ก็ได้ค่าเดียวกัน
+    const full = curves(sampleFull);
+    const more = new Uint8ClampedArray([10, 20, 30, 255, 200, 130, 80, 255]);
+    applyToPixels(more, sampleFull);
+    expect([...more.slice(0, 3)]).toEqual(pixel(sampleFull, full, 10, 20, 30));
+    expect([...more.slice(4, 7)]).toEqual(pixel(sampleFull, full, 200, 130, 80));
   });
 });

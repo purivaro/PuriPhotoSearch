@@ -123,6 +123,13 @@ export async function pickImage(title: string): Promise<string | null> {
   return invoke<string | null>('pick_image', { title });
 }
 
+/** เลือกไฟล์ preset ของ Lightroom (.xmp) หนึ่งไฟล์ผ่าน native picker */
+export async function pickPreset(title: string): Promise<string | null> {
+  if (!isTauri) throw new Error('pickPreset ใช้ได้เฉพาะในแอป');
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string | null>('pick_preset', { title });
+}
+
 /** ฟังการเปลี่ยนข้อมูลจาก Rust; ใน dev bridge ไม่มี event ให้ UI ใช้ polling ตามปกติ */
 export async function onDataChanged(handler: (e: DataChangedEvent) => void): Promise<() => void> {
   if (!isTauri) return () => {};

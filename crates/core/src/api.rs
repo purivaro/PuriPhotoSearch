@@ -6,8 +6,8 @@
 
 use crate::error::{AppError, Result};
 use crate::{
-    ai, assets, backup, catalog, db, edit, export, faces, import, jobs, legacy, media, people, platform, relink,
-    review, setup, shrink, watermark, App,
+    ai, assets, backup, catalog, db, edit, export, faces, import, jobs, legacy, media, people, platform, preset,
+    relink, review, setup, shrink, watermark, App,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -185,6 +185,21 @@ enum Command {
         settings: edit::EditSettings,
         parts: edit::EditParts,
     },
+    ListEditPresets {},
+    SaveEditPreset {
+        name: String,
+        adjust: crate::adjust::Adjust,
+    },
+    RenameEditPreset {
+        id: String,
+        name: String,
+    },
+    DeleteEditPreset {
+        id: String,
+    },
+    ImportLightroomPreset {
+        path: String,
+    },
     ListWatermarks {},
     AddWatermark {
         path: String,
@@ -334,6 +349,11 @@ pub const COMMAND_NAMES: &[&str] = &[
     "save_photo_edit",
     "reset_photo_edit",
     "apply_photo_edits",
+    "list_edit_presets",
+    "save_edit_preset",
+    "rename_edit_preset",
+    "delete_edit_preset",
+    "import_lightroom_preset",
     "list_watermarks",
     "add_watermark",
     "delete_watermark",
@@ -490,6 +510,11 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         SavePhotoEdit { photo_id, settings } => ok(edit::save(app, &photo_id, settings)?),
         ResetPhotoEdit { photo_id } => ok(edit::save(app, &photo_id, edit::EditSettings::default())?),
         ApplyPhotoEdits { selection, settings, parts } => ok(edit::apply_many(app, &selection, &settings, parts)?),
+        ListEditPresets {} => ok(preset::list(&app.db())?),
+        SaveEditPreset { name, adjust } => ok(preset::save(app, &name, &adjust)?),
+        RenameEditPreset { id, name } => ok(preset::rename(app, &id, &name)?),
+        DeleteEditPreset { id } => ok(preset::delete(app, &id)?),
+        ImportLightroomPreset { path } => ok(preset::import_lightroom(app, &path)?),
         ListWatermarks {} => ok(watermark::list(&app.db())?),
         AddWatermark { path } => ok(watermark::add(app, &path)?),
         DeleteWatermark { id } => {

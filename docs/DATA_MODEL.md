@@ -44,6 +44,7 @@ debug build ที่ตั้ง `PURI_DATA_DIR` จะใช้โฟลเด
 | ส่งออก | `selections`, `selection_items` | snapshot ของ "เลือกผลค้นหาทั้งหมด" |
 | | `export_runs`, `export_items` | ผลรายรูปของการส่งออกแต่ละครั้ง |
 | | `photo_edits` | การแต่งภาพต่อรูป (JSON ของ `edit::EditSettings` + `edit_id` ที่ใช้เป็นชื่อ cache) ไฟล์ต้นฉบับไม่ถูกแตะ — DECISIONS ข้อ 17 |
+| | `edit_presets` | preset ของค่าแสงและสี (JSON ของ `adjust::Adjust`) · `source` = user/lightroom · `unsupported` = ส่วนของ .xmp ที่นำเข้าไม่ได้ (schema v7) — DECISIONS ข้อ 20 |
 | | `watermarks` | โลโก้ลายน้ำที่ผู้ใช้เพิ่ม (PNG ในคลัง ด้านยาวไม่เกิน 2048) · `export_runs.watermark` = ลายน้ำของงานส่งออก — DECISIONS ข้อ 16 |
 | | `shrink_runs`, `shrink_items` | ผลรายรูปของการย่อไฟล์ต้นฉบับ (สถานะ เหตุผลที่ข้าม ตำแหน่งต้นฉบับในถังขยะ) — DECISIONS ข้อ 15 |
 | บันทึก | `operations` | audit ของการแก้ใบหน้า (ยังไม่มี undo) |
