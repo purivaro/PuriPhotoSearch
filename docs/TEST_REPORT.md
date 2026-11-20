@@ -17,7 +17,7 @@
 | แอปจริง | `e2e/run.sh` | ผ่าน 14 ขั้น ทั้ง `pnpm tauri dev` และ `.app` debug ที่ bundle แล้ว; รันซ้ำหลัง UI ชุดใบหน้า ผ่าน 14 ขั้นทั้งสองแบบ (แบบ `.app` รันกับ bundle debug ที่เซ็นด้วย Developer ID + hardened runtime) |
 | แอปจริง: อัปเดตตัวเอง | `e2e/update.sh` (19 พ.ย. 2569) | macOS: ผ่าน 5 ขั้น (กุญแจชั่วคราว และกุญแจจริง) · Windows บน runner: ผ่าน — ดูหมวด "อัปเดตแอปเอง" |
 | แอปจริง: เตรียมแอปให้พร้อมใช้ | `e2e/setup.sh` (20 พ.ย. 2569) | macOS: ผ่าน 6 ขั้น — ดูหมวด "เตรียมแอปให้พร้อมใช้" |
-| แอปที่เผยแพร่อัปเดตตัวเอง | `e2e/update-published.sh` (19–20 พ.ย. 2569) | macOS: แอปที่เผยแพร่ 2.0.0-alpha.4 → alpha.5 → … → alpha.9 ผ่านทุกช่วง |
+| แอปที่เผยแพร่อัปเดตตัวเอง | `e2e/update-published.sh` (19–20 พ.ย. 2569) | macOS: แอปที่เผยแพร่ 2.0.0-alpha.4 → alpha.5 → … → alpha.10 ผ่านทุกช่วง |
 | ข้อมูลจริง | Rust core กับ `~/Photos/2569` และฐานของรุ่น Python (อ่านอย่างเดียว) | ดูหมวด "ข้อมูลจริง" |
 
 ## Rust: integration (`crates/core/tests/workflow.rs`)
@@ -510,6 +510,12 @@ workflow `Release` ผ่านทุก job · `e2e/update-published.sh` alpha.
 workflow `Release` ผ่านทุก job (job `update-windows` รัน `e2e/update.sh` แบบสามรุ่นบน Windows เป็นครั้งแรก — ผ่าน) ·
 `e2e/update-published.sh` (หลังแก้ให้ลองกดซ้ำ) alpha.8 → alpha.9 ผ่านรอบแรก: toast 13 วินาที, อัปเดตเป็น 2.0.0-alpha.9 (`spctl` รับ) เปิดใหม่เอง
 การไปรุ่นล่าสุดในครั้งเดียวมีผลตั้งแต่แอป alpha.9 จึงยังไม่ได้พิสูจน์กับไฟล์ที่เผยแพร่ (พิสูจน์ได้เมื่อออกรุ่นถัดไปสองรุ่นติดกันระหว่างแอปถือรุ่นแรกไว้)
+
+### รุ่น 2.0.0-alpha.10 ที่เผยแพร่ (20 พ.ย. 2569)
+
+workflow `Release` ผ่านทุก job (รวม `update-windows`) · `e2e/update-published.sh` alpha.9 → alpha.10 ผ่านรอบแรก:
+toast 13 วินาที, กล่องยืนยันแสดง “มีอะไรใหม่” ของรุ่นนี้, อัปเดตเป็น 2.0.0-alpha.10 (`spctl` รับ) เปิดใหม่เอง
+ไม่เหลือไฟล์ชั่วคราว แอปทดสอบไม่ได้เปิดคลังจริง · การไปรุ่นล่าสุดในครั้งเดียวยังไม่ได้พิสูจน์กับไฟล์ที่เผยแพร่ (เหตุผลเดิมของ alpha.9)
 
 ### Windows (job `update-windows` ของ workflow `Release`, runner `windows-latest` — รอบซ้อมของ PR #17)
 
