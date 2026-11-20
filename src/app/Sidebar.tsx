@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router';
-import { Folder, HardDrive, House, PanelLeft, ScanFace, Search, Settings, Users, type LucideIcon } from 'lucide-react';
+import { Folder, HardDrive, House, Moon, PanelLeft, ScanFace, Search, Settings, Sun, Users, type LucideIcon } from 'lucide-react';
 import { Tooltip } from '@/components/ui/Overlay';
 import { UpdateNotice } from '@/features/update/UpdateNotice';
 import { cn } from '@/lib/cn';
@@ -7,7 +7,7 @@ import { formatCount } from '@/lib/format';
 import { isTauri } from '@/lib/ipc/client';
 import { isMac } from '@/lib/platform';
 import { useSummary } from '@/lib/queries';
-import { useSettings } from '@/stores/settings';
+import { resolveTheme, useSettings } from '@/stores/settings';
 import { Wordmark } from './Logo';
 import { useBackgroundLocation } from './navigation';
 
@@ -122,18 +122,46 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
       <UpdateNotice collapsed={collapsed} />
       <div className={cn('shrink-0 border-t border-line py-4', collapsed ? 'px-2.5' : 'mx-3 px-2')}>
         {collapsed ? (
-          <Tooltip label="ข้อมูลอยู่ในเครื่อง ไม่มีการส่งรูปหรือชื่อบุคคลออกไปที่อื่น" side="right">
-            <div className="flex h-9 items-center justify-center text-muted" role="img" aria-label="ข้อมูลอยู่ในเครื่อง">
-              <HardDrive className="size-5" aria-hidden />
-            </div>
-          </Tooltip>
+          <div className="flex flex-col items-center gap-1">
+            <ThemeToggle collapsed />
+            <Tooltip label="ข้อมูลอยู่ในเครื่อง ไม่มีการส่งรูปหรือชื่อบุคคลออกไปที่อื่น" side="right">
+              <div className="flex h-9 items-center justify-center text-muted" role="img" aria-label="ข้อมูลอยู่ในเครื่อง">
+                <HardDrive className="size-5" aria-hidden />
+              </div>
+            </Tooltip>
+          </div>
         ) : (
-          <div className="flex items-center gap-2.5 text-sm text-muted" title="ไม่มีการส่งรูปหรือชื่อบุคคลออกไปที่อื่น">
-            <HardDrive className="size-5 shrink-0" aria-hidden />
-            ข้อมูลอยู่ในเครื่อง
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2.5 text-sm text-muted" title="ไม่มีการส่งรูปหรือชื่อบุคคลออกไปที่อื่น">
+              <HardDrive className="size-5 shrink-0" aria-hidden />
+              ข้อมูลอยู่ในเครื่อง
+            </div>
+            <ThemeToggle />
           </div>
         )}
       </div>
     </nav>
+  );
+}
+
+/** สลับธีมสว่าง/มืดได้จากทุกหน้า (ตัวเลือก "ตามระบบ" อยู่ในหน้าตั้งค่า) */
+function ThemeToggle({ collapsed }: { collapsed?: boolean }) {
+  const theme = useSettings((s) => s.theme);
+  const setTheme = useSettings((s) => s.setTheme);
+  const dark = resolveTheme(theme) === 'dark';
+  const label = dark ? 'เปลี่ยนเป็นธีมสว่าง' : 'เปลี่ยนเป็นธีมมืด';
+  const Icon = dark ? Sun : Moon;
+  return (
+    <Tooltip label={label} side={collapsed ? 'right' : 'top'}>
+      <button
+        type="button"
+        aria-label={label}
+        onClick={() => setTheme(dark ? 'light' : 'dark')}
+        data-testid="theme-toggle"
+        className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-sunken hover:text-ink"
+      >
+        <Icon className="size-[18px]" aria-hidden />
+      </button>
+    </Tooltip>
   );
 }
