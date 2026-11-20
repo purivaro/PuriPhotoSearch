@@ -207,7 +207,7 @@ export function SearchPage() {
         showEvent
         selectionKey={filterIdentity(filters)}
         summary={(meta) => (
-          <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
             <p className="text-[16px] font-bold text-ink" aria-live="polite" data-testid="search-total">
               {meta.refreshing && meta.total === 0 ? 'กำลังค้นหา…' : `${active ? 'พบ' : 'รูปทั้งหมดในคลัง'} ${formatCount(meta.total)} รูป`}
             </p>

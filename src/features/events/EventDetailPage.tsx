@@ -9,6 +9,7 @@ import { EmptyState, ErrorState, InlineNotice, LoadingBlock, StatusBadge } from 
 import { Field, Select, Tabs, TextArea, TextInput } from '@/components/ui/Form';
 import { JobCard, JobStrip } from '@/features/jobs/JobCard';
 import { FaceAvatar } from '@/features/people/FaceAvatar';
+import { ThumbSizeSlider } from '@/features/photos/ThumbSizeSlider';
 import { PhotoResults } from '@/features/photos/PhotoResults';
 import { cn } from '@/lib/cn';
 import { errorMessage, formatCount, formatThaiDate, isErrorCode, middleEllipsis, newRequestId } from '@/lib/format';
@@ -272,15 +273,17 @@ function PhotosTab({ event, personId, onPersonChange, scanning }: { event: Event
           <option value="filename">ชื่อไฟล์</option>
           <option value="added_desc">เพิ่มล่าสุด</option>
         </Select>
+        <ThumbSizeSlider />
       </div>
       <PhotoResults
+        sizeControl={false}
         query={query}
         label={`รูปในกิจกรรม ${event.title}`}
         originLabel="กลับไปกิจกรรม"
         selectionKey={`${event.id}|${personId ?? ''}|${faceFilter}`}
         summary={(meta) =>
           meta.total > 0 && (personId || faceFilter !== 'any') ? (
-            <p className="mb-2.5 text-sm text-muted" aria-live="polite">
+            <p className="text-sm text-muted" aria-live="polite">
               พบ {formatCount(meta.total)} รูปจาก {formatCount(event.photoCount)} รูปในงานนี้
               {selectedPerson ? ` ที่ยืนยันแล้วว่ามี ${selectedPerson.displayName}` : ''}
             </p>
