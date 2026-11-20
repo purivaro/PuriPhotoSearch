@@ -2,12 +2,12 @@
 
 # Puri Photo Search 2
 
-## ดาวน์โหลด — รุ่นทดลอง 2.0.0-alpha.6
+## ดาวน์โหลด — รุ่นทดลอง 2.0.0-alpha.7
 
 | ระบบ | ดาวน์โหลด | ควรรู้ก่อนติดตั้ง |
 |---|---|---|
-| **macOS** 13.4 ขึ้นไป (ชิป Apple และ Intel) | **[⬇ PuriPhotoSearch-mac.dmg](https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.6/PuriPhotoSearch-mac.dmg)** (21 MB) | เซ็นและผ่านการตรวจของ Apple แล้ว เปิดติดตั้งได้ตามปกติ |
-| **Windows** 10 / 11 (64-bit) | **[⬇ PuriPhotoSearch-windows-setup.exe](https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.6/PuriPhotoSearch-windows-setup.exe)** (10 MB) | ยังไม่ได้เซ็นและยังไม่เคยลองบนเครื่องจริง — เมื่อ SmartScreen เตือน กด "More info" แล้ว "Run anyway" |
+| **macOS** 13.4 ขึ้นไป (ชิป Apple และ Intel) | **[⬇ PuriPhotoSearch-mac.dmg](https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.7/PuriPhotoSearch-mac.dmg)** (21 MB) | เซ็นและผ่านการตรวจของ Apple แล้ว เปิดติดตั้งได้ตามปกติ |
+| **Windows** 10 / 11 (64-bit) | **[⬇ PuriPhotoSearch-windows-setup.exe](https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.7/PuriPhotoSearch-windows-setup.exe)** (10 MB) | ยังไม่ได้เซ็นและยังไม่เคยลองบนเครื่องจริง — เมื่อ SmartScreen เตือน กด "More info" แล้ว "Run anyway" |
 
 วิธีติดตั้งอยู่[ด้านล่าง](#ติดตั้ง-macos) · รุ่นอื่นและ `SHA256SUMS.txt` อยู่ที่หน้า [Releases](https://github.com/purivaro/PuriPhotoSearch/releases)
 
@@ -16,7 +16,7 @@
 
 เขียนใหม่ด้วย Rust + Tauri 2 + React แทนรุ่น Python (PuriPhotoSearch 1.9.3)
 
-> **สถานะ: รุ่นทดลอง (2.0.0-alpha.6) ยังไม่พร้อมใช้กับงานจริง**
+> **สถานะ: รุ่นทดลอง (2.0.0-alpha.7) ยังไม่พร้อมใช้กับงานจริง**
 > วิเคราะห์ใบหน้าอัตโนมัติใช้ได้บน Mac ชิป Apple และ Windows 64-bit (กดดาวน์โหลดตัววิเคราะห์ครั้งเดียว ~290 MB) AI จัดรูปให้บุคคลเอง ผู้ใช้แจ้งเฉพาะรูปที่ไม่ใช่
 > สิ่งที่ทำแล้ว ทดสอบแล้ว และยังไม่ได้ทำ ดูที่ [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)
 
