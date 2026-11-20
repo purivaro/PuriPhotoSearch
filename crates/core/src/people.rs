@@ -546,3 +546,101 @@ pub fn delete_group(app: &App, group_id: &str) -> Result<()> {
     db::bump_revision(&conn)?;
     Ok(())
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeResult {
+    /// บุคคลที่เหลืออยู่หลังรวม
+    pub person_id: String,
+    /// จำนวนบุคคลที่ถูกรวมเข้ามา (และถูกลบออกจากรายชื่อ)
+    pub merged: usize,
+}
+
+/// รวมบุคคลที่ซ้ำกัน (`sources`) เข้ากับ `target` — ย้อนกลับไม่ได้ จึงมีรหัสคำขอกันกดซ้ำ
+///
+/// ย้ายมาที่ `target`: คำยืนยันใบหน้า (รวมที่เพิกถอนแล้ว เพื่อให้ประวัติยังชี้คนที่มีอยู่), ใบหน้าตัวอย่าง, คำปฏิเสธข้อเสนอ,
+/// กลุ่ม, ชื่ออื่น (ชื่อของคนที่ถูกรวมที่ต่างจากของ `target` กลายเป็นชื่ออื่น), ชื่อเล่น/ภาพตัวแทน/บันทึก เมื่อ `target` ยังไม่มี,
+/// การปักหมุด, การเปิดล่าสุด และการจับคู่กับรุ่น Python (นำเข้าซ้ำจะไม่สร้างคนที่รวมไปแล้วกลับมา)
+pub fn merge(app: &App, target: &str, sources: &[String], request_id: &str) -> Result<MergeResult> {
+    if let Some(prev) = replay::<MergeResult>(&app.db(), request_id)? {
+        return Ok(prev);
+    }
+    let mut ids: Vec<&str> = sources.iter().map(String::as_str).filter(|id| *id != target).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return Err(AppError::invalid("เลือกบุคคลอื่นอย่างน้อยหนึ่งคนเพื่อรวม"));
+    }
+    let result = {
+        let mut conn = app.db();
+        let tx = conn.transaction()?;
+        summary(&tx, target)?;
+        let now = util::now();
+        for source in &ids {
+            let (name, key, nickname, notes): (String, String, Option<String>, String) = tx
+                .query_row("SELECT display_name, name_key, nickname, notes FROM persons WHERE id = ?1", [source], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })
+                .optional()?
+                .ok_or_else(|| AppError::not_found("บุคคลที่จะรวม"))?;
+            let p = params![source, target];
+            tx.execute("UPDATE face_assignments SET person_id = ?2 WHERE person_id = ?1", p)?;
+            tx.execute("UPDATE person_reference_samples SET person_id = ?2 WHERE person_id = ?1", p)?;
+            // "ไม่ใช่คนนี้" ของคนที่ซ้ำ ใช้กับคนที่เหลือด้วย ยกเว้นใบหน้าที่ยืนยันแล้วว่าเป็นคนที่เหลือ
+            tx.execute(
+                "INSERT OR IGNORE INTO face_rejections(face_id, person_id, created_at)
+                 SELECT r.face_id, ?2, r.created_at FROM face_rejections r WHERE r.person_id = ?1
+                   AND NOT EXISTS(SELECT 1 FROM face_assignments a
+                                  WHERE a.face_id = r.face_id AND a.person_id = ?2 AND a.revoked_at IS NULL)",
+                p,
+            )?;
+            tx.execute("INSERT OR IGNORE INTO person_groups(person_id, group_id) SELECT ?2, group_id FROM person_groups WHERE person_id = ?1", p)?;
+            tx.execute(
+                "INSERT OR IGNORE INTO person_aliases(person_id, alias, alias_key) SELECT ?2, alias, alias_key FROM person_aliases WHERE person_id = ?1",
+                p,
+            )?;
+            tx.execute(
+                "INSERT OR IGNORE INTO person_aliases(person_id, alias, alias_key)
+                 SELECT ?2, ?3, ?4 WHERE ?4 <> (SELECT name_key FROM persons WHERE id = ?2)",
+                params![source, target, name, key],
+            )?;
+            tx.execute(
+                "UPDATE persons SET
+                   nickname = COALESCE(nickname, ?2),
+                   cover_face_id = COALESCE(cover_face_id, (SELECT cover_face_id FROM persons WHERE id = ?3)),
+                   notes = CASE WHEN ?4 = '' OR instr(notes, ?4) > 0 THEN notes
+                                WHEN notes = '' THEN ?4 ELSE notes || char(10) || ?4 END,
+                   record_version = record_version + 1
+                 WHERE id = ?1",
+                params![target, nickname, source, notes.trim()],
+            )?;
+            tx.execute(
+                "INSERT OR IGNORE INTO pinned_persons(person_id, position, created_at)
+                 SELECT ?2, position, created_at FROM pinned_persons WHERE person_id = ?1",
+                p,
+            )?;
+            tx.execute(
+                "INSERT INTO recent_person_views(person_id, last_viewed_at)
+                 SELECT ?2, last_viewed_at FROM recent_person_views WHERE person_id = ?1
+                 ON CONFLICT(person_id) DO UPDATE SET last_viewed_at = max(last_viewed_at, excluded.last_viewed_at)",
+                p,
+            )?;
+            tx.execute("UPDATE legacy_id_map SET new_id = ?2 WHERE kind = 'person' AND new_id = ?1", p)?;
+            tx.execute("DELETE FROM persons WHERE id = ?1", [source])?;
+        }
+        tx.execute(
+            "INSERT INTO operations(id, kind, summary, created_at) VALUES (?1, 'merge_persons', ?2, ?3)",
+            params![util::new_id(), serde_json::json!({ "target": target, "sources": ids }).to_string(), now],
+        )?;
+        // คำยืนยันและใบหน้าตัวอย่างย้ายเจ้าของ: ผลจับคู่และคิวตรวจสอบที่ออกไปแล้วใช้ไม่ได้
+        db::bump_decision(&tx)?;
+        db::bump_revision(&tx)?;
+        let result = MergeResult { person_id: target.to_string(), merged: ids.len() };
+        remember(&tx, request_id, "merge_persons", &result)?;
+        tx.commit()?;
+        result
+    };
+    app.worker.wake();
+    app.notify(&["people"]);
+    Ok(result)
+}

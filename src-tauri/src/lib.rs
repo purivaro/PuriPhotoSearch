@@ -80,6 +80,7 @@ domain_commands!(
     record_person_view,
     set_home_people_tab,
     get_person_quick_view,
+    merge_persons,
     list_groups,
     create_group,
     delete_group,

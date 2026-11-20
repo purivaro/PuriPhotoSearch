@@ -712,6 +712,8 @@ export interface Commands {
   set_person_cover: [{ personId: Id; faceId: Id }, PersonSummary];
   list_home_people: [{ limit?: number }, HomePeople];
   set_person_pinned: [{ personId: Id; pinned: boolean }, PersonSummary];
+  /** รวมบุคคลที่ซ้ำ (sourceIds) เข้ากับ targetId — ย้อนกลับไม่ได้; ใบหน้าตัวอย่าง คำยืนยัน กลุ่ม ชื่ออื่น และหมุดย้ายมาที่ targetId */
+  merge_persons: [{ targetId: Id; sourceIds: Id[]; requestId: Id }, { personId: Id; merged: number }];
   /** เรียกเฉพาะเมื่อผู้ใช้ตั้งใจเปิดดู (เปิด S09 หรือกดดูเร็วสำเร็จ) */
   record_person_view: [{ personId: Id }, null];
   set_home_people_tab: [{ tab: 'pinned' | 'recent' }, null];
