@@ -1199,6 +1199,62 @@ fn edit_crop_and_rotate_keep_faces_names_and_the_original_file() {
 }
 
 #[test]
+fn edit_light_and_color_change_views_and_exports_but_not_faces_or_the_file() {
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-21 แสงสี");
+    std::fs::create_dir_all(&root).unwrap();
+    // ภาพเทากลาง 300×200
+    let grey = image::RgbImage::from_pixel(300, 200, image::Rgb([90, 90, 90]));
+    let mut bytes = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 95).encode_image(&grey).unwrap();
+    std::fs::write(root.join("grey.jpg"), &bytes).unwrap();
+    lib.import(&root, "single_event", |_| true);
+    let before = tree_state(&root);
+    let id = lib.photo_id("grey.jpg");
+    let face = lib.call(
+        "create_manual_face",
+        json!({ "requestId": new_id(), "photoId": id, "bbox": { "x": 0.4, "y": 0.3, "w": 0.2, "h": 0.3 }, "newPersonName": "คุณเทา" }),
+    )["faces"][0]
+        .clone();
+    let center = |kind: &str| {
+        let a = puri_core::api::asset(&lib.app, &format!("{kind}/{id}")).unwrap();
+        image::load_from_memory(&a.bytes).unwrap().to_rgb8().get_pixel(150, 100).0
+    };
+    assert!(center("photo")[0].abs_diff(90) <= 3);
+
+    // ค่าเกินช่วงถูกปฏิเสธ
+    let bad = json!({ "adjust": { "exposure": 9.0 } });
+    assert_eq!(
+        lib.try_call("save_photo_edit", json!({ "photoId": id, "settings": bad })).unwrap_err().code,
+        "INVALID_INPUT"
+    );
+
+    // ค่าแสง +1 EV และอุ่นขึ้น: ภาพที่แสดงและภาพย่อสว่างขึ้นและแดงกว่าน้ำเงิน · ขนาดภาพเท่าเดิม · กรอบใบหน้าไม่ขยับ
+    let settings = json!({ "adjust": { "exposure": 1.0, "temperature": 40.0 } });
+    let details = lib.call("save_photo_edit", json!({ "photoId": id, "settings": settings }));
+    assert_eq!((details["edit"]["width"].as_i64(), details["edit"]["height"].as_i64()), (Some(300), Some(200)));
+    assert_eq!(details["faces"][0]["bbox"], face["bbox"]);
+    let shown = center("photo");
+    assert!(shown[1] > 110 && shown[0] > shown[2], "{shown:?}");
+    let thumb = center("thumb");
+    assert!(thumb[1] > 110, "{thumb:?}");
+    assert!(center("original")[0].abs_diff(90) <= 3, "ต้นฉบับยังเป็นภาพเดิม");
+
+    // สำเนาที่ส่งออกได้แสงสีชุดเดียวกัน
+    let dest = lib.tmp.path().join("ส่งออกแสงสี");
+    std::fs::create_dir_all(&dest).unwrap();
+    let plan = lib
+        .call("preview_export", json!({ "selection": { "kind": "explicit", "photoIds": [id] }, "destination": dest }));
+    lib.call("start_export", json!({ "planId": plan["planId"], "requestId": new_id() }));
+    lib.run_jobs();
+    let out = image::load_from_memory(&std::fs::read(dest.join("grey.jpg")).unwrap()).unwrap().to_rgb8();
+    let px = out.get_pixel(150, 100).0;
+    assert!(px.iter().zip(shown).all(|(a, b)| a.abs_diff(b) <= 4), "ส่งออก {px:?} ตรงกับที่แสดง {shown:?}");
+    assert_eq!(lib.filenames(json!({ "text": "คุณเทา" })), ["grey.jpg"]);
+    assert_eq!(tree_state(&root), before, "แต่งแสงสีไม่แตะไฟล์ต้นฉบับ");
+}
+
+#[test]
 fn t27b_export_refuses_source_changed_since_import_and_cancel_keeps_finished_copies() {
     let lib = Lib::new();
     let (root, dest) = export_fixture(&lib);

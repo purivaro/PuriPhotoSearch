@@ -1,17 +1,23 @@
 import type { EditSettings, UnitRect } from '@/lib/ipc/types';
+import { NEUTRAL, isNeutral } from './adjust';
 
 /**
  * คณิตของหน้าแต่งภาพ — สูตรเดียวกับ `edit::Geometry` ใน Rust (มีเทสต์ค่าเดียวกันทั้งสองฝั่ง)
  * ลำดับ: ภาพหมุนตาม EXIF → หมุนทีละ 90° → ปรับเอียง (กรอบใหญ่สุดในภาพที่เอียง สัดส่วนเดิม) → ตัด
  */
 
-export const IDENTITY: EditSettings = { rotate: 0, straighten: 0, crop: null };
+export const IDENTITY: EditSettings = { rotate: 0, straighten: 0, crop: null, adjust: NEUTRAL };
 export const FULL: UnitRect = { x: 0, y: 0, w: 1, h: 1 };
 export const MAX_STRAIGHTEN = 45;
 /** กรอบตัดเล็กสุด (สัดส่วนของแต่ละด้าน) — Rust: edit::MIN_CROP */
 export const MIN_CROP = 0.02;
 
 export function isIdentity(s: EditSettings): boolean {
+  return isGeometryIdentity(s) && isNeutral(s.adjust);
+}
+
+/** ไม่ได้ตัด หมุน หรือปรับเอียง */
+export function isGeometryIdentity(s: EditSettings): boolean {
   const c = s.crop;
   return s.rotate === 0 && s.straighten === 0 && (!c || (c.x === 0 && c.y === 0 && c.w === 1 && c.h === 1));
 }

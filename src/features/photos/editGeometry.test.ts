@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { NEUTRAL } from './adjust';
 import { boxToFrame, cutOut, dragCrop, fitAspect, outputSize, rotateCrop, toFrame, turn } from './editGeometry';
 
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
 
 describe('คณิตของหน้าแต่งภาพ (ค่าเดียวกับ edit::tests ใน Rust)', () => {
   it('หมุน 90° ตามเข็ม: มุมซ้ายบนไปขวาบน ภาพแนวนอนกลายเป็นแนวตั้ง', () => {
-    const s = { rotate: 90 as const, straighten: 0, crop: null };
+    const s = { rotate: 90 as const, straighten: 0, crop: null, adjust: NEUTRAL };
     expect(outputSize(400, 300, s)).toEqual({ w: 300, h: 400 });
     const p = toFrame(400, 300, s, 0, 0);
     expect(near(p.x, 1) && near(p.y, 0)).toBe(true);
@@ -14,13 +15,13 @@ describe('คณิตของหน้าแต่งภาพ (ค่าเ�
   });
 
   it('ปรับเอียงคงสัดส่วนเดิมและเล็กลง', () => {
-    const { w, h } = outputSize(1000, 500, { rotate: 0, straighten: 10, crop: null });
+    const { w, h } = outputSize(1000, 500, { rotate: 0, straighten: 10, crop: null, adjust: NEUTRAL });
     expect(Math.abs(w / h - 2)).toBeLessThan(0.01);
     expect(w).toBeLessThan(1000);
   });
 
   it('กรอบใบหน้าตามการหมุนและตัด: ใบหน้าที่เหลือในกรอบไม่ถึงครึ่งถือว่าถูกตัดออก', () => {
-    const s = { rotate: 90 as const, straighten: 0, crop: { x: 0, y: 0, w: 1, h: 0.5 } };
+    const s = { rotate: 90 as const, straighten: 0, crop: { x: 0, y: 0, w: 1, h: 0.5 }, adjust: NEUTRAL };
     const left = boxToFrame(400, 300, s, { x: 0.1, y: 0.2, w: 0.1, h: 0.2 });
     expect(near(left.x, 0.6) && near(left.y, 0.1) && near(left.w, 0.2) && near(left.h, 0.1)).toBe(true);
     expect(cutOut(left, s.crop)).toBe(false);

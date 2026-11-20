@@ -284,7 +284,23 @@ export interface UnitRect {
   h: number;
 }
 
-/** ค่าที่แต่งของรูปหนึ่ง (ไฟล์ต้นฉบับไม่ถูกแตะ) — DECISIONS ข้อ 17 */
+/** แสงและสี (0 = ไม่ปรับ) — สูตรอยู่ที่ adjust.rs / adjust.ts */
+export interface EditAdjust {
+  /** ค่าแสง หน่วย EV (−3 ถึง 3) */
+  exposure: number;
+  /** ที่เหลือ −100 ถึง 100 */
+  contrast: number;
+  highlights: number;
+  shadows: number;
+  whites: number;
+  blacks: number;
+  temperature: number;
+  tint: number;
+  vibrance: number;
+  saturation: number;
+}
+
+/** ค่าที่แต่งของรูปหนึ่ง (ไฟล์ต้นฉบับไม่ถูกแตะ) — DECISIONS ข้อ 17–18 */
 export interface EditSettings {
   /** หมุนตามเข็มนาฬิกาทีละ 90° */
   rotate: 0 | 90 | 180 | 270;
@@ -292,6 +308,8 @@ export interface EditSettings {
   straighten: number;
   /** กรอบตัด เป็นสัดส่วนของภาพหลังหมุนและปรับเอียง (null = ไม่ตัด) */
   crop: UnitRect | null;
+  /** แสงและสี (ทำหลังตัด/หมุน) */
+  adjust: EditAdjust;
 }
 
 export interface PhotoEdit {

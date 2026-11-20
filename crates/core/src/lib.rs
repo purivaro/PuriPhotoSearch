@@ -3,6 +3,7 @@
 //! `src-tauri` เป็น wrapper บาง ๆ ที่ส่งคำสั่งมายัง [`api::dispatch`];
 //! กติกาข้อมูลทั้งหมด (Blueprint หมวด 6, 8, 9, 11, 13) อยู่ใน crate นี้
 
+pub mod adjust;
 pub mod ai;
 pub mod api;
 pub mod assets;
