@@ -38,6 +38,12 @@ export interface ResizeOptions {
 
 export const EXPORT_OPTIONS: ResizeOptions = { presets: PRESETS, pxMin: PX_MIN, bytesMin: BYTES_MIN };
 
+/** ใส่ลายน้ำแล้วไม่มีการคัดลอกไฟล์เดิม: "ต้นฉบับ" หมายถึงขนาดเดิมที่บันทึกใหม่ */
+export const EXPORT_WATERMARK_OPTIONS: ResizeOptions = {
+  ...EXPORT_OPTIONS,
+  presets: PRESETS.map((p) => (p.value === 'original' ? { ...p, label: 'ขนาดเดิม (ไม่ย่อ)' } : p)),
+};
+
 // ย่อไฟล์ต้นฉบับ: ไม่ต่ำกว่าภาพที่ตัววิเคราะห์ใบหน้าใช้ (Rust: shrink::MIN_EDGE / MIN_BYTES)
 export const SHRINK_OPTIONS: ResizeOptions = {
   presets: [

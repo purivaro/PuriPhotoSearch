@@ -1,5 +1,5 @@
 //! เสิร์ฟภาพให้ UI ด้วย ID ทึบ (Blueprint 7.3): ไม่มี path จากฝั่ง UI และไม่เปิดสิทธิ์อ่านทั้งดิสก์
-//!   thumb/{photoId} · photo/{photoId} · face/{faceId} · draft/{previewId}/{draftId}
+//!   thumb/{photoId} · photo/{photoId} · face/{faceId} · draft/{previewId}/{draftId} · watermark/{watermarkId}
 
 use crate::error::{AppError, Result};
 use crate::{media, App};
@@ -29,6 +29,10 @@ pub fn resolve(app: &App, request_path: &str) -> Result<Asset> {
             Ok(Asset { bytes: std::fs::read(&path)?, mime: media::mime_for(&path) })
         }
         ("face", None) => face(app, id),
+        ("watermark", None) => Ok(Asset {
+            bytes: crate::watermark::image_bytes(&app.db(), id)?.ok_or_else(|| AppError::not_found("ลายน้ำ"))?,
+            mime: "image/png",
+        }),
         ("sample", None) => {
             let bytes: Vec<u8> = app
                 .db()

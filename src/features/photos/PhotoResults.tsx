@@ -9,7 +9,7 @@ import { usePhotoList, type PhotoQuery } from '@/lib/queries';
 import { PhotoGrid } from './PhotoGrid';
 import { SelectionBar } from './SelectionBar';
 import { ThumbSizeSlider } from './ThumbSizeSlider';
-import { EMPTY_SELECTION, selectionCount, toSelectionSpec, type Selection } from './selection';
+import { EMPTY_SELECTION, isSelected, selectionCount, toSelectionSpec, type Selection } from './selection';
 
 export interface PhotoResultsMeta {
   total: number;
@@ -115,6 +115,8 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
 
   const ids = list.items.map((p) => p.id);
   const count = selectionCount(selection);
+  // รูปแรกที่เลือกไว้ (ในลำดับที่เห็น) ใช้เป็นตัวอย่างลายน้ำ
+  const previewPhotoId = list.items.find((p) => isSelected(selection, p.id))?.id ?? null;
   return (
     <>
       {header(sizeControl)}
@@ -146,7 +148,7 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
           clear: () => setSelection(EMPTY_SELECTION),
         })}
       />
-      <ExportDialog open={exporting} onOpenChange={setExporting} selection={toSelectionSpec(selection)} count={count} />
+      <ExportDialog open={exporting} onOpenChange={setExporting} selection={toSelectionSpec(selection)} count={count} previewPhotoId={previewPhotoId} />
       <ShrinkDialog open={shrinking} onOpenChange={setShrinking} selection={toSelectionSpec(selection)} count={count} />
     </>
   );

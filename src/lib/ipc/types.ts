@@ -553,6 +553,37 @@ export interface SelectionSnapshot {
 /** วิธีสร้างสำเนา: คัดลอกไฟล์เดิม หรือย่อเป็น JPEG (รูปที่เล็กพออยู่แล้วคัดลอกไฟล์เดิม) */
 export type ExportResize = { mode: 'original' } | { mode: 'long_edge'; px: number } | { mode: 'max_bytes'; bytes: number };
 
+export type WatermarkAnchor =
+  | 'top_left'
+  | 'top_center'
+  | 'top_right'
+  | 'center_left'
+  | 'center'
+  | 'center_right'
+  | 'bottom_left'
+  | 'bottom_center'
+  | 'bottom_right';
+
+/** ลายน้ำที่ใส่ทุกสำเนาของงานส่งออก */
+export interface WatermarkSpec {
+  id: Id;
+  anchor: WatermarkAnchor;
+  /** ด้านยาวของโลโก้ เป็น % ของด้านสั้นของภาพ (5–100) */
+  scale: number;
+  /** ความทึบ % (5–100) */
+  opacity: number;
+}
+
+/** โลโก้ที่เก็บไว้ในคลัง (รูป: asset `watermark/{id}`) */
+export interface WatermarkInfo {
+  id: Id;
+  name: string;
+  width: number;
+  height: number;
+  /** มีส่วนโปร่งใส — ไม่มีจะเห็นเป็นกรอบสี่เหลี่ยมทับรูป */
+  transparent: boolean;
+}
+
 export interface ExportPlan {
   planId: Id;
   destination: string;
@@ -568,8 +599,9 @@ export interface ExportPlan {
   /** ขนาดรวมของต้นฉบับที่จะส่งออก */
   sourceBytes: number;
   resize: ExportResize;
-  /** ไฟล์ที่จะถูกย่อ ที่เหลือเล็กพออยู่แล้วจึงคัดลอกไฟล์เดิม */
+  /** ไฟล์ที่จะถูกย่อ ที่เหลือเล็กพออยู่แล้วจึงคัดลอกไฟล์เดิม (หรือบันทึกใหม่ขนาดเดิมเมื่อใส่ลายน้ำ) */
   resizedCount: number;
+  watermark: WatermarkSpec | null;
   sampleNames: { source: string; output: string }[];
   canStart: boolean;
   blockedReason: string | null;
@@ -592,6 +624,7 @@ export interface ExportReport {
   unavailable: number;
   cancelled: number;
   resize: ExportResize;
+  watermark: WatermarkSpec | null;
   /** ขนาดรวมของต้นฉบับและของสำเนา เฉพาะรูปที่ส่งออกสำเร็จ */
   sourceBytes: number;
   outputBytes: number;
@@ -794,11 +827,15 @@ export interface Commands {
 
   /** แช่แข็งผลค้นหาทั้งหมด ณ ตอนนี้ (ไม่ใช่เฉพาะหน้าที่โหลด) */
   create_selection: [SearchParams, SelectionSnapshot];
-  preview_export: [{ selection: SelectionSpec; destination: string; resize?: ExportResize }, ExportPlan];
+  preview_export: [{ selection: SelectionSpec; destination: string; resize?: ExportResize; watermark?: WatermarkSpec | null }, ExportPlan];
   start_export: [{ planId: Id; requestId: Id }, JobSnapshot];
   get_export_report: [{ jobId: Id }, ExportReport];
   /** แสดงโฟลเดอร์ปลายทางของงานส่งออกในตัวจัดการไฟล์ */
   reveal_export_destination: [{ jobId: Id }, null];
+  list_watermarks: [Record<string, never>, WatermarkInfo[]];
+  add_watermark: [{ path: string }, WatermarkInfo];
+  /** คืนรายการที่เหลือ */
+  delete_watermark: [{ id: Id }, WatermarkInfo[]];
   preview_shrink: [{ selection: SelectionSpec; resize: ExportResize }, ShrinkPlan];
   start_shrink: [{ planId: Id; requestId: Id }, JobSnapshot];
   get_shrink_report: [{ jobId: Id }, ShrinkReport];
@@ -841,7 +878,7 @@ export type CommandName = keyof Commands;
  *   draft/{previewId}/{draftId} รูปตัวอย่างในหน้าตรวจรายการก่อนเพิ่ม
  *   sample/{sampleId}          ครอปใบหน้าตัวอย่างของบุคคลที่นำเข้าจากรุ่นเดิม
  */
-export type AssetKind = 'thumb' | 'photo' | 'face' | 'draft' | 'sample';
+export type AssetKind = 'thumb' | 'photo' | 'face' | 'draft' | 'sample' | 'watermark';
 
 /** Event ที่ Rust ส่งหลัง commit สำเร็จ (ในแอป Tauri); UI ต้องทำงานได้แม้ไม่ได้รับ (ใช้ polling) */
 export interface DataChangedEvent {
