@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Link, useParams, useSearchParams } from 'react-router';
-import { Archive, ArchiveRestore, Calendar, CircleCheck, EllipsisVertical, Image as ImageIcon, Pencil, Pin, Sparkles, Undo2, UserRoundSearch, UserX } from 'lucide-react';
+import { Archive, ArchiveRestore, Calendar, CircleCheck, EllipsisVertical, Image as ImageIcon, Merge, Pencil, Pin, Sparkles, Undo2, UserRoundSearch, Users, UserX } from 'lucide-react';
 import { Page, PageHeader, useDocumentTitle } from '@/app/PageLayout';
 import { Button, IconButton } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
@@ -13,10 +13,11 @@ import { PhotoResults } from '@/features/photos/PhotoResults';
 import { errorMessage, formatCount, formatThaiDate, isErrorCode } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
 import type { PersonDetail, PhotoResult, SearchParams } from '@/lib/ipc/types';
-import { invalidatePeopleData, PHOTO_PAGE_SIZE, qk, type PhotoQuery } from '@/lib/queries';
+import { invalidatePeopleData, PHOTO_PAGE_SIZE, qk, usePeople, type PhotoQuery } from '@/lib/queries';
 import { CoappearanceList } from './CoappearanceList';
 import { FaceAvatar } from './FaceAvatar';
 import { PersonEditorDialog } from './PersonEditorDialog';
+import { MergePeopleDialog } from './MergePeopleDialog';
 import { useSetArchived, useTogglePin } from './usePersonActions';
 
 type PersonTab = 'photos' | 'events' | 'together' | 'info';
@@ -31,7 +32,11 @@ export function PersonDetailPage() {
   const setArchived = useSetArchived();
   const [editing, setEditing] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [merging, setMerging] = useState<'pick' | 'same' | null>(null);
   useDocumentTitle(person.data?.displayName);
+  // คนอื่นที่ชื่อเหมือนกันทุกตัวอักษร: มักเป็นคนเดียวกันที่ถูกเพิ่มซ้ำ (เช่น ข้อมูลจากรุ่นเดิม) — เสนอให้รวม
+  const name = person.data?.displayName.trim() ?? '';
+  const namesakes = usePeople({ text: name, includeArchived: true }, Boolean(name)).data?.filter((p) => p.id !== personId && p.displayName.trim() === name) ?? [];
 
   // เปิดหน้านี้โดยเจตนา → บันทึก "เปิดล่าสุด" หนึ่งครั้งต่อคน
   const recorded = useRef<string | null>(null);
@@ -146,10 +151,30 @@ export function PersonDetailPage() {
                   เก็บออกจากรายชื่อหลัก
                 </MenuItem>
               )}
+              <MenuItem icon={<Merge />} onSelect={() => setMerging('pick')}>
+                รวมกับบุคคลที่ซ้ำ…
+              </MenuItem>
             </MenuContent>
           </Menu>
         </div>
       </div>
+
+      {namesakes.length > 0 && (
+        <InlineNotice
+          tone="brand"
+          icon={<Users aria-hidden />}
+          className="mb-5 items-center"
+          action={
+            <Button size="sm" variant="primary" icon={<Merge className="size-4" aria-hidden />} onClick={() => setMerging('same')} data-testid="person-namesakes-merge">
+              รวมเป็นคนเดียว
+            </Button>
+          }
+        >
+          <span data-testid="person-namesakes">
+            มีบุคคลชื่อ “{data.displayName}” อีก {formatCount(namesakes.length)} คน ({namesakes.map((p) => `${formatCount(p.confirmedPhotoCount + p.aiPhotoCount)} รูป`).join(', ')}) — ถ้าเป็นคนเดียวกัน รวมไว้ที่นี่ได้
+          </span>
+        </InlineNotice>
+      )}
 
       <Tabs<PersonTab>
         label="ส่วนของบุคคล"
@@ -181,6 +206,7 @@ export function PersonDetailPage() {
       {tab === 'info' && <PersonInfo person={data} onEdit={() => setEditing(true)} />}
 
       <PersonEditorDialog open={editing} onOpenChange={setEditing} personId={data.id} />
+      <MergePeopleDialog open={merging !== null} onOpenChange={(open) => !open && setMerging(null)} target={data} initial={merging === 'same' ? namesakes : []} />
       <ConfirmDialog
         open={confirmArchive}
         onOpenChange={setConfirmArchive}

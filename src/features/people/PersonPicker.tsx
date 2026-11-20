@@ -2,6 +2,7 @@ import { useDeferredValue, useState } from 'react';
 import { Command } from 'cmdk';
 import { Search, UserPlus } from 'lucide-react';
 import { ErrorState, Spinner } from '@/components/ui/Feedback';
+import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import type { Id, PersonSummary } from '@/lib/ipc/types';
 import { usePeople } from '@/lib/queries';
@@ -19,13 +20,15 @@ interface PersonPickerProps {
   allowCreate?: boolean;
   busy?: boolean;
   placeholder?: string;
+  /** แทนความกว้างตั้งต้น (320px) เช่น `w-full` เมื่อวางในกล่องที่กว้างกว่า */
+  className?: string;
 }
 
 /**
  * ช่องเลือกบุคคล: ค้นจากชื่อ/ชื่อเล่น แสดงภาพหน้าและจำนวนรูปเพื่อแยกคนชื่อซ้ำ
  * เลือกด้วยลูกศรขึ้น/ลง + Enter ได้ ไม่ใช้ชื่อเป็นตัวตน (ส่งกลับเป็น ID)
  */
-export function PersonPicker({ onPick, excludeIds = [], allowCreate = true, busy, placeholder = 'พิมพ์ชื่อเพื่อค้นหาหรือสร้างบุคคล' }: PersonPickerProps) {
+export function PersonPicker({ onPick, excludeIds = [], allowCreate = true, busy, placeholder = 'พิมพ์ชื่อเพื่อค้นหาหรือสร้างบุคคล', className }: PersonPickerProps) {
   const [text, setText] = useState('');
   const deferred = useDeferredValue(text.trim());
   const people = usePeople(deferred ? { text: deferred } : {});
@@ -39,7 +42,7 @@ export function PersonPicker({ onPick, excludeIds = [], allowCreate = true, busy
   const active = values.includes(highlighted) ? highlighted : (values[0] ?? '');
 
   return (
-    <Command shouldFilter={false} value={active} onValueChange={setHighlighted} label="เลือกบุคคล" className="w-[320px] max-w-[calc(100vw-48px)]">
+    <Command shouldFilter={false} value={active} onValueChange={setHighlighted} label="เลือกบุคคล" className={cn('w-[320px] max-w-[calc(100vw-48px)]', className)}>
       <div className="flex items-center gap-2 border-b border-line px-3">
         <Search className="size-4 shrink-0 text-muted" aria-hidden />
         <Command.Input

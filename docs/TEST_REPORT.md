@@ -9,7 +9,7 @@
 |---|---|---|
 | Rust: unit | `cargo test -p puri-core --lib` | 7 ผ่าน |
 | Rust: integration กับไฟล์จริง | `cargo test -p puri-core --test workflow` | 24 ผ่าน |
-| Rust: วิเคราะห์ใบหน้า/ข้อเสนอ/นำเข้ารายชื่อ | `cargo test -p puri-core --test faces_ai` | 10 ผ่าน |
+| Rust: วิเคราะห์ใบหน้า/ข้อเสนอ/นำเข้ารายชื่อ/รวมบุคคล | `cargo test -p puri-core --test faces_ai` | 11 ผ่าน |
 | Rust: สำรองและกู้คืน | `cargo test -p puri-core --test backup` | 3 ผ่าน |
 | Rust: คำสั่ง Tauri ครบทุกตัว | `cargo test -p puri-photo-search` | 1 ผ่าน |
 | Rust: lint | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` | ผ่าน ไม่มี warning |
@@ -253,6 +253,7 @@ debug build ฉีดสคริปต์เข้า WKWebView ของหน
 | `suggestions_are_never_confirmations_and_review_acts_only_on_selected_faces` | กลุ่มใบหน้าไม่ใช่บุคคล; ข้อเสนอไม่นับเป็นรูปของบุคคลและไม่อยู่ในผลค้น (T18); ยืนยันเฉพาะใบที่เลือก (S16 Acceptance 1); คิวของ revision เก่าได้ `PREVIEW_STALE`; ปฏิเสธข้อเสนอแล้วไม่เสนอซ้ำแม้เปิดใหม่ (T19); "ไม่ใช่ใบหน้า" ไม่กลับมาเมื่อสแกนซ้ำ |
 | `manual_labels_survive_analysis_and_gain_an_embedding` | กรอบที่วาดเองและคำยืนยันไม่ถูกทับเมื่อวิเคราะห์ ไม่มีกรอบซ้ำ และกลายเป็นตัวอย่างให้เสนอใบอื่น (T22 บางส่วน) |
 | `legacy_people_import_is_read_only_idempotent_and_only_suggests` | ฐานเดิมไม่ถูกแก้แม้ byte เดียว; retry และรันซ้ำไม่สร้างคนซ้ำ (T29 บางส่วน); ชื่อซ้ำเป็นคนละคน; เวกเตอร์เดิมไม่ถูกใช้; ภาพตัวแทนจากใบหน้าตัวอย่าง; ข้อเสนอจากข้อมูลเดิมไม่นับเป็นยืนยันแล้วจนกว่าผู้ใช้ยืนยัน |
+| `merging_duplicate_people_keeps_samples_confirmations_groups_and_pins` | (20 พ.ย. 2569) รวม "สมชาย" สองคนจากฐานรุ่นเดิม: เหลือคนเดียว, ใบหน้าตัวอย่าง 2 ใบ, คำยืนยันใบหน้า กลุ่ม ชื่ออื่น และหมุดย้ายมา, ส่งคำขอเดิมซ้ำได้ผลเดิม, ไม่รวมคนเข้ากับตัวเอง, นำเข้ารุ่นเดิมซ้ำไม่สร้างคนที่รวมไปแล้วกลับมา, รวมคนที่ไม่มีแล้วได้ `NOT_FOUND` |
 | `review_list_stays_usable_while_analysis_adds_faces` | รายการของคิวที่เปิดอยู่ยังขอได้หลังมีรูปใหม่ถูกวิเคราะห์เสร็จ (เดิมได้ `PREVIEW_STALE` ทุกครั้งระหว่างงานวิเคราะห์); คิวรอบถัดไปเห็นใบหน้าใหม่; เก็บบุคคลออกจากรายชื่อแล้วข้อเสนอของคนนั้นหายและรายการเดิมเก่า — เทสต์นี้ล้มเมื่อถอนตัวแก้ออก |
 | `face_crops_are_ready_after_analysis_without_reopening_originals` | มีไฟล์ครอปหนึ่งไฟล์ต่อใบหน้าที่ตรวจพบตั้งแต่งานวิเคราะห์จบ; ขอ `face/{id}` ได้แม้โฟลเดอร์รูปถูกย้ายออก |
 | `low_confidence_detections_are_not_suggested_or_clustered_but_can_be_named` | ใบหน้าที่คะแนนตัวตรวจต่ำกว่า 0.6 ไม่ได้ข้อเสนอชื่อ (ทั้งในคิวและตัวดูภาพ) และไม่ถูกจับกลุ่ม แต่กรอบยังอยู่ นับเป็นใบที่ยังไม่มีชื่อ และผู้ใช้ตั้งชื่อเองแล้วค้นเจอทันที — เทสต์นี้ล้มเมื่อถอนตัวกรองออก |

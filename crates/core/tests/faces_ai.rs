@@ -548,3 +548,59 @@ fn library_from_v1_upgrades_in_place() {
     let preview = call("preview_restore", json!({ "path": before["path"] }));
     assert_eq!(preview["needsUpgrade"], true);
 }
+
+#[test]
+fn merging_duplicate_people_keeps_samples_confirmations_groups_and_pins() {
+    let lib = Lib::with_ai();
+    party(&lib);
+    lib.install_model();
+    let legacy = lib.tmp.path().join("photosearch.db");
+    legacy_db(&legacy);
+    let import = json!({ "path": legacy, "requestId": new_id() });
+    lib.call("import_legacy_people", import);
+    lib.run_jobs();
+
+    // รุ่นเดิมมี "สมชาย" สองคน: คนแรกไม่มีกลุ่ม, คนที่สองอยู่ในกลุ่มทีมงาน
+    let somchai = arr(&lib.call("list_people", json!({ "text": "สมชาย" }))).clone();
+    assert_eq!(somchai.len(), 2);
+    let in_group = |p: &Value| !arr(&p["groups"]).is_empty();
+    let keep = somchai.iter().find(|p| !in_group(p)).unwrap()["id"].as_str().unwrap().to_string();
+    let dup = somchai.iter().find(|p| in_group(p)).unwrap()["id"].as_str().unwrap().to_string();
+    let b1 = faces_of(&lib, "b1.jpg")[0]["id"].clone();
+    lib.call("assign_faces", json!({ "requestId": new_id(), "faceIds": [b1], "personId": dup }));
+    lib.call("set_person_pinned", json!({ "personId": dup, "pinned": true }));
+    let version = lib.call("get_person", json!({ "personId": dup }))["recordVersion"].clone();
+    lib.call(
+        "save_person",
+        json!({ "personId": dup, "expectedVersion": version, "requestId": new_id(), "displayName": "สมชาย", "aliases": ["ชาย"] }),
+    );
+
+    let req = new_id();
+    let args = json!({ "targetId": keep, "sourceIds": [dup, keep], "requestId": req });
+    let merged = lib.call("merge_persons", args.clone());
+    assert_eq!(
+        (merged["personId"].as_str(), merged["merged"].as_i64()),
+        (Some(keep.as_str()), Some(1)),
+        "ไม่รวมคนเข้ากับตัวเอง"
+    );
+    assert_eq!(lib.call("merge_persons", args), merged, "ส่งคำขอเดิมซ้ำได้ผลเดิม");
+
+    let people = arr(&lib.call("list_people", json!({ "text": "สมชาย", "includeArchived": true }))).clone();
+    assert_eq!(people.len(), 1, "เหลือสมชายคนเดียว");
+    let person = lib.call("get_person", json!({ "personId": keep }));
+    assert_eq!(person["pinned"], true, "หมุดของคนที่ถูกรวมย้ายมา");
+    assert_eq!(arr(&person["groups"]).len(), 1, "กลุ่มของคนที่ถูกรวมย้ายมา");
+    assert_eq!(person["aliases"], json!(["ชาย"]), "ชื่ออื่นย้ายมา (ชื่อเดียวกันไม่ซ้ำเป็นชื่ออื่น)");
+    assert_eq!(lib.filenames(json!({ "personIds": [keep] })), ["b1.jpg"], "คำยืนยันใบหน้าย้ายมา");
+    assert_eq!(lib.count(&format!("SELECT COUNT(*) FROM person_reference_samples WHERE person_id = '{keep}'")), 2);
+    assert_eq!(lib.count(&format!("SELECT COUNT(*) FROM persons WHERE id = '{dup}'")), 0);
+
+    // นำเข้ารุ่นเดิมอีกครั้งไม่สร้างคนที่รวมไปแล้วกลับมา
+    let again = lib.call("import_legacy_people", json!({ "path": legacy, "requestId": new_id() }));
+    assert_eq!((again["personsCreated"].as_i64(), again["personsSkipped"].as_i64()), (Some(0), Some(3)));
+
+    let gone = lib.try_call("merge_persons", json!({ "targetId": keep, "sourceIds": [dup], "requestId": new_id() }));
+    assert_eq!(gone.unwrap_err().code, "NOT_FOUND");
+    let alone = lib.try_call("merge_persons", json!({ "targetId": keep, "sourceIds": [keep], "requestId": new_id() }));
+    assert_eq!(alone.unwrap_err().code, "INVALID_INPUT");
+}

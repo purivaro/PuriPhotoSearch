@@ -105,6 +105,12 @@ enum Command {
     GetPersonQuickView {
         person_id: String,
     },
+    #[serde(rename_all = "camelCase")]
+    MergePersons {
+        target_id: String,
+        source_ids: Vec<String>,
+        request_id: String,
+    },
     ListGroups {},
     CreateGroup {
         name: String,
@@ -266,6 +272,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "record_person_view",
     "set_home_people_tab",
     "get_person_quick_view",
+    "merge_persons",
     "list_groups",
     "create_group",
     "delete_group",
@@ -405,6 +412,9 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         GetPersonQuickView { person_id } => {
             review::ensure_matches(app)?;
             ok(people::quick_view(&app.db(), &person_id)?)
+        }
+        MergePersons { target_id, source_ids, request_id } => {
+            ok(people::merge(app, &target_id, &source_ids, &request_id)?)
         }
         ListGroups {} => ok(people::list_groups(&app.db())?),
         CreateGroup { name } => ok(people::create_group(app, &name)?),
