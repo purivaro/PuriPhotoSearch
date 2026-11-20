@@ -311,6 +311,48 @@ export interface EditAdjust {
   curveRed: [number, number][];
   curveGreen: [number, number][];
   curveBlue: [number, number][];
+  /** Levels: รวมทุกช่อง แล้วแยกช่องแดง/เขียว/น้ำเงิน */
+  levels: Levels;
+  levelsRed: Levels;
+  levelsGreen: Levels;
+  levelsBlue: Levels;
+  grading: Grading;
+  vignette: Vignette;
+}
+
+/** Levels แบบ Photoshop: ค่าเข้า (จุดดำ แกมมา จุดขาว) → ค่าออก (ดำ ขาว) 0–255 · แกมมา 0.1–9.99 */
+export interface Levels {
+  inBlack: number;
+  inWhite: number;
+  gamma: number;
+  outBlack: number;
+  outWhite: number;
+}
+
+/** หนึ่งวงของ Color Grading: สี 0–360° ความเข้ม 0–100 ความสว่าง −100–100 */
+export interface Wheel {
+  hue: number;
+  sat: number;
+  lum: number;
+}
+
+export interface Grading {
+  shadows: Wheel;
+  midtones: Wheel;
+  highlights: Wheel;
+  global: Wheel;
+  /** 0–100 (50 = ค่าเริ่มต้น) */
+  blending: number;
+  /** −100–100 บวก = ให้น้ำหนักส่วนสว่าง */
+  balance: number;
+}
+
+/** Vignette หลังตัด: amount ลบ = ขอบมืด · midpoint/feather 0–100 · roundness −100–100 */
+export interface Vignette {
+  amount: number;
+  midpoint: number;
+  feather: number;
+  roundness: number;
 }
 
 /** preset ของค่าแสงและสี (บันทึกเองหรือนำเข้าจาก Lightroom) */

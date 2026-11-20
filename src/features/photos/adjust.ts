@@ -3,9 +3,14 @@
  * ใช้วาดตัวอย่างสดในหน้าแต่งภาพ ภาพย่อ ตัวดูภาพ และสำเนาที่ส่งออกสร้างด้วย Rust จากค่าชุดเดียวกัน
  */
 
-import type { EditAdjust } from '@/lib/ipc/types';
+import type { EditAdjust, Grading, Levels, Vignette, Wheel } from '@/lib/ipc/types';
 
 export type Adjust = EditAdjust;
+
+export const LEVELS_IDENTITY: Levels = { inBlack: 0, inWhite: 255, gamma: 1, outBlack: 0, outWhite: 255 };
+const NO_WHEEL: Wheel = { hue: 0, sat: 0, lum: 0 };
+export const GRADING_NEUTRAL: Grading = { shadows: NO_WHEEL, midtones: NO_WHEEL, highlights: NO_WHEEL, global: NO_WHEEL, blending: 50, balance: 0 };
+export const VIGNETTE_NEUTRAL: Vignette = { amount: 0, midpoint: 50, feather: 50, roundness: 0 };
 
 /** แปดช่วงสีแบบ Lightroom (จุดกลางเป็นองศาของ hue) */
 const HUE_CENTERS = [0, 30, 60, 120, 180, 240, 270, 300];
@@ -36,6 +41,12 @@ export const NEUTRAL: Adjust = {
   curveRed: [],
   curveGreen: [],
   curveBlue: [],
+  levels: LEVELS_IDENTITY,
+  levelsRed: LEVELS_IDENTITY,
+  levelsGreen: LEVELS_IDENTITY,
+  levelsBlue: LEVELS_IDENTITY,
+  grading: GRADING_NEUTRAL,
+  vignette: VIGNETTE_NEUTRAL,
 };
 
 const SLIDERS = ['exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks', 'temperature', 'tint', 'vibrance', 'saturation'] as const;
@@ -52,13 +63,96 @@ export function sameAdjust(a: Adjust, b: Adjust): boolean {
   return (Object.keys(NEUTRAL) as (keyof Adjust)[]).every((k) => JSON.stringify(a[k]) === JSON.stringify(b[k]));
 }
 
+export const levelsIsIdentity = (l: Levels) =>
+  l.inBlack === 0 && l.inWhite === 255 && l.gamma === 1 && l.outBlack === 0 && l.outWhite === 255;
+export const hasLevels = (a: Adjust) => ![a.levels, a.levelsRed, a.levelsGreen, a.levelsBlue].every(levelsIsIdentity);
+export const gradingIsActive = (g: Grading) => [g.shadows, g.midtones, g.highlights, g.global].some((w) => w.sat !== 0 || w.lum !== 0);
+export const hasVignette = (a: Adjust) => a.vignette.amount !== 0;
+
 export function isNeutral(a: Adjust): boolean {
-  return SLIDERS.every((k) => a[k] === 0) && !hasHsl(a) && !hasCurves(a);
+  return SLIDERS.every((k) => a[k] === 0) && !hasHsl(a) && !hasCurves(a) && !hasLevels(a) && !gradingIsActive(a.grading) && !hasVignette(a);
 }
 
 const toLinear = (v: number) => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
 const toSrgb = (v: number) => (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);
 const clamp01 = (v: number) => Math.min(Math.max(v, 0), 1);
+const smooth = (t: number) => {
+  const c = clamp01(t);
+  return c * c * (3 - 2 * c);
+};
+const luma = (r: number, g: number, b: number) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+/** Levels: ค่าเข้า 0–1 → ค่าออก 0–1 */
+function levels(l: Levels, x: number): number {
+  if (levelsIsIdentity(l)) return x;
+  const v = clamp01((x * 255 - l.inBlack) / (l.inWhite - l.inBlack));
+  return (l.outBlack + Math.pow(v, 1 / l.gamma) * (l.outWhite - l.outBlack)) / 255;
+}
+
+/** สีเต็มของ hue (HSL ความอิ่ม 1 ความสว่าง 0.5) */
+function pureHue(h: number): [number, number, number] {
+  const hp = h / 60;
+  const x = 1 - Math.abs((hp % 2) - 1);
+  const sector = Math.floor(hp);
+  const r = sector === 0 || sector === 5 ? 1 : sector === 1 || sector === 4 ? x : 0;
+  const g = sector === 1 || sector === 2 ? 1 : sector === 0 || sector === 3 ? x : 0;
+  const b = sector === 3 || sector === 4 ? 1 : sector === 2 || sector === 5 ? x : 0;
+  return [r, g, b];
+}
+
+/** Color Grading: เติมสีตามน้ำหนักของช่วงความสว่างที่พิกเซลอยู่ (ค่าในและออก 0–1) — เขียนผลลง `out` */
+function gradeInto(g: Grading, r: number, gg: number, b: number, out: Float64Array): void {
+  const lp = clamp01(luma(r, gg, b) + (g.balance / 100) * 0.25);
+  const width = 0.25 + (0.5 * g.blending) / 100;
+  const weights = [smooth(1 - lp / width), smooth(1 - Math.abs(lp - 0.5) / width), smooth(1 - (1 - lp) / width), 1];
+  const wheels = [g.shadows, g.midtones, g.highlights, g.global];
+  let o0 = r;
+  let o1 = gg;
+  let o2 = b;
+  for (let k = 0; k < 4; k += 1) {
+    const w = weights[k]!;
+    const wheel = wheels[k]!;
+    if (w <= 0) continue;
+    if (wheel.sat > 0) {
+      const [cr, cg, cb] = pureHue(((wheel.hue % 360) + 360) % 360);
+      const cl = luma(cr, cg, cb);
+      const f = (wheel.sat / 100) * 0.35 * w;
+      o0 += (cr - cl) * f;
+      o1 += (cg - cl) * f;
+      o2 += (cb - cl) * f;
+    }
+    if (wheel.lum !== 0) {
+      const d = (wheel.lum / 100) * 0.2 * w;
+      o0 += d;
+      o1 += d;
+      o2 += d;
+    }
+  }
+  out[0] = clamp01(o0);
+  out[1] = clamp01(o1);
+  out[2] = clamp01(o2);
+}
+
+/** น้ำหนัก Vignette 0–1 ของพิกเซลที่ (x, y) — จุดกลางของพิกเซล ในภาพขนาด w × h (เทียบ Vignette::weight ใน Rust) */
+export function vignetteWeight(v: Vignette, x: number, y: number, w: number, h: number): number {
+  const u = (x / w) * 2 - 1;
+  const vv = (y / h) * 2 - 1;
+  const m = Math.max(w, h);
+  const ellipse = Math.sqrt(u * u + vv * vv) / Math.SQRT2;
+  const r = v.roundness / 100;
+  const d =
+    r >= 0
+      ? ellipse + (Math.sqrt(((u * w) / m) ** 2 + ((vv * h) / m) ** 2) / Math.SQRT2 - ellipse) * r
+      : ellipse + (Math.max(Math.abs(u), Math.abs(vv)) - ellipse) * -r;
+  const start = 0.15 + (v.midpoint / 100) * 0.75;
+  const width = 0.05 + (v.feather / 100) * 0.95;
+  return smooth((d - start) / width);
+}
+
+function vignetteInto(v: Vignette, t: number, out: Float64Array): void {
+  const a = (v.amount / 100) * t;
+  for (let i = 0; i < 3; i += 1) out[i] = a < 0 ? out[i]! * (1 + a) : out[i]! + (1 - out[i]!) * a;
+}
 
 /** Parametric curve: สี่ช่วงตามจุดแบ่ง ยก/กดแต่ละช่วงด้วยน้ำหนักรูประฆัง ปลายสองข้างไม่ขยับ */
 function parametric(x: number, amounts: number[], splits: number[]): number {
@@ -117,6 +211,40 @@ function spline(points: [number, number][]): (x: number) => number {
   };
 }
 
+/** ฟังก์ชันของเส้นโค้งแบบจุด (ค่าเข้า/ออก 0–1) — ใช้วาดกราฟในหน้าแต่งภาพ */
+export function curveFunction(points: [number, number][]): (x: number) => number {
+  return spline(points);
+}
+
+/** ฮิสโตแกรมของภาพที่แสดง: จำนวนพิกเซลต่อค่า 0–255 ของแต่ละช่อง (สุ่มนับทุก 4 พิกเซล) */
+export interface Histogram {
+  r: Uint32Array;
+  g: Uint32Array;
+  b: Uint32Array;
+}
+
+export function histogram(data: Uint8ClampedArray): Histogram {
+  const h: Histogram = { r: new Uint32Array(256), g: new Uint32Array(256), b: new Uint32Array(256) };
+  for (let i = 0; i < data.length; i += 16) {
+    h.r[data[i]!]! += 1;
+    h.g[data[i + 1]!]! += 1;
+    h.b[data[i + 2]!]! += 1;
+  }
+  return h;
+}
+
+/**
+ * สมดุลแสงขาวจากจุดที่ควรเป็นสีเทา (หลอดดูดสี): อุณหภูมิสี/โทนสีที่ทำให้สีของจุดนั้นเป็นกลาง
+ * แก้สมการของ `curves` (คูณในแสงเชิงเส้น): แดง × (1 + 0.25T) = น้ำเงิน × (1 − 0.25T) = เขียว × (1 − 0.2Ti)
+ */
+export function neutralize(r: number, g: number, b: number): { temperature: number; tint: number } {
+  const [rl, gl, bl] = [r, g, b].map((v) => Math.max(toLinear(v / 255), 1e-4)) as [number, number, number];
+  const t = Math.min(Math.max((bl - rl) / (0.25 * (rl + bl)), -1), 1);
+  const target = rl * (1 + 0.25 * t);
+  const ti = Math.min(Math.max((1 - target / gl) / 0.2, -1), 1);
+  return { temperature: Math.round(t * 100), tint: Math.round(ti * 100) };
+}
+
 /** ตารางของขั้นที่แยกต่อช่องสีได้: [แดง, เขียว, น้ำเงิน][ค่าเข้า 0–255] → ค่าออก 0–1 */
 export function curves(a: Adjust): [Float64Array, Float64Array, Float64Array] {
   const gains = [1 + (0.25 * a.temperature) / 100, 1 - (0.2 * a.tint) / 100, 1 - (0.25 * a.temperature) / 100];
@@ -126,6 +254,7 @@ export function curves(a: Adjust): [Float64Array, Float64Array, Float64Array] {
   const k = a.contrast / 100;
   const master = spline(a.curve);
   const channel = [spline(a.curveRed), spline(a.curveGreen), spline(a.curveBlue)];
+  const channelLevels = [a.levelsRed, a.levelsGreen, a.levelsBlue];
   const splits = (a.parametricSplit ?? DEFAULT_SPLITS).map((v) => v / 100);
   const out: [Float64Array, Float64Array, Float64Array] = [new Float64Array(256), new Float64Array(256), new Float64Array(256)];
   out.forEach((table, c) => {
@@ -139,7 +268,7 @@ export function curves(a: Adjust): [Float64Array, Float64Array, Float64Array] {
       x = clamp01(x);
       x = k >= 0 ? x + k * (x * x * (3 - 2 * x) - x) : 0.5 + (x - 0.5) * (1 + 0.5 * k);
       x = parametric(clamp01(x), a.parametric, splits);
-      x = own(master(x));
+      x = own(levels(channelLevels[c]!, master(levels(a.levels, x))));
       table[i] = clamp01(x);
     }
   });
@@ -193,6 +322,12 @@ function colorInto(a: Adjust, withHsl: boolean, r: number, g: number, b: number,
       bb = clamp01(bb + m);
     }
   }
+  if (gradingIsActive(a.grading)) {
+    gradeInto(a.grading, rr, gg, bb, scratch);
+    rr = scratch[0]!;
+    gg = scratch[1]!;
+    bb = scratch[2]!;
+  }
   if (a.saturation !== 0 || a.vibrance !== 0) {
     const luma = 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
     const spread = Math.max(rr, gg, bb) - Math.min(rr, gg, bb);
@@ -206,19 +341,32 @@ function colorInto(a: Adjust, withHsl: boolean, r: number, g: number, b: number,
   out[2] = bb;
 }
 
+const scratch = new Float64Array(3);
+
 /** ค่าออก 0–255 ของพิกเซลหนึ่ง (เทียบกับ Adjust::pixel ใน Rust) */
 export function pixel(a: Adjust, tables: [Float64Array, Float64Array, Float64Array], r: number, g: number, b: number): [number, number, number] {
-  const out = new Float64Array(3);
-  colorInto(a, hasHsl(a), tables[0][r] ?? 0, tables[1][g] ?? 0, tables[2][b] ?? 0, out);
-  return [Math.round(out[0]! * 255), Math.round(out[1]! * 255), Math.round(out[2]! * 255)];
+  return pixelAt(a, tables, r, g, b, 0);
 }
 
-/** ปรับพิกเซลของ canvas ทั้งหมด (RGBA) — ตัวอย่างสดต้องเร็ว: ใช้ตารางตรง ๆ เมื่อไม่มีขั้นต่อพิกเซล */
-export function applyToPixels(data: Uint8ClampedArray, a: Adjust): void {
+/** เหมือน `pixel` พร้อมน้ำหนัก Vignette ของตำแหน่งพิกเซล (เทียบกับ Adjust::pixel_at ใน Rust) */
+export function pixelAt(a: Adjust, tables: [Float64Array, Float64Array, Float64Array], r: number, g: number, b: number, vignette: number): [number, number, number] {
+  const out = new Float64Array(3);
+  colorInto(a, hasHsl(a), tables[0][r] ?? 0, tables[1][g] ?? 0, tables[2][b] ?? 0, out);
+  if (vignette > 0) vignetteInto(a.vignette, vignette, out);
+  return [Math.round(clamp01(out[0]!) * 255), Math.round(clamp01(out[1]!) * 255), Math.round(clamp01(out[2]!) * 255)];
+}
+
+/**
+ * ปรับพิกเซลของ canvas ทั้งหมด (RGBA) — ตัวอย่างสดต้องเร็ว: ใช้ตารางตรง ๆ เมื่อไม่มีขั้นต่อพิกเซล
+ * `width` = ความกว้างของภาพ เมื่อภาพนี้คือกรอบหลังตัดทั้งกรอบ (ให้คิด Vignette ได้) · ไม่ส่ง = ไม่ใส่ Vignette
+ */
+export function applyToPixels(data: Uint8ClampedArray, a: Adjust, width?: number): void {
   if (isNeutral(a)) return;
   const [cr, cg, cb] = curves(a);
   const withHsl = hasHsl(a);
-  if (a.saturation === 0 && a.vibrance === 0 && !withHsl) {
+  const withVignette = hasVignette(a) && width !== undefined && width > 0;
+  const perPixel = withHsl || gradingIsActive(a.grading);
+  if (a.saturation === 0 && a.vibrance === 0 && !perPixel && !withVignette) {
     const tr = Uint8Array.from(cr, (v) => Math.round(v * 255));
     const tg = Uint8Array.from(cg, (v) => Math.round(v * 255));
     const tb = Uint8Array.from(cb, (v) => Math.round(v * 255));
@@ -229,7 +377,7 @@ export function applyToPixels(data: Uint8ClampedArray, a: Adjust): void {
     }
     return;
   }
-  if (!withHsl) {
+  if (!perPixel && !withVignette) {
     // ความสด/ความอิ่มสีอย่างเดียว: วนครั้งเดียว ไม่สร้าง array ต่อพิกเซล
     const sat = 1 + a.saturation / 100;
     const vib = a.vibrance / 100;
@@ -248,8 +396,15 @@ export function applyToPixels(data: Uint8ClampedArray, a: Adjust): void {
     return;
   }
   const out = new Float64Array(3);
+  const w = width ?? 1;
+  const h = data.length / 4 / w;
   for (let i = 0; i < data.length; i += 4) {
-    colorInto(a, true, cr[data[i]!]!, cg[data[i + 1]!]!, cb[data[i + 2]!]!, out);
+    colorInto(a, withHsl, cr[data[i]!]!, cg[data[i + 1]!]!, cb[data[i + 2]!]!, out);
+    if (withVignette) {
+      const p = i / 4;
+      const t = vignetteWeight(a.vignette, (p % w) + 0.5, Math.floor(p / w) + 0.5, w, h);
+      if (t > 0) vignetteInto(a.vignette, t, out);
+    }
     data[i] = Math.round(out[0]! * 255);
     data[i + 1] = Math.round(out[1]! * 255);
     data[i + 2] = Math.round(out[2]! * 255);

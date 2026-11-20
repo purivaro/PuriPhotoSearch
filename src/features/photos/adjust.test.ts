@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NEUTRAL, applyToPixels, autoAdjust, curves, isNeutral, pixel, type Adjust } from './adjust';
+import { NEUTRAL, applyToPixels, autoAdjust, curves, isNeutral, pixel, pixelAt, vignetteWeight, type Adjust } from './adjust';
 
 // ค่าเดียวกับ adjust::tests::sample ใน Rust
 const sample: Adjust = { ...NEUTRAL, exposure: 0.5, contrast: 30, highlights: -40, shadows: 50, whites: 10, blacks: -10, temperature: 20, tint: -10, vibrance: 25, saturation: 10 };
@@ -18,6 +18,22 @@ const sampleFull: Adjust = {
   ],
 };
 
+// ค่าเดียวกับ adjust::tests::sample_pro (sample_full + Levels + Color Grading + Vignette)
+const samplePro: Adjust = {
+  ...sampleFull,
+  levels: { inBlack: 10, inWhite: 240, gamma: 1.3, outBlack: 5, outWhite: 250 },
+  levelsBlue: { inBlack: 0, inWhite: 230, gamma: 0.9, outBlack: 0, outWhite: 255 },
+  grading: {
+    shadows: { hue: 220, sat: 30, lum: -10 },
+    midtones: { hue: 35, sat: 15, lum: 0 },
+    highlights: { hue: 45, sat: 25, lum: 5 },
+    global: { hue: 0, sat: 0, lum: 0 },
+    blending: 60,
+    balance: -20,
+  },
+  vignette: { amount: -40, midpoint: 40, feather: 60, roundness: 20 },
+};
+
 describe('แสงและสี (สูตรเดียวกับ Rust)', () => {
   it('ได้ค่าเดียวกับ adjust::tests::matches_the_ui_formula ทุกพิกเซล', () => {
     const t = curves(sample);
@@ -30,6 +46,28 @@ describe('แสงและสี (สูตรเดียวกับ Rust)',
       [255, 190, 135],
       [77, 179, 116],
     ]);
+  });
+
+  it('Levels + Color Grading + Vignette ได้ค่าเดียวกับ Rust (PRO_EXPECTED)', () => {
+    const t = curves(samplePro);
+    const at = (rgb: [number, number, number], x: number, y: number) => pixelAt(samplePro, t, ...rgb, vignetteWeight(samplePro.vignette, x, y, 400, 300));
+    expect(at([10, 20, 30], 200.5, 150.5)).toEqual([9, 46, 82]);
+    expect(at([200, 130, 80], 20.5, 15.5)).toEqual([177, 147, 107]);
+    expect(at([60, 140, 90], 390.5, 150.5)).toEqual([99, 176, 121]);
+  });
+
+  it('วนทั้งภาพพร้อม Vignette ได้ค่าเดียวกับสูตรต่อพิกเซล', () => {
+    const w = 4;
+    const h = 3;
+    const data = new Uint8ClampedArray(w * h * 4);
+    for (let i = 0; i < w * h; i += 1) data.set([(i * 37) % 256, (i * 91) % 256, (i * 53) % 256, 255], i * 4);
+    const copy = data.slice();
+    applyToPixels(data, samplePro, w);
+    const t = curves(samplePro);
+    for (let i = 0; i < w * h; i += 1) {
+      const weight = vignetteWeight(samplePro.vignette, (i % w) + 0.5, Math.floor(i / w) + 0.5, w, h);
+      expect([...data.slice(i * 4, i * 4 + 3)]).toEqual(pixelAt(samplePro, t, copy[i * 4]!, copy[i * 4 + 1]!, copy[i * 4 + 2]!, weight));
+    }
   });
 
   it('HSL และเส้นโค้ง: ส้ม (ผิว) สว่างขึ้น สีเทาไม่เปลี่ยน · เส้นตรง = ไม่ปรับ', () => {

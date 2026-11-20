@@ -1,10 +1,10 @@
 //! preset ของการแต่งภาพ (DECISIONS ข้อ 20): ค่าแสงและสีที่บันทึกไว้ใช้ซ้ำ และนำเข้าจาก preset `.xmp` ของ Lightroom
 //!
 //! การนำเข้าอ่านเฉพาะค่าที่ตัวแต่งภาพของเราทำได้ (แสงพื้นฐาน ความสด/ความอิ่ม HSL เส้นโค้งโทน Parametric curve สมดุลแสงขาว
-//! ขาวดำ) ที่เหลือ (Profile, Mask, Texture, Clarity …) บันทึกเป็นรายการ "นำเข้าไม่ได้" ให้ผู้ใช้เห็นตามจริง
+//! ขาวดำ Color Grading Vignette) ที่เหลือ (Profile, Mask, Texture, Clarity …) บันทึกเป็นรายการ "นำเข้าไม่ได้" ให้ผู้ใช้เห็นตามจริง
 //! ผลจึงใกล้เคียงกับ Lightroom ไม่ใช่เท่ากันทุกพิกเซล — สูตรของ Adobe ไม่เปิดเผย
 
-use crate::adjust::Adjust;
+use crate::adjust::{Adjust, Grading, Vignette, Wheel};
 use crate::error::{AppError, Result};
 use crate::{util, App};
 use rusqlite::{params, Connection};
@@ -239,6 +239,28 @@ pub fn parse_lightroom(text: &str) -> Result<Parsed> {
     if attr(text, "ConvertToGrayscale").is_some_and(|v| v.eq_ignore_ascii_case("true")) {
         a.saturation = -100.0;
     }
+    // Color Grading (Lightroom 10 ขึ้นไป ใช้ชื่อเดิมของ Split Toning สำหรับสีของเงา/ส่วนสว่างและ Balance)
+    let wheel = |hue: &str, sat: &str, lum: Option<&str>| Wheel {
+        hue: num(text, hue).unwrap_or(0.0).rem_euclid(360.0),
+        sat: num(text, sat).unwrap_or(0.0).clamp(0.0, 100.0),
+        lum: lum.and_then(|k| num(text, k)).unwrap_or(0.0).clamp(-100.0, 100.0),
+    };
+    a.grading = Grading {
+        shadows: wheel("SplitToningShadowHue", "SplitToningShadowSaturation", Some("ColorGradeShadowLum")),
+        midtones: wheel("ColorGradeMidtoneHue", "ColorGradeMidtoneSat", Some("ColorGradeMidtoneLum")),
+        highlights: wheel("SplitToningHighlightHue", "SplitToningHighlightSaturation", Some("ColorGradeHighlightLum")),
+        global: wheel("ColorGradeGlobalHue", "ColorGradeGlobalSat", Some("ColorGradeGlobalLum")),
+        blending: num(text, "ColorGradeBlending").unwrap_or(50.0).clamp(0.0, 100.0),
+        balance: clamp(num(text, "SplitToningBalance").unwrap_or(0.0)),
+    };
+    if let Some(amount) = num(text, "PostCropVignetteAmount").filter(|v| *v != 0.0) {
+        a.vignette = Vignette {
+            amount: clamp(amount),
+            midpoint: num(text, "PostCropVignetteMidpoint").unwrap_or(50.0).clamp(0.0, 100.0),
+            feather: num(text, "PostCropVignetteFeather").unwrap_or(50.0).clamp(0.0, 100.0),
+            roundness: clamp(num(text, "PostCropVignetteRoundness").unwrap_or(0.0)),
+        };
+    }
 
     // ส่วนที่ทำตามไม่ได้: บอกเฉพาะที่ preset ตั้งค่าไว้จริง
     if let Some(look) = element(text, "Look").and_then(|block| attr(block, "Name")) {
@@ -251,7 +273,6 @@ pub fn parse_lightroom(text: &str) -> Result<Parsed> {
         ("Texture", "Texture", true),
         ("Clarity2012", "Clarity", true),
         ("Dehaze", "Dehaze", true),
-        ("PostCropVignetteAmount", "Vignette", true),
         ("GrainAmount", "Grain", false),
         ("LuminanceSmoothing", "ลดนอยส์", false),
         ("Sharpness", "Sharpening", false),
@@ -259,17 +280,6 @@ pub fn parse_lightroom(text: &str) -> Result<Parsed> {
         if let Some(v) = num(text, key).filter(|v| *v != 0.0) {
             unsupported.push(format!("{label} {}", if bipolar { signed(v) } else { format!("{v}") }));
         }
-    }
-    let graded = [
-        "SplitToningShadowSaturation",
-        "SplitToningHighlightSaturation",
-        "ColorGradeMidtoneSat",
-        "ColorGradeGlobalSat",
-    ]
-    .iter()
-    .any(|k| num(text, k).is_some_and(|v| v != 0.0));
-    if graded {
-        unsupported.push("Color Grading".into());
     }
     let mut masks: Vec<String> = text
         .match_indices("crs:CorrectionName=\"")
@@ -319,7 +329,14 @@ mod tests {
    crs:SaturationAdjustmentRed="+32"
    crs:SaturationAdjustmentGreen="-33"
    crs:LuminanceAdjustmentOrange="+42"
-   crs:SplitToningShadowSaturation="0"
+   crs:SplitToningShadowHue="220"
+   crs:SplitToningShadowSaturation="12"
+   crs:ColorGradeMidtoneHue="40"
+   crs:ColorGradeMidtoneSat="8"
+   crs:ColorGradeBlending="70"
+   crs:SplitToningBalance="-15"
+   crs:PostCropVignetteAmount="-18"
+   crs:PostCropVignetteMidpoint="35"
    crs:LocalExposure2012="0">
    <crs:Name>
     <rdf:Alt>
@@ -365,6 +382,9 @@ mod tests {
         assert_eq!(a.parametric_split, None, "จุดแบ่งค่าเริ่มต้น");
         assert_eq!(a.curve, vec![[2.0, 11.0], [60.0, 60.0], [138.0, 145.0], [255.0, 255.0]]);
         assert!(a.curve_red.is_empty(), "เส้นตรง = ไม่ปรับ");
+        assert_eq!((a.grading.shadows.hue, a.grading.shadows.sat, a.grading.midtones.sat), (220.0, 12.0, 8.0));
+        assert_eq!((a.grading.blending, a.grading.balance), (70.0, -15.0));
+        assert_eq!((a.vignette.amount, a.vignette.midpoint, a.vignette.feather), (-18.0, 35.0, 50.0));
         assert!(a.validate().is_ok());
         assert_eq!(
             p.unsupported,
