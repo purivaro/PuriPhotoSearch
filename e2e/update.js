@@ -8,6 +8,10 @@
   const OLD = '__OLD__';
   const NEW = '__NEW__';
   const NOTES = '__NOTES__';
+  // ไม่ใช่ LIVE: ระหว่างที่แอปถือรุ่น NEW ไว้รอผู้ใช้กด ตัวรันออกรุ่น NEWER — แอปต้องเปลี่ยนไปเสนอรุ่นล่าสุด (TARGET)
+  const NEWER = '__NEWER__';
+  const NEWER_NOTES = '__NEWER_NOTES__';
+  const TARGET = '__TARGET__';
   // โหมดตรวจรุ่นที่เผยแพร่แล้ว: manifest และไฟล์มาจาก GitHub จริง จึงไม่มีขั้นไฟล์ที่ถูกแก้ และข้อความมีอะไรใหม่เป็นของรุ่นนั้น
   const LIVE = '__LIVE__' === '1';
   const invoke = window.__TAURI_INTERNALS__.invoke;
@@ -41,9 +45,9 @@
     location.hash = '#/settings';
     const section = await see('settings-update');
 
-    if (first.currentVersion === NEW) {
+    if (first.currentVersion === TARGET) {
       // รอบสอง: แอปที่เปิดขึ้นมาเองหลังติดตั้ง
-      await waitFor(() => text(tid('update-current')).includes(NEW), 'หน้าตั้งค่าแสดงรุ่นใหม่');
+      await waitFor(() => text(tid('update-current')).includes(TARGET), 'หน้าตั้งค่าแสดงรุ่นใหม่');
       await waitFor(async () => (await status()).state === 'up_to_date', 'ตรวจเองแล้วพบว่าเป็นรุ่นล่าสุด', 30000);
       expect(!tid('update-notice'), 'ไม่มีปุ่มอัปเดตค้างหลังอัปเดตแล้ว');
       await report('done', { version: first.currentVersion });
@@ -80,10 +84,33 @@
     await see('update-open');
     await stage('ready', { version: ready.version, downloaded: ready.downloaded });
 
-    // 3) ปุ่มในเมนูซ้าย → กล่องยืนยัน (แสดง "มีอะไรใหม่" จาก manifest) → อัปเดตและเปิดใหม่
+    if (!LIVE) {
+      // 3) ระหว่างรอผู้ใช้กด ตัวรันออกรุ่นที่ใหม่กว่า (รอบแรกไฟล์ถูกแก้): แอปลองรุ่นนั้น แล้วกลับไปเสนอรุ่นที่ถือไว้
+      await sleep(1500);
+      const tried = await invoke('update_check');
+      expect(tried.state === 'downloading' && tried.version === NEWER, `ถามซ้ำแล้วพบรุ่นที่ใหม่กว่า (ได้ ${tried.state} ${tried.version})`);
+      await waitFor(async () => {
+        const now = await status();
+        return now.state === 'ready' && now.version === NEW;
+      }, 'รุ่นที่ใหม่กว่าไม่ผ่านลายเซ็น จึงกลับไปเสนอรุ่นที่ถือไว้', 60000);
+      await see('update-notice');
+      await stage('kept', { version: NEW });
+
+      // 4) ตัวรันวางไฟล์จริงของรุ่นที่ใหม่กว่า: ถามซ้ำแล้วต้องเปลี่ยนไปเสนอรุ่นล่าสุด ไม่ต้องไล่ทีละรุ่น
+      await sleep(1500);
+      const again = await invoke('update_check');
+      expect(again.state === 'downloading' && again.version === NEWER, `เริ่มดาวน์โหลดรุ่นล่าสุด (ได้ ${again.state} ${again.version})`);
+      await waitFor(async () => {
+        const now = await status();
+        return now.state === 'ready' && now.version === NEWER;
+      }, 'รุ่นล่าสุดพร้อมติดตั้ง', 90000);
+      await stage('newer', { version: NEWER });
+    }
+
+    // 5) ปุ่มในเมนูซ้าย → กล่องยืนยัน (แสดง "มีอะไรใหม่" จาก manifest) → อัปเดตและเปิดใหม่
     (await see('update-notice')).click();
     const notes = await see('update-notes');
-    expect(LIVE ? text(notes).length > 0 : text(notes).includes(NOTES), `กล่องยืนยันแสดงข้อความมีอะไรใหม่ (ได้ "${text(notes)}")`);
+    expect(LIVE ? text(notes).length > 0 : text(notes).includes(NEWER_NOTES), `กล่องยืนยันแสดงข้อความมีอะไรใหม่ของรุ่นล่าสุด (ได้ "${text(notes)}")`);
     await stage('confirm', { notes: text(notes) });
     (await see('update-install')).click();
     // จากนี้แอปปิดและเปิดใหม่เอง รายงานขั้นสุดท้ายมาจากรอบสอง

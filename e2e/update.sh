@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ทดสอบการอัปเดตตัวเองของแอปจริง: แอปรุ่นปัจจุบันที่ติดตั้งไว้ต้องพบรุ่นใหม่จาก manifest, ปฏิเสธไฟล์ที่ไม่ตรงลายเซ็น,
-# ดาวน์โหลดไฟล์จริง, ติดตั้งเมื่อกดปุ่ม แล้วเปิดขึ้นมาใหม่เป็นรุ่นใหม่
+# ดาวน์โหลดไฟล์จริง, เมื่อมีรุ่นที่ใหม่กว่าออกระหว่างรอผู้ใช้กดติดตั้ง ต้องเปลี่ยนไปเสนอรุ่นล่าสุด (และกลับไปเสนอรุ่นเดิมถ้ารุ่นล่าสุดไม่ผ่านลายเซ็น),
+# ติดตั้งเมื่อกดปุ่ม แล้วเปิดขึ้นมาใหม่เป็นรุ่นล่าสุด
 #
 #   e2e/update.sh           รันเทสต์ (build สองรอบ ใช้เวลาหลายนาที; ต้องมี desktop session)
 #   KEEP=1 e2e/update.sh    ไม่ลบโฟลเดอร์ทำงานหลังจบ
@@ -33,7 +34,9 @@ WORK=$(cd "$(mktemp -d)" && pwd -P)
 REPORT="$WORK/report.json"
 PORT=${PORT:-14270}
 NEW=99.0.0
+NEWER=99.1.0
 NOTES="ข้อความทดสอบจาก manifest"
+NEWER_NOTES="ข้อความของรุ่นที่ใหม่กว่า"
 cd "$ROOT"
 OLD=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' src-tauri/tauri.conf.json)
 [ -n "$OLD" ] || fail "อ่านเลขรุ่นจาก src-tauri/tauri.conf.json ไม่ได้"
@@ -123,12 +126,23 @@ if [ "$LIVE" != 1 ]; then
   { cat "$WORK/good.bin"; printf x; } >"$WORK/serve/$artifact"
   printf '%s' "$NOTES" >"$WORK/notes.txt"
   scripts/update-manifest.sh "$NEW" "http://127.0.0.1:$PORT" "$WORK/serve" "$WORK/notes.txt" >"$WORK/serve/latest.json"
+
+  echo "› build รุ่นที่ใหม่กว่า ($NEWER) — ออกระหว่างที่แอปถือรุ่น $NEW ไว้รอผู้ใช้กดติดตั้ง"
+  TAURI_SIGNING_PRIVATE_KEY="$KEY" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
+    build build-newer ",\"version\":\"$NEWER\",\"bundle\":{\"createUpdaterArtifacts\":true}"
+  mkdir -p "$WORK/newer"
+  cp "$(update_file)" "$WORK/newer/good.bin"
+  cp "$(update_file).sig" "$WORK/newer/$artifact.sig"
+  printf '%s' "$NEWER_NOTES" >"$WORK/newer/notes.txt"
   "$PYTHON" -m http.server "$PORT" --bind 127.0.0.1 --directory "$(native "$WORK/serve")" >"$WORK/server.log" 2>&1 &
   SERVER_PID=$!
   ENDPOINT="http://127.0.0.1:$PORT/latest.json"
 fi
 
-sed -e "s|__OLD__|$OLD|g" -e "s|__NEW__|$NEW|g" -e "s|__NOTES__|$NOTES|g" -e "s|__LIVE__|$LIVE|g" e2e/update.js >"$WORK/update.js"
+# รุ่นที่แอปต้องเป็นตอนจบ: LIVE คือรุ่นที่เผยแพร่ล่าสุด, ปกติคือรุ่นที่ใหม่กว่าซึ่งออกทีหลัง
+TARGET=$([ "$LIVE" = 1 ] && echo "$NEW" || echo "$NEWER")
+sed -e "s|__OLD__|$OLD|g" -e "s|__NEW__|$NEW|g" -e "s|__NEWER__|${NEWER:-}|g" -e "s|__TARGET__|$TARGET|g" -e "s|__NOTES__|$NOTES|g" \
+  -e "s|__NEWER_NOTES__|${NEWER_NOTES:-}|g" -e "s|__LIVE__|$LIVE|g" e2e/update.js >"$WORK/update.js"
 node --check "$WORK/update.js" || fail "e2e/update.js มี syntax error"
 
 echo "› เปิดแอปรุ่น $OLD ที่ติดตั้งไว้"
@@ -152,7 +166,7 @@ for _ in $(seq 1 $([ "$LIVE" = 1 ] && echo 2400 || echo 960)); do
     # Windows: ตัวติดตั้งเปิดแอปใหม่ผ่าน shell ซึ่งอาจไม่ส่งตัวแปรของเทสต์ต่อให้ แอปรอบสองจึงรายงานกลับมาไม่ได้ —
     # ถือว่าถึงปลายทางเมื่อตัวติดตั้งบันทึกรุ่นใหม่แล้วและแอปทำงานอยู่ (ตรวจซ้ำด้านล่าง)
     # LIVE: แอปรอบสองเป็น release build ซึ่งไม่มี hook ของเทสต์เลย — ตัดสินแบบเดียวกัน
-    if { [ "$OS" = windows ] || [ "$LIVE" = 1 ]; } && [ "$stage" = confirm ] && [ "$(installed_version)" = "$NEW" ] && running; then
+    if { [ "$OS" = windows ] || [ "$LIVE" = 1 ]; } && [ "$stage" = confirm ] && [ "$(installed_version)" = "$TARGET" ] && running; then
       sleep 5
       [ "$(sed -n 's/^ "stage": "\(.*\)",\{0,1\}$/\1/p' "$REPORT" | head -1)" = done ] || relaunched_without_env=1
       last=done
@@ -167,6 +181,18 @@ for _ in $(seq 1 $([ "$LIVE" = 1 ] && echo 2400 || echo 960)); do
     rejected)
       [ "$(installed_version)" = "$OLD" ] || fail "แอปถูกแก้ทั้งที่ไฟล์ไม่ผ่านลายเซ็น"
       cp "$WORK/good.bin" "$WORK/serve/$artifact"
+      ;;
+    ready)
+      # รุ่นที่ใหม่กว่าออก: รอบแรกเสิร์ฟไฟล์ที่ถูกแก้ แอปต้องกลับไปเสนอรุ่น $NEW ที่ถือไว้
+      [ "$LIVE" = 1 ] && continue
+      cp "$WORK/newer/$artifact.sig" "$WORK/serve/$artifact.sig"
+      { cat "$WORK/newer/good.bin"; printf x; } >"$WORK/serve/$artifact"
+      scripts/update-manifest.sh "$NEWER" "http://127.0.0.1:$PORT" "$WORK/serve" "$WORK/newer/notes.txt" >"$WORK/serve/latest.json.tmp"
+      mv "$WORK/serve/latest.json.tmp" "$WORK/serve/latest.json"
+      ;;
+    kept)
+      [ "$(installed_version)" = "$OLD" ] || fail "แอปถูกแก้ทั้งที่ยังไม่ได้กดติดตั้ง"
+      cp "$WORK/newer/good.bin" "$WORK/serve/$artifact"
       ;;
     done | FAILED) break ;;
   esac
@@ -183,7 +209,7 @@ if [ "$last" != done ]; then
 fi
 
 # ── ตรวจผลบนดิสก์ ไม่เชื่อแค่สิ่งที่ UI แสดง
-[ "$(installed_version)" = "$NEW" ] || fail "แอปที่ติดตั้งยังไม่ใช่รุ่น $NEW (ได้ $(installed_version))"
+[ "$(installed_version)" = "$TARGET" ] || fail "แอปที่ติดตั้งยังไม่ใช่รุ่น $TARGET (ได้ $(installed_version))"
 running || fail "แอปไม่ได้เปิดขึ้นมาใหม่"
 [ -f "$WORK/library/data/library/library.sqlite" ] || fail "คลังของเทสต์หายหลังอัปเดต"
 if [ "$LIVE" = 1 ]; then
@@ -201,11 +227,11 @@ elif [ "$OS" = mac ]; then
   # debug bundle ไม่ได้เซ็น จึงเทียบกับผล build ตรง ๆ (ลายเซ็นของรุ่นจริงตรวจใน workflow Release)
   diff -r "$(built)" "$installed" >/dev/null || fail "แอปที่ติดตั้งไม่ตรงกับรุ่นใหม่ที่ build"
   [ -z "$(find "$WORK/Applications" -mindepth 1 -maxdepth 1 ! -name "Puri Photo Search.app")" ] || fail "เหลือไฟล์ชั่วคราวของตัวอัปเดตข้างแอป"
-  echo "  · แอปในตำแหน่งเดิมเป็นรุ่น $NEW ตรงกับผล build ทุกไฟล์, เปิดขึ้นมาใหม่เอง, คลังอยู่ครบ, ไม่เหลือไฟล์ชั่วคราว"
+  echo "  · แอปในตำแหน่งเดิมเป็นรุ่น $TARGET ตรงกับผล build ทุกไฟล์, เปิดขึ้นมาใหม่เอง, คลังอยู่ครบ, ไม่เหลือไฟล์ชั่วคราว"
 elif [ "$relaunched_without_env" = 1 ]; then
-  echo "  · ตัวติดตั้งบันทึกรุ่น $NEW และแอปเปิดขึ้นมาใหม่เอง, คลังอยู่ครบ"
+  echo "  · ตัวติดตั้งบันทึกรุ่น $TARGET และแอปเปิดขึ้นมาใหม่เอง, คลังอยู่ครบ"
   echo "  ! แอปที่เปิดใหม่ไม่ได้รับตัวแปรของเทสต์ จึงไม่ได้ยืนยันเลขรุ่นจากในแอปรอบสอง (ยืนยันจากเลขรุ่นที่ตัวติดตั้งบันทึก)"
 else
-  echo "  · ตัวติดตั้งบันทึกรุ่น $NEW, แอปเปิดขึ้นมาใหม่เองและรายงานรุ่นใหม่จากในแอป, คลังอยู่ครบ"
+  echo "  · ตัวติดตั้งบันทึกรุ่น $TARGET, แอปเปิดขึ้นมาใหม่เองและรายงานรุ่นใหม่จากในแอป, คลังอยู่ครบ"
 fi
-echo "✓ เทสต์อัปเดตผ่าน: $OLD → $NEW"
+echo "✓ เทสต์อัปเดตผ่าน: $OLD → $TARGET$([ "$LIVE" = 1 ] || echo " (ระหว่างรอติดตั้ง $NEW มีรุ่นที่ใหม่กว่าออก)")"
