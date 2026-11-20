@@ -7,6 +7,7 @@
 //! - CLI รันในโฟลเดอร์ว่างของแอป ไม่เห็นไฟล์ของผู้ใช้ · Claude ไม่มีเครื่องมือในตัวเลย มีแต่ของแอป
 
 pub mod detect;
+pub mod generate;
 pub mod mcp;
 mod stream;
 mod tools;
@@ -151,14 +152,7 @@ pub fn start(app: &App, args: StartArgs) -> Result<String> {
         validate_model(m)?;
     }
     let me = app.me.upgrade().ok_or_else(|| AppError::invalid("แอปกำลังปิด"))?;
-    let id = crate::util::new_id();
-    let turn = Arc::new(Turn::new());
-    {
-        let mut turns = app.assistant.turns.lock().unwrap_or_else(|e| e.into_inner());
-        turns.push((id.clone(), turn.clone()));
-        let excess = turns.len().saturating_sub(KEEP_TURNS);
-        turns.drain(..excess);
-    }
+    let (id, turn) = register(app);
     std::thread::spawn(move || {
         let outcome = run(&me, &turn, &args);
         let (ok, error) = match outcome {
@@ -175,6 +169,17 @@ pub fn start(app: &App, args: StartArgs) -> Result<String> {
         turn.done.store(true, Ordering::Relaxed);
     });
     Ok(id)
+}
+
+/// รอบใหม่ (เก็บไว้ให้ UI อ่าน รอบเก่าเกิน KEEP_TURNS ทิ้ง)
+fn register(app: &App) -> (String, Arc<Turn>) {
+    let id = crate::util::new_id();
+    let turn = Arc::new(Turn::new());
+    let mut turns = app.assistant.turns.lock().unwrap_or_else(|e| e.into_inner());
+    turns.push((id.clone(), turn.clone()));
+    let excess = turns.len().saturating_sub(KEEP_TURNS);
+    turns.drain(..excess);
+    (id, turn)
 }
 
 pub fn events(app: &App, turn_id: &str, after: usize) -> Result<TurnEvents> {
@@ -209,10 +214,8 @@ pub fn undo(app: &App, turn_id: &str) -> Result<usize> {
 #[doc(hidden)]
 pub fn test_tools(app: &App) -> Result<(Arc<dyn mcp::ToolHost>, String)> {
     let me = app.me.upgrade().ok_or_else(|| AppError::invalid("แอปกำลังปิด"))?;
-    let id = crate::util::new_id();
-    let turn = Arc::new(Turn::new());
+    let (id, turn) = register(app);
     turn.done.store(true, Ordering::Relaxed);
-    app.assistant.turns.lock().unwrap_or_else(|e| e.into_inner()).push((id.clone(), turn.clone()));
     Ok((Arc::new(tools::PhotoTools { app: me, turn }), id))
 }
 
@@ -417,8 +420,27 @@ fn run(app: &Arc<App>, turn: &Arc<Turn>, args: &StartArgs) -> std::result::Resul
     let prompt = render_prompt(args, (provider != Provider::Claude).then_some(instructions));
     let argv = arguments(provider, args.model.as_deref(), &scratch, launch.as_ref());
 
-    let mut cmd = detect::command(&path);
-    cmd.args(&argv).current_dir(&scratch).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let result = execute(provider, &path, &argv, prompt, &scratch, turn, args.model.as_deref(), true).map(|_| ());
+    drop(endpoint);
+    let _ = std::fs::remove_dir_all(&gemini_settings);
+    result
+}
+
+/// รัน CLI หนึ่งครั้งจนได้คำตัดสิน (หยุดได้ด้วย `turn.cancel` · หมดเวลา 15 นาที) — คืนตัวอ่าน stream (ข้อความ รหัสรอบของ Codex)
+/// `answer` = ส่งข้อความคำตอบเป็นเหตุการณ์ให้ UI ระหว่างทาง
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn execute(
+    provider: Provider,
+    path: &Path,
+    argv: &[String],
+    prompt: String,
+    cwd: &Path,
+    turn: &Turn,
+    model_hint: Option<&str>,
+    answer: bool,
+) -> std::result::Result<stream::StreamParser, String> {
+    let mut cmd = detect::command(path);
+    cmd.args(argv).current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     // ไม่ให้ Gemini เปิดเบราว์เซอร์เองเมื่อยังไม่ได้ล็อกอิน
     cmd.env("NO_BROWSER", "true");
     #[cfg(unix)]
@@ -478,12 +500,17 @@ fn run(app: &Arc<App>, turn: &Arc<Turn>, args: &StartArgs) -> std::result::Resul
         }
         match rx.recv_timeout(Duration::from_millis(150)) {
             Ok(line) => {
-                if parser.line(&line) {
+                if parser.line(&line) && answer {
                     turn.push(Event::Answer { text: parser.text.clone() });
                 }
-                if !announced && (parser.model.is_some() || parser.thread_id.is_some() || !parser.text.is_empty()) {
+                if answer
+                    && !announced
+                    && (parser.model.is_some() || parser.thread_id.is_some() || !parser.text.is_empty())
+                {
                     announced = true;
-                    turn.push(Event::Started { model: parser.model.clone().or_else(|| args.model.clone()) });
+                    turn.push(Event::Started {
+                        model: parser.model.clone().or_else(|| model_hint.map(str::to_string)),
+                    });
                 }
                 if parser.outcome.is_some() {
                     break;
@@ -508,15 +535,13 @@ fn run(app: &Arc<App>, turn: &Arc<Turn>, args: &StartArgs) -> std::result::Resul
             }
         }
     };
-    drop(endpoint);
-    let _ = std::fs::remove_dir_all(&gemini_settings);
     match parser.outcome.take() {
-        Some(Ok(())) => Ok(()),
+        Some(Ok(())) => Ok(parser),
         Some(Err(e)) => Err(describe(provider, &e)),
         None => {
             let tail = stderr_tail.lock().unwrap_or_else(|e| e.into_inner()).clone();
             if closed && status.is_some_and(|s| s.success()) && !parser.text.is_empty() {
-                Ok(())
+                Ok(parser)
             } else {
                 Err(describe(
                     provider,

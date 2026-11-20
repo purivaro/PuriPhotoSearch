@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
-import { ArrowLeft, ChevronLeft, ChevronRight, ClipboardPaste, Copy, EllipsisVertical, ExternalLink, FolderOpen, Image as ImageIcon, Minus, PanelRight, Plus, ScanFace, SlidersHorizontal, Undo2, Upload, X } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, ClipboardPaste, Copy, EllipsisVertical, ExternalLink, FolderOpen, Image as ImageIcon, Minus, PanelRight, Plus, ScanFace, SlidersHorizontal, Sparkles, Undo2, Upload, X } from 'lucide-react';
 import { useViewer, type ViewerLocationState } from '@/app/navigation';
 import { Button, IconButton } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
@@ -16,6 +16,7 @@ import type { Id, PhotoDetails } from '@/lib/ipc/types';
 import { qk } from '@/lib/queries';
 import { useEditClipboard } from '@/stores/editClipboard';
 import { PasteEditDialog } from './PasteEditDialog';
+import { GenerateDialog } from '@/features/assistant/GenerateDialog';
 import { PhotoEditor } from './PhotoEditor';
 import { ViewerInspector } from './ViewerInspector';
 import { ViewerStage, type ViewerStageHandle } from './ViewerStage';
@@ -55,6 +56,7 @@ export function PhotoViewer() {
   const [editing, setEditing] = useState(false);
   const [confirmRevert, setConfirmRevert] = useState(false);
   const [pasting, setPasting] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const clipboard = useEditClipboard();
 
   const details = useQuery({ queryKey: qk.photo(photoId), queryFn: () => call('get_photo_details', { photoId }) });
@@ -286,6 +288,9 @@ export function PhotoViewer() {
             <MenuItem icon={<ClipboardPaste />} disabled={!clipboard.copied} onSelect={() => setPasting(true)}>
               วางการแต่ง
             </MenuItem>
+            <MenuItem icon={<Sparkles />} onSelect={() => setGenerating(true)}>
+              สร้างภาพด้วย AI…
+            </MenuItem>
             {data?.edit && (
               <MenuItem icon={<Undo2 />} onSelect={() => setConfirmRevert(true)} data-testid="viewer-revert">
                 กลับเป็นภาพต้นฉบับ
@@ -399,6 +404,7 @@ export function PhotoViewer() {
       {data && <ExportDialog open={exporting} onOpenChange={setExporting} selection={{ kind: 'explicit', photoIds: [photoId] }} count={1} previewPhotoId={photoId} />}
       {editing && data && <PhotoEditor details={data} onClose={() => setEditing(false)} onSaved={applyEdited} />}
       <PasteEditDialog open={pasting} onOpenChange={setPasting} selection={{ kind: 'explicit', photoIds: [photoId] }} count={1} />
+      <GenerateDialog open={generating} onOpenChange={setGenerating} selection={{ kind: 'explicit', photoIds: [photoId] }} count={1} />
       <ConfirmDialog
         open={confirmRevert}
         onOpenChange={setConfirmRevert}

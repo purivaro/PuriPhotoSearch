@@ -385,6 +385,8 @@ pub struct PhotoDetails {
     pub decode_error: Option<String>,
     pub faces: Vec<FaceBox>,
     pub edit: Option<PhotoEdit>,
+    /// ภาพที่ผู้ช่วย AI สร้างจากรูปในคลัง: ที่มา (DECISIONS ข้อ 23)
+    pub ai_origin: Option<crate::assistant::generate::AiOrigin>,
 }
 
 const PHOTO_FROM: &str = "FROM photos p
@@ -735,7 +737,13 @@ pub fn get_photo_details(app: &App, photo_id: &str) -> Result<PhotoDetails> {
                 .output_size();
         PhotoEdit { settings: stored.settings, width, height }
     });
-    Ok(PhotoDetails { photo, path, file_size, event_date, original_available, decode_error, faces, edit })
+    let sha: Option<String> =
+        conn.query_row("SELECT sha256 FROM photo_revisions WHERE id = ?1", [&photo.revision_id], |r| r.get(0))?;
+    let ai_origin = match sha {
+        Some(sha) => crate::assistant::generate::origin(conn, &sha)?,
+        None => None,
+    };
+    Ok(PhotoDetails { photo, path, file_size, event_date, original_available, decode_error, faces, edit, ai_origin })
 }
 
 /// ตำแหน่งไฟล์ต้นฉบับของรูป (ใช้ภายใน Rust เท่านั้น; UI ส่งมาแค่ ID)

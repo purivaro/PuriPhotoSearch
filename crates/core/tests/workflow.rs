@@ -1501,6 +1501,48 @@ fn ai_tools_find_view_edit_apply_presets_and_undo_without_touching_files() {
 }
 
 #[test]
+fn ai_generated_images_are_saved_tidily_and_remember_where_they_came_from() {
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-21 งาน/กฐิน");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("IMG_1.jpg"), jpeg_with_exif(400, 300, 1, "2026:11:21 10:00:00")).unwrap();
+    lib.import(&root, "single_event", |_| true);
+    let before = tree_state(&root);
+    let source = lib.photo_id("IMG_1.jpg");
+
+    // ภาพที่ "AI สร้าง" (PNG แบบที่ Codex ให้มา) → JPEG ในโฟลเดอร์ของกิจกรรม ชื่อไม่ชนกัน
+    let out = lib.photos().join("ภาพจาก AI").join("งาน กฐิน");
+    let png = |blue: u8| {
+        let img = image::RgbImage::from_fn(96, 64, |x, y| image::Rgb([x as u8 * 2, y as u8 * 3, blue]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img).write_to(&mut buf, image::ImageFormat::Png).unwrap();
+        buf.into_inner()
+    };
+    let first = puri_core::assistant::generate::test_save(&lib.app, &source, &png(120), &out, "ภาพวาดสีน้ำ").unwrap();
+    let second =
+        puri_core::assistant::generate::test_save(&lib.app, &source, &png(30), &out, "ภาพวาดสีน้ำ อีกแบบ").unwrap();
+    assert_eq!(first.file_name().unwrap(), "IMG_1-ai-1.jpg");
+    assert_eq!(second.file_name().unwrap(), "IMG_1-ai-2.jpg");
+    assert_eq!(&std::fs::read(&first).unwrap()[..3], &[0xFF, 0xD8, 0xFF], "เป็น JPEG");
+    assert!(std::fs::read_dir(&out).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().ends_with(".part")));
+
+    // เข้าคลังแล้วรู้ที่มา: รูปต้นทาง prompt แม่แบบ AI ที่ใช้
+    lib.import(&out, "single_event", |_| true);
+    let made = lib.photo_id("IMG_1-ai-1.jpg");
+    let origin = lib.call("get_photo_details", json!({ "photoId": made }))["aiOrigin"].clone();
+    assert_eq!(origin["sourcePhotoId"], json!(source));
+    assert_eq!(
+        (origin["sourceFilename"].as_str(), origin["prompt"].as_str(), origin["template"].as_str()),
+        (Some("IMG_1.jpg"), Some("ภาพวาดสีน้ำ"), Some("สีน้ำ"))
+    );
+    assert!(lib.call("get_photo_details", json!({ "photoId": source }))["aiOrigin"].is_null(), "รูปต้นทางไม่ใช่ภาพจาก AI");
+    // ภาพที่สองมีที่มาของตัวเอง (ผูกด้วย SHA-256 ของไฟล์ ไม่ใช่ path — ย้ายโฟลเดอร์แล้วยังรู้ที่มา)
+    let moved = lib.call("get_photo_details", json!({ "photoId": lib.photo_id("IMG_1-ai-2.jpg") }))["aiOrigin"].clone();
+    assert_eq!(moved["prompt"], "ภาพวาดสีน้ำ อีกแบบ");
+    assert_eq!(tree_state(&root), before, "ไฟล์ต้นฉบับไม่ถูกแตะ");
+}
+
+#[test]
 fn t27b_export_refuses_source_changed_since_import_and_cancel_keeps_finished_copies() {
     let lib = Lib::new();
     let (root, dest) = export_fixture(&lib);

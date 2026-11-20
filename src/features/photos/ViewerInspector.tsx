@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { toast } from 'sonner';
-import { ArrowLeftRight, Calendar, CircleAlert, CircleCheck, CloudOff, Copy, EllipsisVertical, ExternalLink, FolderOpen, Image as ImageIcon, ScanFace, UserRound, UserRoundPen, X } from 'lucide-react';
+import { ArrowLeftRight, Calendar, CircleAlert, CircleCheck, CloudOff, Copy, EllipsisVertical, ExternalLink, FolderOpen, Image as ImageIcon, ScanFace, Sparkles, UserRound, UserRoundPen, X } from 'lucide-react';
 import { LevelBadge } from '@/features/faces/LevelBadge';
 import { Button, IconButton } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
@@ -12,6 +12,7 @@ import { PersonPicker } from '@/features/people/PersonPicker';
 import { cn } from '@/lib/cn';
 import { formatBytes, formatCount, formatTakenAt, formatThaiDate } from '@/lib/format';
 import type { FaceBox, Id, PhotoDetails } from '@/lib/ipc/types';
+import { useViewer } from '@/app/navigation';
 import { useFaceMutations } from './useFaceMutations';
 import { FILE_MANAGER } from '@/lib/platform';
 
@@ -23,6 +24,42 @@ interface ViewerInspectorProps {
   onDrawModeChange: (on: boolean) => void;
   onReveal: () => void;
   onOpenOriginal: () => void;
+}
+
+/** วันที่ตามเวลาท้องถิ่นของเครื่อง (YYYY-MM-DD) จากเวลา UTC ที่ Rust บันทึก */
+function localDate(utc: string): string {
+  const d = new Date(utc);
+  if (Number.isNaN(d.getTime())) return utc.slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** ภาพที่ผู้ช่วย AI สร้าง: บอกที่มา (รูปต้นทาง คำสั่ง) และเปิดรูปต้นทางได้ */
+function AiOriginNote({ origin }: { origin: NonNullable<PhotoDetails['aiOrigin']> }) {
+  const viewer = useViewer();
+  const provider = origin.provider === 'codex' ? 'ChatGPT' : origin.provider;
+  return (
+    <div className="mt-3 space-y-1.5 rounded-xl border border-brand-line bg-brand-soft px-3 py-2.5 text-[13px]" data-testid="viewer-ai-origin">
+      <p className="flex items-center gap-1.5 font-semibold text-action">
+        <Sparkles className="size-4" aria-hidden /> ภาพที่ AI สร้าง ({provider})
+      </p>
+      <p className="text-ink">
+        จาก{' '}
+        {origin.sourcePhotoId ? (
+          <button type="button" className="font-semibold text-action hover:underline" onClick={() => viewer.open(origin.sourcePhotoId!, { ids: [origin.sourcePhotoId!], originLabel: 'กลับ' })}>
+            {origin.sourceFilename}
+          </button>
+        ) : (
+          <span className="font-semibold">{origin.sourceFilename}</span>
+        )}
+        {!origin.sourcePhotoId && <span className="text-muted"> (ไม่อยู่ในคลังแล้ว)</span>}
+        {origin.template && <span className="text-muted"> · แม่แบบ “{origin.template}”</span>}
+      </p>
+      <p className="whitespace-pre-wrap text-muted select-text" data-selectable>
+        “{origin.prompt}”
+      </p>
+      <p className="text-[12px] text-muted">{formatThaiDate(localDate(origin.createdAt))}</p>
+    </div>
+  );
 }
 
 /** แผงรายละเอียดภาพ: ข้อมูลไฟล์ สถานะต้นฉบับ และคนในรูปพร้อมคำสั่งแก้ระดับใบหน้า */
@@ -95,6 +132,8 @@ export function ViewerInspector({ details, selectedFaceId, onSelectFace, drawMod
             <dd className={details.originalAvailable ? 'text-ok' : 'text-warn'}>{details.originalAvailable ? 'ต้นฉบับพร้อมใช้' : 'ภาพต้นฉบับไม่พร้อม'}</dd>
           </div>
         </dl>
+
+        {details.aiOrigin && <AiOriginNote origin={details.aiOrigin} />}
 
         {!details.originalAvailable && (
           <InlineNotice tone="warn" className="mt-3">
