@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
-import { ArrowLeft, ChevronLeft, ChevronRight, EllipsisVertical, ExternalLink, FolderOpen, Image as ImageIcon, Minus, PanelRight, Plus, ScanFace, SlidersHorizontal, Undo2, Upload, X } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, ClipboardPaste, Copy, EllipsisVertical, ExternalLink, FolderOpen, Image as ImageIcon, Minus, PanelRight, Plus, ScanFace, SlidersHorizontal, Undo2, Upload, X } from 'lucide-react';
 import { useViewer, type ViewerLocationState } from '@/app/navigation';
 import { Button, IconButton } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
@@ -14,6 +14,8 @@ import { errorMessage, formatCount } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
 import type { Id, PhotoDetails } from '@/lib/ipc/types';
 import { qk } from '@/lib/queries';
+import { useEditClipboard } from '@/stores/editClipboard';
+import { PasteEditDialog } from './PasteEditDialog';
 import { PhotoEditor } from './PhotoEditor';
 import { ViewerInspector } from './ViewerInspector';
 import { ViewerStage, type ViewerStageHandle } from './ViewerStage';
@@ -52,6 +54,8 @@ export function PhotoViewer() {
   const [exporting, setExporting] = useState(false);
   const [editing, setEditing] = useState(false);
   const [confirmRevert, setConfirmRevert] = useState(false);
+  const [pasting, setPasting] = useState(false);
+  const clipboard = useEditClipboard();
 
   const details = useQuery({ queryKey: qk.photo(photoId), queryFn: () => call('get_photo_details', { photoId }) });
   const data = details.data?.id === photoId ? details.data : undefined;
@@ -268,6 +272,20 @@ export function PhotoViewer() {
             >
               เพิ่มกรอบใบหน้า
             </MenuItem>
+            <MenuItem
+              icon={<Copy />}
+              disabled={!data?.edit}
+              onSelect={() => {
+                if (!data?.edit) return;
+                clipboard.copy(data.edit.settings, data.filename);
+                toast.success('คัดลอกการแต่งแล้ว เลือกรูปอื่นแล้วกด “วางการแต่ง”');
+              }}
+            >
+              คัดลอกการแต่ง
+            </MenuItem>
+            <MenuItem icon={<ClipboardPaste />} disabled={!clipboard.copied} onSelect={() => setPasting(true)}>
+              วางการแต่ง
+            </MenuItem>
             {data?.edit && (
               <MenuItem icon={<Undo2 />} onSelect={() => setConfirmRevert(true)} data-testid="viewer-revert">
                 กลับเป็นภาพต้นฉบับ
@@ -380,6 +398,7 @@ export function PhotoViewer() {
 
       {data && <ExportDialog open={exporting} onOpenChange={setExporting} selection={{ kind: 'explicit', photoIds: [photoId] }} count={1} previewPhotoId={photoId} />}
       {editing && data && <PhotoEditor details={data} onClose={() => setEditing(false)} onSaved={applyEdited} />}
+      <PasteEditDialog open={pasting} onOpenChange={setPasting} selection={{ kind: 'explicit', photoIds: [photoId] }} count={1} />
       <ConfirmDialog
         open={confirmRevert}
         onOpenChange={setConfirmRevert}

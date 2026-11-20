@@ -103,6 +103,7 @@ domain_commands!(
     reveal_export_destination,
     save_photo_edit,
     reset_photo_edit,
+    apply_photo_edits,
     list_watermarks,
     add_watermark,
     delete_watermark,

@@ -312,6 +312,23 @@ export interface EditSettings {
   adjust: EditAdjust;
 }
 
+/** ส่วนของการแต่งที่จะวางให้รูปอื่น */
+export interface EditParts {
+  /** ตัด หมุน ปรับเอียง */
+  geometry: boolean;
+  /** ค่าแสง คอนทราสต์ ส่วนสว่าง เงา จุดขาว จุดดำ */
+  light: boolean;
+  /** อุณหภูมิสี โทนสี ความสดของสี ความอิ่มสี */
+  color: boolean;
+}
+
+export interface ApplyEditsResult {
+  updated: number;
+  unchanged: number;
+  /** ยังเตรียมข้อมูลรูปไม่เสร็จ จึงข้าม */
+  notReady: number;
+}
+
 export interface PhotoEdit {
   settings: EditSettings;
   /** ขนาดภาพที่แต่งแล้ว (เต็มความละเอียด) */
@@ -885,6 +902,7 @@ export interface Commands {
   reveal_export_destination: [{ jobId: Id }, null];
   save_photo_edit: [{ photoId: Id; settings: EditSettings }, PhotoDetails];
   reset_photo_edit: [{ photoId: Id }, PhotoDetails];
+  apply_photo_edits: [{ selection: SelectionSpec; settings: EditSettings; parts: EditParts }, ApplyEditsResult];
   list_watermarks: [Record<string, never>, WatermarkInfo[]];
   add_watermark: [{ path: string }, WatermarkInfo];
   /** คืนรายการที่เหลือ */

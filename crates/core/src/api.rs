@@ -180,6 +180,11 @@ enum Command {
     ResetPhotoEdit {
         photo_id: String,
     },
+    ApplyPhotoEdits {
+        selection: export::SelectionSpec,
+        settings: edit::EditSettings,
+        parts: edit::EditParts,
+    },
     ListWatermarks {},
     AddWatermark {
         path: String,
@@ -328,6 +333,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "reveal_export_destination",
     "save_photo_edit",
     "reset_photo_edit",
+    "apply_photo_edits",
     "list_watermarks",
     "add_watermark",
     "delete_watermark",
@@ -483,6 +489,7 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         }
         SavePhotoEdit { photo_id, settings } => ok(edit::save(app, &photo_id, settings)?),
         ResetPhotoEdit { photo_id } => ok(edit::save(app, &photo_id, edit::EditSettings::default())?),
+        ApplyPhotoEdits { selection, settings, parts } => ok(edit::apply_many(app, &selection, &settings, parts)?),
         ListWatermarks {} => ok(watermark::list(&app.db())?),
         AddWatermark { path } => ok(watermark::add(app, &path)?),
         DeleteWatermark { id } => {
