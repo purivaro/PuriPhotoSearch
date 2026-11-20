@@ -301,6 +301,106 @@ pub(crate) fn preview_jpeg(bytes: &[u8], s: &EditSettings, max_edge: u32, qualit
     media::encode_jpeg(&img, quality)
 }
 
+/// ส่วนของการแต่งที่จะวางให้รูปอื่น (แบบ "Paste Settings" ของ Lightroom)
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditParts {
+    /// ตัด หมุน ปรับเอียง (แต่ละรูปมักตัดต่างกัน — UI ไม่ติ๊กไว้ก่อน)
+    pub geometry: bool,
+    /// ค่าแสง คอนทราสต์ ส่วนสว่าง เงา จุดขาว จุดดำ
+    pub light: bool,
+    /// อุณหภูมิสี โทนสี ความสดของสี ความอิ่มสี
+    pub color: bool,
+}
+
+impl EditParts {
+    /// การแต่งเดิมของรูป แทนเฉพาะส่วนที่เลือกด้วยค่าจาก `from`
+    pub fn merge(self, mut base: EditSettings, from: &EditSettings) -> EditSettings {
+        if self.geometry {
+            (base.rotate, base.straighten, base.crop) = (from.rotate, from.straighten, from.crop);
+        }
+        let (a, f) = (&mut base.adjust, &from.adjust);
+        if self.light {
+            (a.exposure, a.contrast, a.highlights, a.shadows, a.whites, a.blacks) =
+                (f.exposure, f.contrast, f.highlights, f.shadows, f.whites, f.blacks);
+        }
+        if self.color {
+            (a.temperature, a.tint, a.vibrance, a.saturation) = (f.temperature, f.tint, f.vibrance, f.saturation);
+        }
+        base
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyResult {
+    /// รูปที่การแต่งเปลี่ยน
+    pub updated: usize,
+    /// รูปที่ได้ค่าเดิมอยู่แล้ว
+    pub unchanged: usize,
+    /// รูปที่ยังเตรียมข้อมูลไม่เสร็จ (ไม่รู้ขนาดภาพ) จึงข้าม
+    pub not_ready: usize,
+}
+
+/// วางการแต่งให้หลายรูปพร้อมกัน — เก็บค่าอย่างเดียว ภาพที่แต่งสร้างเมื่อถูกเปิดดู ไฟล์ต้นฉบับไม่ถูกแตะ
+pub fn apply_many(
+    app: &App,
+    selection: &crate::export::SelectionSpec,
+    settings: &EditSettings,
+    parts: EditParts,
+) -> Result<ApplyResult> {
+    settings.validate()?;
+    if !(parts.geometry || parts.light || parts.color) {
+        return Err(AppError::invalid("เลือกอย่างน้อยหนึ่งส่วนที่จะวาง"));
+    }
+    let mut result = ApplyResult { updated: 0, unchanged: 0, not_ready: 0 };
+    let mut stale = Vec::new();
+    {
+        let conn = app.db();
+        let rows = crate::export::load_items(&conn, selection)?;
+        if rows.is_empty() {
+            return Err(AppError::invalid("ยังไม่ได้เลือกรูป"));
+        }
+        let tx = conn.unchecked_transaction()?;
+        for row in rows {
+            if row.width == 0 || row.height == 0 {
+                result.not_ready += 1;
+                continue;
+            }
+            let old = load(&tx, &row.photo_id)?;
+            let base = old.as_ref().map(|o| o.settings.clone()).unwrap_or_default();
+            let next = parts.merge(base.clone(), settings);
+            if next == base {
+                result.unchanged += 1;
+                continue;
+            }
+            if next.is_identity() {
+                tx.execute("DELETE FROM photo_edits WHERE photo_id = ?1", [&row.photo_id])?;
+            } else {
+                tx.execute(
+                    "INSERT INTO photo_edits(photo_id, edit_id, settings, updated_at) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(photo_id) DO UPDATE SET edit_id = excluded.edit_id, settings = excluded.settings,
+                       updated_at = excluded.updated_at",
+                    params![row.photo_id, util::new_id(), serde_json::to_string(&next)?, util::now()],
+                )?;
+            }
+            if let Some(old) = old {
+                stale.push((row.photo_id, old.edit_id));
+            }
+            result.updated += 1;
+        }
+        db::bump_revision(&tx)?;
+        tx.commit()?;
+    }
+    for (photo_id, edit_id) in stale {
+        for kind in ["thumb", "view"] {
+            let _ = std::fs::remove_file(cache_path(&app.cache_dir, &photo_id, &edit_id, kind));
+        }
+    }
+    app.notify(&["photos"]);
+    Ok(result)
+}
+
 /// บันทึกการแต่งของรูปหนึ่ง (ไม่ได้แต่งอะไร = ลบการแต่ง) — ไฟล์ต้นฉบับไม่ถูกแตะ
 pub fn save(app: &App, photo_id: &str, settings: EditSettings) -> Result<catalog::PhotoDetails> {
     settings.validate()?;

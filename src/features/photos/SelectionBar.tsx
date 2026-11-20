@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Minimize2, Upload, X } from 'lucide-react';
+import { ClipboardPaste, Minimize2, Upload, X } from 'lucide-react';
+import { useEditClipboard } from '@/stores/editClipboard';
 import { Button } from '@/components/ui/Button';
 import { errorMessage, formatCount } from '@/lib/format';
 import { call } from '@/lib/ipc/client';
@@ -20,13 +21,16 @@ interface SelectionBarProps {
   onExport: () => void;
   /** ย่อไฟล์ต้นฉบับในที่เดิม */
   onShrink: () => void;
+  /** วางการแต่งที่คัดลอกไว้ */
+  onPasteEdit: () => void;
   /** ปุ่มเฉพาะหน้า วางก่อนปุ่มส่งออก */
   actions?: ReactNode;
 }
 
 /** แถบเลือกหลายรูป: บอกจำนวนและขอบเขตตลอดเวลา อยู่ท้าย grid โดยไม่บังแถวสุดท้าย */
-export function SelectionBar({ selection, onSelectionChange, loadedIds, total, query, onExport, onShrink, actions }: SelectionBarProps) {
+export function SelectionBar({ selection, onSelectionChange, loadedIds, total, query, onExport, onShrink, onPasteEdit, actions }: SelectionBarProps) {
   const count = selectionCount(selection);
+  const copied = useEditClipboard((s) => s.copied);
   const snapshot = useMutation({
     mutationFn: () => call('create_selection', query),
     onSuccess: (result) => {
@@ -67,6 +71,11 @@ export function SelectionBar({ selection, onSelectionChange, loadedIds, total, q
           ล้างที่เลือก
         </Button>
         {actions}
+        {copied && (
+          <Button icon={<ClipboardPaste className="size-4" aria-hidden />} onClick={onPasteEdit} data-testid="paste-edit-button" title={`วางการแต่งจาก ${copied.filename}`}>
+            วางการแต่ง
+          </Button>
+        )}
         <Button icon={<Minimize2 className="size-4" aria-hidden />} onClick={onShrink} data-testid="shrink-button">
           ย่อไฟล์ต้นฉบับ
         </Button>

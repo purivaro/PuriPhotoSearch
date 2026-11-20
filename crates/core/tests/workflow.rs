@@ -1255,6 +1255,64 @@ fn edit_light_and_color_change_views_and_exports_but_not_faces_or_the_file() {
 }
 
 #[test]
+fn edit_paste_to_many_photos_replaces_only_the_chosen_parts() {
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-21 วางการแต่ง");
+    std::fs::create_dir_all(&root).unwrap();
+    for name in ["a.jpg", "b.jpg", "c.jpg"] {
+        std::fs::write(root.join(name), jpeg_with_exif(400, 300, 1, "2026:11:21 10:00:00")).unwrap();
+    }
+    lib.import(&root, "single_event", |_| true);
+    let before = tree_state(&root);
+    let (a, b, c) = (lib.photo_id("a.jpg"), lib.photo_id("b.jpg"), lib.photo_id("c.jpg"));
+    let crop_a = json!({ "x": 0.1, "y": 0.1, "w": 0.5, "h": 0.5 });
+    let crop_b = json!({ "x": 0.3, "y": 0.2, "w": 0.6, "h": 0.6 });
+    let source = json!({ "rotate": 90, "crop": crop_a, "adjust": { "exposure": 1.0, "contrast": 20.0, "temperature": 30.0, "vibrance": 15.0 } });
+    lib.call("save_photo_edit", json!({ "photoId": a, "settings": source }));
+    lib.call(
+        "save_photo_edit",
+        json!({ "photoId": b, "settings": { "crop": crop_b, "adjust": { "saturation": -50.0 } } }),
+    );
+    let edit_of = |id: &str| lib.call("get_photo_details", json!({ "photoId": id }))["edit"]["settings"].clone();
+    let copied = edit_of(&a);
+    let both = json!({ "kind": "explicit", "photoIds": [b, c] });
+
+    // ไม่เลือกส่วนไหนเลย → ปฏิเสธ
+    let none = json!({ "geometry": false, "light": false, "color": false });
+    let err =
+        lib.try_call("apply_photo_edits", json!({ "selection": both, "settings": copied, "parts": none })).unwrap_err();
+    assert_eq!(err.code, "INVALID_INPUT");
+
+    // วางเฉพาะแสง: b เก็บกรอบตัดและความอิ่มสีของตัวเอง · c ได้แค่แสง
+    let light = json!({ "geometry": false, "light": true, "color": false });
+    let r = lib.call("apply_photo_edits", json!({ "selection": both, "settings": copied, "parts": light }));
+    assert_eq!((r["updated"].as_i64(), r["unchanged"].as_i64()), (Some(2), Some(0)));
+    let eb = edit_of(&b);
+    assert_eq!(eb["crop"], crop_b);
+    assert_eq!((eb["adjust"]["exposure"].as_f64(), eb["adjust"]["contrast"].as_f64()), (Some(1.0), Some(20.0)));
+    assert_eq!((eb["adjust"]["saturation"].as_f64(), eb["adjust"]["temperature"].as_f64()), (Some(-50.0), Some(0.0)));
+    let ec = edit_of(&c);
+    assert_eq!((ec["rotate"].as_i64(), ec["crop"].is_null()), (Some(0), true));
+    assert_eq!(ec["adjust"]["exposure"].as_f64(), Some(1.0));
+    // วางซ้ำ = ไม่มีอะไรเปลี่ยน
+    let r = lib.call("apply_photo_edits", json!({ "selection": both, "settings": copied, "parts": light }));
+    assert_eq!((r["updated"].as_i64(), r["unchanged"].as_i64()), (Some(0), Some(2)));
+
+    // วางทุกส่วน: ได้ตัด/หมุนและสีของ a ด้วย · ภาพย่อเป็นภาพที่แต่ง (หมุนแล้วเป็นแนวตั้ง)
+    let all = json!({ "geometry": true, "light": true, "color": true });
+    lib.call("apply_photo_edits", json!({ "selection": both, "settings": copied, "parts": all }));
+    assert_eq!(edit_of(&b), copied);
+    let thumb = puri_core::api::asset(&lib.app, &format!("thumb/{c}")).unwrap();
+    let thumb = image::load_from_memory(&thumb.bytes).unwrap();
+    assert!(thumb.height() > thumb.width());
+
+    // วางค่าว่าง (เหมือนรีเซ็ต) ทุกส่วน → กลับเป็นภาพต้นฉบับ
+    lib.call("apply_photo_edits", json!({ "selection": both, "settings": {}, "parts": all }));
+    assert!(lib.call("get_photo_details", json!({ "photoId": c }))["edit"].is_null());
+    assert_eq!(tree_state(&root), before, "วางการแต่งไม่แตะไฟล์ต้นฉบับ");
+}
+
+#[test]
 fn t27b_export_refuses_source_changed_since_import_and_cancel_keeps_finished_copies() {
     let lib = Lib::new();
     let (root, dest) = export_fixture(&lib);
