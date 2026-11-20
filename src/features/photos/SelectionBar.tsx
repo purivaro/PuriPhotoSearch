@@ -1,13 +1,14 @@
 import type { ReactNode } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ClipboardPaste, Minimize2, Upload, X } from 'lucide-react';
+import { ClipboardPaste, Minimize2, SlidersHorizontal, Upload, X } from 'lucide-react';
 import { useEditClipboard } from '@/stores/editClipboard';
 import { Button } from '@/components/ui/Button';
 import { errorMessage, formatCount } from '@/lib/format';
 import { call } from '@/lib/ipc/client';
 import type { Id } from '@/lib/ipc/types';
 import type { PhotoQuery } from '@/lib/queries';
+import { usePresets } from './EditPresets';
 import { EMPTY_SELECTION, selectLoaded, selectSnapshot, selectionCount, type Selection } from './selection';
 
 interface SelectionBarProps {
@@ -23,14 +24,18 @@ interface SelectionBarProps {
   onShrink: () => void;
   /** วางการแต่งที่คัดลอกไว้ */
   onPasteEdit: () => void;
+  /** ใช้ preset กับรูปที่เลือก */
+  onApplyPreset: () => void;
   /** ปุ่มเฉพาะหน้า วางก่อนปุ่มส่งออก */
   actions?: ReactNode;
 }
 
 /** แถบเลือกหลายรูป: บอกจำนวนและขอบเขตตลอดเวลา อยู่ท้าย grid โดยไม่บังแถวสุดท้าย */
-export function SelectionBar({ selection, onSelectionChange, loadedIds, total, query, onExport, onShrink, onPasteEdit, actions }: SelectionBarProps) {
+export function SelectionBar({ selection, onSelectionChange, loadedIds, total, query, onExport, onShrink, onPasteEdit, onApplyPreset, actions }: SelectionBarProps) {
   const count = selectionCount(selection);
   const copied = useEditClipboard((s) => s.copied);
+  // ปุ่ม "ใช้ preset" ขึ้นเมื่อมี preset แล้วเท่านั้น (ไม่รกแถบของคนที่ไม่ได้ใช้)
+  const hasPresets = (usePresets().data?.length ?? 0) > 0;
   const snapshot = useMutation({
     mutationFn: () => call('create_selection', query),
     onSuccess: (result) => {
@@ -74,6 +79,11 @@ export function SelectionBar({ selection, onSelectionChange, loadedIds, total, q
         {copied && (
           <Button icon={<ClipboardPaste className="size-4" aria-hidden />} onClick={onPasteEdit} data-testid="paste-edit-button" title={`วางการแต่งจาก ${copied.filename}`}>
             วางการแต่ง
+          </Button>
+        )}
+        {hasPresets && (
+          <Button icon={<SlidersHorizontal className="size-4" aria-hidden />} onClick={onApplyPreset} data-testid="apply-preset-button">
+            ใช้ preset
           </Button>
         )}
         <Button icon={<Minimize2 className="size-4" aria-hidden />} onClick={onShrink} data-testid="shrink-button">

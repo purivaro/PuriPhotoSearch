@@ -60,11 +60,27 @@ if [ -z "${APP:-}" ] && lsof -ti tcp:1420 >/dev/null 2>&1; then
   exit 1
 fi
 
-# native folder picker ขับด้วยสคริปต์ไม่ได้: debug build ตอบคำขอ pick_folder ตามลำดับนี้แทน
-# (1) โฟลเดอร์ที่จะเพิ่ม  (2) ปลายทางส่งออก  (3) ปลายทางส่งออกรอบสอง (ที่เดิม เพื่อทดสอบชื่อชน)
+# preset ของ Lightroom สำหรับขั้นแต่งภาพ (โครงเดียวกับที่ Lightroom Classic ส่งออก ย่อเหลือค่าที่ใช้ทดสอบ)
+cat >"$WORK/preset.xmp" <<'XMP'
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:WhiteBalance="As Shot" crs:Exposure2012="+0.40" crs:Shadows2012="+25" crs:Texture="+15"
+   crs:Vibrance="+20" crs:LuminanceAdjustmentOrange="+30">
+   <crs:Name><rdf:Alt><rdf:li xml:lang="x-default">สว่างใส e2e</rdf:li></rdf:Alt></crs:Name>
+   <crs:Look><rdf:Description crs:Name="Adobe Vivid" crs:Amount="1"/></crs:Look>
+   <crs:ToneCurvePV2012><rdf:Seq><rdf:li>0, 12</rdf:li><rdf:li>128, 136</rdf:li><rdf:li>255, 250</rdf:li></rdf:Seq></crs:ToneCurvePV2012>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+XMP
+
+# native picker ขับด้วยสคริปต์ไม่ได้: debug build ตอบคำขอ pick_* ตามลำดับนี้แทน
+# (1) โฟลเดอร์ที่จะเพิ่ม  (2) ปลายทางส่งออก  (3) ปลายทางส่งออกรอบสอง (ที่เดิม เพื่อทดสอบชื่อชน)  (4) ไฟล์ preset .xmp
 export PURI_E2E_PICK="$(native "$PHOTOS")
 $(native "$WORK/export")
-$(native "$WORK/export")"
+$(native "$WORK/export")
+$(native "$WORK/preset.xmp")"
 export PURI_DATA_DIR="$(native "$WORK/library")" PURI_DISABLE_OPEN=1 PURI_DISABLE_FACE_ENGINE=1
 # ไม่ให้ฐานของรุ่น Python บนเครื่องผู้พัฒนาทำให้หน้าต่าง "เตรียมแอปให้พร้อมใช้" เปิดขึ้นกลางเทสต์ (ทดสอบแยกใน e2e/setup.sh)
 export PURI_LEGACY_DB="$(native "$WORK/no-legacy.db")"
@@ -156,5 +172,8 @@ else
 fi
 [ "$(q "SELECT COUNT(*) FROM events")" -ge 1 ] || fail "คลังไม่มีกิจกรรม"
 [ "$(q "SELECT COUNT(*) FROM face_assignments WHERE revoked_at IS NULL")" -ge 1 ] || fail "คลังไม่มีคำยืนยันใบหน้า"
-echo "  · คลัง: $(q "SELECT COUNT(*) FROM events") กิจกรรม, $(q "SELECT COUNT(*) FROM photos") รูป, $(q "SELECT COUNT(*) FROM persons") บุคคล, $(q "SELECT COUNT(*) FROM face_assignments WHERE revoked_at IS NULL") คำยืนยัน"
+[ "$(q "SELECT COUNT(*) FROM photo_edits")" -ge 2 ] || fail "คลังไม่มีการแต่งภาพที่บันทึก"
+[ "$(q "SELECT COUNT(*) FROM edit_presets")" = 2 ] || fail "คลังไม่มี preset สองอัน (นำเข้า + บันทึกเอง)"
+grep -q 'สว่างใส e2e' "$WORK/preset.xmp" || fail "ไฟล์ preset ต้นทางถูกแก้"
+echo "  · คลัง: $(q "SELECT COUNT(*) FROM events") กิจกรรม, $(q "SELECT COUNT(*) FROM photos") รูป, $(q "SELECT COUNT(*) FROM persons") บุคคล, $(q "SELECT COUNT(*) FROM face_assignments WHERE revoked_at IS NULL") คำยืนยัน, $(q "SELECT COUNT(*) FROM photo_edits") รูปที่แต่ง, $(q "SELECT COUNT(*) FROM edit_presets") preset"
 echo "✓ e2e ผ่าน"

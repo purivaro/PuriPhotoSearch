@@ -1372,9 +1372,25 @@ fn edit_presets_save_import_rename_delete_and_survive_restart() {
     let root = lib.photos().join("2026-11-21 preset");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("a.jpg"), jpeg_with_exif(400, 300, 1, "2026:11:21 10:00:00")).unwrap();
+    std::fs::write(root.join("b.jpg"), jpeg_with_exif(400, 300, 1, "2026:11:21 10:01:00")).unwrap();
     lib.import(&root, "single_event", |_| true);
     let photo_id = lib.photo_id("a.jpg");
     lib.call("save_photo_edit", json!({ "photoId": photo_id, "settings": { "adjust": imported["adjust"] } }));
+    // ใช้ preset กับหลายรูปจากแถบเลือกรูป (แสง + สี): กรอบตัดของแต่ละรูปคงเดิม ได้ HSL และเส้นโค้งครบ
+    let b = lib.photo_id("b.jpg");
+    let crop = json!({ "x": 0.1, "y": 0.1, "w": 0.5, "h": 0.5 });
+    lib.call(
+        "save_photo_edit",
+        json!({ "photoId": b, "settings": { "crop": crop, "adjust": { "saturation": -40.0 } } }),
+    );
+    let r = lib.call(
+        "apply_photo_edits",
+        json!({ "selection": { "kind": "explicit", "photoIds": [b] }, "settings": { "adjust": mine["adjust"] }, "parts": { "geometry": false, "light": true, "color": true } }),
+    );
+    assert_eq!(r["updated"].as_i64(), Some(1));
+    let eb = lib.call("get_photo_details", json!({ "photoId": b }))["edit"]["settings"].clone();
+    assert_eq!(eb["crop"], crop);
+    assert_eq!(eb["adjust"], mine["adjust"], "แสงและสีเท่ากับ preset ทุกค่า รวม HSL และเส้นโค้ง");
 
     // ลำดับที่แสดงเรียงแบบพจนานุกรมไทยที่ UI · ที่นี่ตรวจแค่ว่ามีชื่อไหนบ้าง
     let names = |list: &Value| {

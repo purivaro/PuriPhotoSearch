@@ -1,6 +1,6 @@
 // ทดสอบเส้นทางหลักในหน้าต่างจริงของ Puri Photo Search (debug build ฉีดไฟล์นี้หลังหน้าโหลดเสร็จ — ดู e2e/run.sh)
 // ทุกขั้นขับผ่าน DOM จริง → IPC จริง → Rust จริง → คลัง SQLite และไฟล์รูปจริงในโฟลเดอร์ชั่วคราว
-//   เลือกโฟลเดอร์ → ตรวจรายการ → เพิ่มกิจกรรม → แสดงรูป → ตั้งชื่อบุคคล → ค้นหารูป → เปิดต้นฉบับ → ส่งออกสำเนา
+//   เลือกโฟลเดอร์ → ตรวจรายการ → เพิ่มกิจกรรม → แสดงรูป → ตั้งชื่อบุคคล → ค้นหารูป → เปิดต้นฉบับ → ส่งออกสำเนา → แต่งภาพ + preset
 (async () => {
   if (window.__e2eStarted) return;
   window.__e2eStarted = true;
@@ -237,6 +237,71 @@
     expect(second.copied === 2 && second.items.some((i) => / \(\d+\)\.jpg$/.test(i.outputPath)), 'ชื่อชนถูกเติมเลขท้าย ไม่เขียนทับ');
     await stage('export-collision', { outputs: second.items.map((i) => i.outputPath.split('/').pop()) });
     await click(tid('export-done'), 'ปิดรายงาน');
+
+    // ── S15b: แต่งภาพ (หลังส่งออก — ตัวรันตรวจว่าสำเนาที่ส่งออกตรงกับต้นฉบับทุก byte)
+    // canvas ของหน้าแต่งภาพต้องอ่านพิกเซลของภาพจาก puri:// ได้ (ถ้าไม่มี CORS ภาพจะ "taint" และ getImageData โยน SecurityError)
+    if (tid('selection-clear')) await click(tid('selection-clear'), 'ล้างที่เลือก');
+    await click(tid('photo-card-open', tids('photo-card')[0]), 'เปิดรูปแรกของผลค้นหา');
+    await see('photo-viewer');
+    const editedId = await waitFor(() => location.hash.match(/photos\/([^/?]+)/)?.[1], 'รหัสรูปใน URL ของตัวดูภาพ');
+    await click(await see('viewer-edit'), 'แต่งภาพ');
+    await see('photo-editor');
+    const canvasMean = () => {
+      const c = tid('editor-preview');
+      if (!c || c.width === 0) return 0;
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 16) sum += d[i] + d[i + 1] + d[i + 2];
+      return sum / (d.length / 16) / 3;
+    };
+    await click(tid('editor-tab-light'), 'แท็บแสงและสี');
+    const dark = await waitFor(() => canvasMean() || null, 'ตัวอย่างภาพบน canvas (อ่านพิกเซลได้)', 30000);
+    await type(tid('editor-exposure'), '1');
+    const bright = await waitFor(() => (canvasMean() > dark + 10 ? canvasMean() : null), 'ตัวอย่างสว่างขึ้นเมื่อเพิ่มค่าแสง');
+    await stage('editor-light', { mean: [Math.round(dark), Math.round(bright)] });
+
+    // นำเข้า preset .xmp ผ่าน picker ของแอป (คำตอบที่ 4 ของ PURI_E2E_PICK) แล้วใช้กับรูปนี้
+    await click(tid('editor-tab-presets'), 'แท็บ Preset');
+    await click(await see('preset-import'), 'นำเข้า .xmp');
+    const imported = await see('preset-imported', 'หน้าต่างผลการนำเข้า');
+    expect(text(imported).includes('Texture +15') && text(imported).includes('Adobe Vivid'), `บอกส่วนที่นำเข้าไม่ได้ (ได้ "${text(imported)}")`);
+    await click(tid('preset-imported-apply'), 'ใช้กับรูปนี้');
+    await waitFor(() => tids('preset-item').some((b) => b.getAttribute('aria-pressed') === 'true'), 'preset ที่นำเข้าถูกใช้อยู่');
+    // ปรับเพิ่มแล้วบันทึกเป็น preset ของตัวเอง
+    await click(tid('editor-tab-light'), 'แท็บแสงและสี');
+    // preset ที่ใช้อยู่มีค่า HSL ส่วนนี้จึงเปิดเองแล้ว (เปิดเฉพาะเมื่อยังพับอยู่)
+    if (tid('editor-hsl-toggle').getAttribute('aria-expanded') !== 'true') await click(tid('editor-hsl-toggle'), 'เปิดส่วน HSL');
+    expect(tid('editor-hsl-toggle').getAttribute('aria-expanded') === 'true', 'ส่วน HSL เปิดเองเมื่อมีค่าที่ปรับไว้');
+    await type(await see('editor-hsl-lum-1'), '45');
+    await click(tid('editor-tab-presets'), 'แท็บ Preset');
+    await click(await see('preset-save'), 'บันทึกค่าปัจจุบัน');
+    await type(await see('preset-name-input'), 'ผิวสว่าง e2e');
+    await click(tid('preset-name-confirm'), 'บันทึก preset');
+    await waitFor(() => tids('preset-item').length === 2, 'preset สองอัน');
+    await stage('editor-presets', { presets: tids('preset-item').map((b) => text(b)) });
+    await click(tid('editor-save'), 'บันทึกการแต่ง');
+    await waitFor(() => !tid('photo-editor'), 'ปิดหน้าแต่งภาพหลังบันทึก');
+    const edit = (await rpc('get_photo_details', { photoId: editedId })).edit;
+    expect(edit?.settings.adjust.exposure === 0.4 && edit.settings.adjust.lum[1] === 45, `ค่าที่บันทึก: ${JSON.stringify(edit?.settings.adjust)}`);
+    await waitFor(() => all('[data-testid="viewer-image-box"] img').some((i) => i.naturalWidth > 0), 'ภาพที่แต่งแล้วโหลดในตัวดูภาพ');
+    await click(tid('viewer-close'), 'ปิดตัวดูภาพ');
+    await waitFor(() => !tid('photo-viewer'), 'ปิดตัวดูภาพแล้ว');
+
+    // ใช้ preset ของตัวเองกับทุกรูปในผลค้นหาจากแถบเลือกรูป
+    for (const card of tids('photo-card')) await click(tid('photo-card-select', card), 'เลือกรูป');
+    await click(await see('apply-preset-button'), 'ใช้ preset');
+    await see('apply-preset');
+    await click(tids('apply-preset-option').find((o) => text(o).includes('ผิวสว่าง e2e')), 'เลือก preset ของตัวเอง');
+    await click(tid('apply-preset-confirm'), 'ใช้กับรูปที่เลือก');
+    await waitFor(() => !tid('apply-preset'), 'ปิดหน้าต่างหลังใช้ preset');
+    const ids = (await rpc('query_photos', { text: 'IMG_0248', limit: 50 })).items.map((i) => i.id);
+    expect(ids.length === 2, `ผลค้นหา IMG_0248 สองรูป: ${ids.length}`);
+    for (const id of ids) {
+      const a = (await rpc('get_photo_details', { photoId: id })).edit?.settings.adjust;
+      expect(a?.lum[1] === 45 && a.exposure === 0.4, `รูป ${id} ได้ค่าของ preset: ${JSON.stringify(a)}`);
+    }
+    await stage('apply-preset-many', { photos: ids.length });
+    await click(tid('selection-clear'), 'ล้างที่เลือก');
 
     // ── S05: หน้าหลักใช้ข้อมูลจริงจากคลัง
     await click(tid('nav-home'), 'เมนูหน้าหลัก');
