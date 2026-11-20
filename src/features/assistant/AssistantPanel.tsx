@@ -34,6 +34,7 @@ const TOOL_LABELS: Record<string, string> = {
   apply_preset: 'ใช้ preset',
   save_preset: 'บันทึก preset',
   show_photos: 'แสดงรูป',
+  generate_image: 'สร้างภาพ',
 };
 
 const SUGGESTIONS = [

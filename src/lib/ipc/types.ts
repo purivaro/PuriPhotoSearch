@@ -357,6 +357,17 @@ export interface Vignette {
 
 export type AiProvider = 'claude' | 'codex' | 'gemini';
 
+/** ที่มาของภาพที่ผู้ช่วย AI สร้างจากรูปในคลัง */
+export interface AiOrigin {
+  /** null = รูปต้นทางไม่อยู่ในคลังแล้ว */
+  sourcePhotoId: Id | null;
+  sourceFilename: string;
+  prompt: string;
+  template: string | null;
+  provider: string;
+  createdAt: string;
+}
+
 /** CLI ของ AI ที่พบในเครื่อง (ใช้บัญชีที่ผู้ใช้ล็อกอินไว้ใน CLI นั้น) */
 export interface AiCliStatus {
   provider: AiProvider;
@@ -483,6 +494,8 @@ export interface PhotoDetails extends PhotoResult {
   faces: FaceBox[];
   /** การแต่งของรูปนี้ (null = ภาพต้นฉบับ) */
   edit: PhotoEdit | null;
+  /** ภาพที่ผู้ช่วย AI สร้าง: ที่มา */
+  aiOrigin: AiOrigin | null;
 }
 
 export interface SearchSuggestions {
@@ -1011,6 +1024,8 @@ export interface Commands {
   ai_cancel: [{ turnId: Id }, null];
   /** คืนจำนวนรูปที่ย้อน */
   ai_undo: [{ turnId: Id }, number];
+  ai_generate: [{ selection: SelectionSpec; prompt: string; template?: string | null }, { turnId: Id }];
+  ai_generate_info: [Record<string, never>, { outputRoot: string; maxPhotos: number }];
   list_watermarks: [Record<string, never>, WatermarkInfo[]];
   add_watermark: [{ path: string }, WatermarkInfo];
   /** คืนรายการที่เหลือ */

@@ -216,6 +216,8 @@ enum Command {
     AiUndo {
         turn_id: String,
     },
+    AiGenerate(assistant::generate::GenerateArgs),
+    AiGenerateInfo {},
     ListWatermarks {},
     AddWatermark {
         path: String,
@@ -375,6 +377,8 @@ pub const COMMAND_NAMES: &[&str] = &[
     "ai_events",
     "ai_cancel",
     "ai_undo",
+    "ai_generate",
+    "ai_generate_info",
     "list_watermarks",
     "add_watermark",
     "delete_watermark",
@@ -540,6 +544,11 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         AiStart(args) => ok(serde_json::json!({ "turnId": assistant::start(app, args)? })),
         AiEvents { turn_id, after } => ok(assistant::events(app, &turn_id, after)?),
         AiCancel { turn_id } => ok(assistant::cancel(app, &turn_id)?),
+        AiGenerate(args) => ok(serde_json::json!({ "turnId": assistant::generate::start(app, args)? })),
+        AiGenerateInfo {} => ok(serde_json::json!({
+            "outputRoot": assistant::generate::output_root().to_string_lossy(),
+            "maxPhotos": assistant::generate::MAX_PHOTOS,
+        })),
         AiUndo { turn_id } => {
             let restored = assistant::undo(app, &turn_id)?;
             app.notify(&["photos"]);

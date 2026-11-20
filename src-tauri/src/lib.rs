@@ -115,6 +115,8 @@ domain_commands!(
     ai_events,
     ai_cancel,
     ai_undo,
+    ai_generate,
+    ai_generate_info,
     list_watermarks,
     add_watermark,
     delete_watermark,
