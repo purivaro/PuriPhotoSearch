@@ -9,6 +9,7 @@ pub mod assets;
 pub mod backup;
 pub mod catalog;
 pub mod db;
+pub mod edit;
 pub mod error;
 pub mod export;
 pub mod faces;

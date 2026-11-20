@@ -2,17 +2,19 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
-import { ArrowLeft, ChevronLeft, ChevronRight, EllipsisVertical, ExternalLink, FolderOpen, Image as ImageIcon, Minus, PanelRight, Plus, ScanFace, Upload, X } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, EllipsisVertical, ExternalLink, FolderOpen, Image as ImageIcon, Minus, PanelRight, Plus, ScanFace, SlidersHorizontal, Undo2, Upload, X } from 'lucide-react';
 import { useViewer, type ViewerLocationState } from '@/app/navigation';
 import { Button, IconButton } from '@/components/ui/Button';
+import { ConfirmDialog } from '@/components/ui/Dialog';
 import { ErrorState, LoadingBlock } from '@/components/ui/Feedback';
 import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/Overlay';
 import { ExportDialog } from '@/features/export/ExportDialog';
 import { cn } from '@/lib/cn';
 import { errorMessage, formatCount } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
-import type { Id } from '@/lib/ipc/types';
+import type { Id, PhotoDetails } from '@/lib/ipc/types';
 import { qk } from '@/lib/queries';
+import { PhotoEditor } from './PhotoEditor';
 import { ViewerInspector } from './ViewerInspector';
 import { ViewerStage, type ViewerStageHandle } from './ViewerStage';
 import { FILE_MANAGER } from '@/lib/platform';
@@ -48,6 +50,8 @@ export function PhotoViewer() {
   const [selectedFaceId, setSelectedFaceId] = useState<Id | null>(null);
   const [zoom, setZoom] = useState(1);
   const [exporting, setExporting] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [confirmRevert, setConfirmRevert] = useState(false);
 
   const details = useQuery({ queryKey: qk.photo(photoId), queryFn: () => call('get_photo_details', { photoId }) });
   const data = details.data?.id === photoId ? details.data : undefined;
@@ -62,7 +66,27 @@ export function PhotoViewer() {
   useEffect(() => {
     setDrawMode(false);
     setSelectedFaceId(null);
+    setEditing(false);
   }, [photoId]);
+
+  // บันทึกการแต่งแล้ว: ใช้ข้อมูลใหม่ทันที และให้ภาพย่อในหน้าที่มาเปลี่ยนตาม
+  const applyEdited = useCallback(
+    (result: PhotoDetails) => {
+      qc.setQueryData(qk.photo(result.id), result);
+      void qc.invalidateQueries({ queryKey: ['photos'] });
+      setEditing(false);
+    },
+    [qc],
+  );
+  const revert = useMutation({
+    mutationFn: () => call('reset_photo_edit', { photoId }),
+    onSuccess: (result) => {
+      applyEdited(result);
+      setConfirmRevert(false);
+      toast.success('กลับเป็นภาพต้นฉบับแล้ว');
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
 
   // ใกล้ท้ายของรูปที่โหลดแล้ว → ขอให้หน้าที่มาโหลดหน้าถัดไป เพื่อกดถัดไปต่อได้จนครบชุดผล
   const loadedCount = ids.length;
@@ -203,6 +227,18 @@ export function PhotoViewer() {
           </IconButton>
         </div>
 
+        <Button
+          size="sm"
+          variant="outline"
+          icon={<SlidersHorizontal className="size-4" aria-hidden />}
+          onClick={() => setEditing(true)}
+          disabled={!data || data.width <= 0 || !data.originalAvailable}
+          title={data && !data.originalAvailable ? 'แต่งภาพได้เมื่อไฟล์ต้นฉบับพร้อม' : undefined}
+          data-testid="viewer-edit"
+        >
+          แต่งภาพ
+        </Button>
+
         <Button size="sm" variant="outline" icon={<Upload className="size-4" aria-hidden />} onClick={() => setExporting(true)} disabled={!data} data-testid="viewer-export">
           ส่งออกสำเนา
         </Button>
@@ -232,6 +268,11 @@ export function PhotoViewer() {
             >
               เพิ่มกรอบใบหน้า
             </MenuItem>
+            {data?.edit && (
+              <MenuItem icon={<Undo2 />} onSelect={() => setConfirmRevert(true)} data-testid="viewer-revert">
+                กลับเป็นภาพต้นฉบับ
+              </MenuItem>
+            )}
           </MenuContent>
         </Menu>
 
@@ -295,7 +336,14 @@ export function PhotoViewer() {
                     onClick={() => goTo(id)}
                     className={cn('block h-[58px] w-[88px] overflow-hidden rounded-lg bg-white/5', id === photoId ? 'ring-[3px] ring-brand' : 'opacity-70 hover:opacity-100')}
                   >
-                    <img src={assetUrl('thumb', id)} alt="" loading="lazy" draggable={false} className="size-full object-cover" onError={(event) => (event.currentTarget.style.visibility = 'hidden')} />
+                    <img
+                      src={assetUrl('thumb', id, id === photoId && data ? (data.editId ?? data.revisionId) : undefined)}
+                      alt=""
+                      loading="lazy"
+                      draggable={false}
+                      className="size-full object-cover"
+                      onError={(event) => (event.currentTarget.style.visibility = 'hidden')}
+                    />
                   </button>
                 </li>
               ))}
@@ -330,7 +378,17 @@ export function PhotoViewer() {
         )}
       </div>
 
-      {data && <ExportDialog open={exporting} onOpenChange={setExporting} selection={{ kind: 'explicit', photoIds: [photoId] }} count={1} />}
+      {data && <ExportDialog open={exporting} onOpenChange={setExporting} selection={{ kind: 'explicit', photoIds: [photoId] }} count={1} previewPhotoId={photoId} />}
+      {editing && data && <PhotoEditor details={data} onClose={() => setEditing(false)} onSaved={applyEdited} />}
+      <ConfirmDialog
+        open={confirmRevert}
+        onOpenChange={setConfirmRevert}
+        title="กลับเป็นภาพต้นฉบับ?"
+        description="การตัด หมุน และปรับเอียงของรูปนี้จะถูกลบ ไฟล์ต้นฉบับไม่เคยถูกแตะ ใบหน้าและชื่อยังอยู่ครบ"
+        confirmLabel="กลับเป็นต้นฉบับ"
+        busy={revert.isPending}
+        onConfirm={() => revert.mutate()}
+      />
     </div>
   );
 }

@@ -6,8 +6,8 @@
 
 use crate::error::{AppError, Result};
 use crate::{
-    ai, assets, backup, catalog, db, export, faces, import, jobs, legacy, media, people, platform, relink, review,
-    setup, shrink, watermark, App,
+    ai, assets, backup, catalog, db, edit, export, faces, import, jobs, legacy, media, people, platform, relink,
+    review, setup, shrink, watermark, App,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -171,6 +171,15 @@ enum Command {
         #[serde(default)]
         watermark: Option<watermark::WatermarkSpec>,
     },
+    #[serde(rename_all = "camelCase")]
+    SavePhotoEdit {
+        photo_id: String,
+        settings: edit::EditSettings,
+    },
+    #[serde(rename_all = "camelCase")]
+    ResetPhotoEdit {
+        photo_id: String,
+    },
     ListWatermarks {},
     AddWatermark {
         path: String,
@@ -317,6 +326,8 @@ pub const COMMAND_NAMES: &[&str] = &[
     "start_export",
     "get_export_report",
     "reveal_export_destination",
+    "save_photo_edit",
+    "reset_photo_edit",
     "list_watermarks",
     "add_watermark",
     "delete_watermark",
@@ -470,6 +481,8 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         PreviewExport { selection, destination, resize, watermark } => {
             ok(export::preview(app, &selection, &destination, resize, watermark)?)
         }
+        SavePhotoEdit { photo_id, settings } => ok(edit::save(app, &photo_id, settings)?),
+        ResetPhotoEdit { photo_id } => ok(edit::save(app, &photo_id, edit::EditSettings::default())?),
         ListWatermarks {} => ok(watermark::list(&app.db())?),
         AddWatermark { path } => ok(watermark::add(app, &path)?),
         DeleteWatermark { id } => {

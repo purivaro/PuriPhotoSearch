@@ -337,6 +337,18 @@ pub struct PhotoResult {
     pub suggested_people: Vec<SuggestedPerson>,
     /// ใบหน้าในรูปนี้ที่ผู้ใช้แจ้งว่าไม่ใช่บุคคลที่ถาม (มีเมื่อค้นด้วย `rejectedPersonId`)
     pub rejected_faces: Vec<String>,
+    /// รหัสการแต่งล่าสุด (None = ไม่ได้แต่ง) — ใช้เป็นรุ่นของภาพย่อใน UI
+    pub edit_id: Option<String>,
+}
+
+/// การแต่งของรูป (DECISIONS ข้อ 17)
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhotoEdit {
+    pub settings: crate::edit::EditSettings,
+    /// ขนาดภาพที่แต่งแล้ว (พิกเซลเต็มความละเอียด)
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -372,6 +384,7 @@ pub struct PhotoDetails {
     pub original_available: bool,
     pub decode_error: Option<String>,
     pub faces: Vec<FaceBox>,
+    pub edit: Option<PhotoEdit>,
 }
 
 const PHOTO_FROM: &str = "FROM photos p
@@ -379,10 +392,11 @@ const PHOTO_FROM: &str = "FROM photos p
   JOIN photo_locations l ON l.photo_id = p.id
   JOIN event_photos ep ON ep.photo_id = p.id
   JOIN events e ON e.id = ep.event_id
+  LEFT JOIN photo_edits pe ON pe.photo_id = p.id
   WHERE p.catalog_state = 'active' AND e.catalog_state = 'active'";
 
 const PHOTO_COLS: &str = "p.id, r.id, l.filename, e.id, e.title, r.taken_at_local, r.date_source, r.width, r.height, \
-                          r.thumbnail_status, l.available, l.os_path, r.size, e.event_date, r.decode_error";
+                          r.thumbnail_status, l.available, l.os_path, r.size, e.event_date, r.decode_error, pe.edit_id";
 
 fn photo_from_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoResult> {
     Ok(PhotoResult {
@@ -400,6 +414,7 @@ fn photo_from_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoResult> {
         confirmed_people: vec![],
         suggested_people: vec![],
         rejected_faces: vec![],
+        edit_id: r.get(15)?,
     })
 }
 
@@ -714,7 +729,13 @@ pub fn get_photo_details(app: &App, photo_id: &str) -> Result<PhotoDetails> {
     let [photo] = one;
     let faces = faces::for_revision_with_suggestions(app, conn, &photo.revision_id)?;
     let original_available = Path::new(&path).is_file();
-    Ok(PhotoDetails { photo, path, file_size, event_date, original_available, decode_error, faces })
+    let edit = crate::edit::load(conn, &photo.id)?.map(|stored| {
+        let (width, height) =
+            crate::edit::Geometry::new(photo.width.max(0) as u32, photo.height.max(0) as u32, &stored.settings)
+                .output_size();
+        PhotoEdit { settings: stored.settings, width, height }
+    });
+    Ok(PhotoDetails { photo, path, file_size, event_date, original_available, decode_error, faces, edit })
 }
 
 /// ตำแหน่งไฟล์ต้นฉบับของรูป (ใช้ภายใน Rust เท่านั้น; UI ส่งมาแค่ ID)

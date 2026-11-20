@@ -78,6 +78,11 @@ export function ViewerInspector({ details, selectedFaceId, onSelectFace, drawMod
             <dd>
               {details.width > 0 ? `${formatCount(details.width)} × ${formatCount(details.height)}` : 'ยังไม่ทราบขนาดภาพ'}
               {details.fileSize > 0 ? ` · ${formatBytes(details.fileSize)}` : ''}
+              {details.edit && (
+                <span className="block text-[13px] text-muted" data-testid="viewer-edited-size">
+                  แต่งแล้ว {formatCount(details.edit.width)} × {formatCount(details.edit.height)} · ไฟล์ต้นฉบับไม่ถูกแตะ
+                </span>
+              )}
             </dd>
           </div>
           <div className="flex items-start gap-2">
@@ -192,6 +197,7 @@ function FaceRow({ face, photoId, selected, onSelect }: { face: FaceBox; photoId
               รอระบุชื่อ
             </StatusBadge>
           )}
+          {face.outsideCrop && <span className="mt-0.5 block text-[12.5px] text-muted">อยู่นอกกรอบที่ตัดไว้ (ไม่แสดงบนภาพ)</span>}
         </span>
       </button>
 

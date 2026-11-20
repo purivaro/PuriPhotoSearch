@@ -143,7 +143,7 @@ fn orient(img: &mut DynamicImage, orientation: u8) {
     }
 }
 
-fn encode_jpeg(img: &DynamicImage, quality: u8) -> Result<Vec<u8>> {
+pub(crate) fn encode_jpeg(img: &DynamicImage, quality: u8) -> Result<Vec<u8>> {
     let rgb = img.to_rgb8();
     let mut out = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality).encode_image(&rgb).map_err(decode_error)?;
@@ -379,13 +379,35 @@ impl Watermark {
 /// — ให้รูปคมกว่าการกดคุณภาพ JPEG ลงอย่างเดียว
 ///
 /// `watermark` วาดลงหลังย่อและหมุนแล้ว ขนาดจึงเป็นสัดส่วนเดียวกันทุกขนาดสำเนา
-pub fn export_jpeg(bytes: &[u8], fit: Fit, watermark: Option<&Watermark>) -> Result<Vec<u8>> {
-    let orientation = read_exif(bytes).orientation;
+///
+/// `edit` (รูปที่แต่งแล้ว): ตัด หมุน ปรับเอียง ก่อนย่อ — ภาพที่ได้ตั้งตรงแล้วจึงไม่หมุนตาม EXIF ซ้ำ
+pub fn export_jpeg(
+    bytes: &[u8],
+    fit: Fit,
+    watermark: Option<&Watermark>,
+    edit: Option<&crate::edit::EditSettings>,
+) -> Result<Vec<u8>> {
+    let orientation = if edit.is_some() { 1 } else { read_exif(bytes).orientation };
     let mut meta = metadata_segments(bytes);
+    // ขนาดเต็มของภาพที่จะส่งออก (ก่อนย่อ) และอัตราส่วนกับด้านยาวของต้นฉบับ
+    let edited = edit.and_then(|e| {
+        let (w, h) = upright_dimensions(bytes)?;
+        let (ow, oh) = crate::edit::Geometry::new(w, h, e).output_size();
+        Some((e, (ow, oh), w.max(h) as f64 / ow.max(oh) as f64))
+    });
+    // ถอดรหัสให้ภาพที่จะส่งออกมีด้านยาวอย่างน้อย `want` (รูปที่แต่ง: ถอดเผื่อส่วนที่ถูกตัดออก)
+    let source = |want: u32| -> Result<DynamicImage> {
+        match edited {
+            Some((e, _, ratio)) => {
+                Ok(crate::edit::render(decode_upright(bytes, (want as f64 * ratio).ceil() as u32)?, e))
+            }
+            None => decode_for_export(bytes, want),
+        }
+    };
     match fit {
         Fit::Original | Fit::LongEdge(_) => {
             let edge = if let Fit::LongEdge(edge) = fit { edge } else { u32::MAX };
-            let base = decode_for_export(bytes, edge)?;
+            let base = source(edge)?;
             drop_gray_profile(&mut meta, &base, watermark);
             // ไม่ต้องย่อ: ใช้ภาพที่ถอดแล้วต่อเลย ไม่คัดลอกภาพเต็มอีกชุด
             let img = if base.width().max(base.height()) > edge { scaled(&base, edge) } else { base };
@@ -400,9 +422,10 @@ pub fn export_jpeg(bytes: &[u8], fit: Fit, watermark: Option<&Watermark>) -> Res
                 meta_len = 0;
             }
             let budget = (max - meta_len) as usize;
-            let (full_w, full_h) = match jpeg_dimensions(bytes) {
-                Some(dims) => dims,
-                None => ImageReader::new(Cursor::new(bytes))
+            let (full_w, full_h) = match (edited, jpeg_dimensions(bytes)) {
+                (Some((_, dims, _)), _) => dims,
+                (None, Some(dims)) => dims,
+                (None, None) => ImageReader::new(Cursor::new(bytes))
                     .with_guessed_format()
                     .map_err(decode_error)?
                     .into_dimensions()
@@ -415,7 +438,7 @@ pub fn export_jpeg(bytes: &[u8], fit: Fit, watermark: Option<&Watermark>) -> Res
             let ratio = (budget as f64 / BYTES_PER_PIXEL_GUESS / full_px.max(1.0)).sqrt().min(1.0);
             let mut target = ((full_long as f64 * ratio) as u32).clamp(MIN_FIT_EDGE.min(full_long), full_long);
             // ถอดเผื่อไว้ครึ่งเท่าของค่าที่เดา เผื่อขยายขึ้นได้เมื่อเดาต่ำไป (ไม่ถอดเต็มทุกพิกเซลโดยไม่จำเป็น)
-            let base = decode_for_export(bytes, (target.saturating_mul(3) / 2).min(full_long))?;
+            let base = source((target.saturating_mul(3) / 2).min(full_long))?;
             drop_gray_profile(&mut meta, &base, watermark);
             let base_long = base.width().max(base.height());
             target = target.min(base_long);
@@ -468,6 +491,21 @@ pub fn export_jpeg(bytes: &[u8], fit: Fit, watermark: Option<&Watermark>) -> Res
             Ok(splice_metadata(&out, &meta))
         }
     }
+}
+
+/// ขนาดภาพหลังหมุนตาม EXIF จากหัวไฟล์ (ไม่ถอดรหัสภาพ)
+pub(crate) fn upright_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let (w, h) = jpeg_dimensions(bytes)
+        .or_else(|| ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok())?;
+    Some(if read_exif(bytes).orientation >= 5 { (h, w) } else { (w, h) })
+}
+
+/// ถอดรหัสให้ด้านยาวอย่างน้อย `min_edge` (หรือเต็มขนาดถ้าภาพเล็กกว่า) แล้วหมุนตาม EXIF
+pub(crate) fn decode_upright(bytes: &[u8], min_edge: u32) -> Result<DynamicImage> {
+    let orientation = read_exif(bytes).orientation;
+    let mut img = decode_for_export(bytes, min_edge)?;
+    orient(&mut img, orientation);
+    Ok(img)
 }
 
 /// ถอดรหัสให้ได้ภาพที่ด้านยาวอย่างน้อย `edge` (JPEG ใช้การย่อระหว่างถอด ไม่ต้องถอดทุกพิกเซล)
@@ -655,7 +693,7 @@ mod tests {
     fn export_by_long_edge_keeps_date_and_colour_profile_and_stands_upright() {
         // ต้นฉบับ 1200×800 ที่กล้องบอกให้หมุน 90° (orientation 6): ภาพจริงเป็นแนวตั้ง 800×1200
         let src = camera_jpeg(1200, 800, 6);
-        let out = export_jpeg(&src, Fit::LongEdge(600), None).unwrap();
+        let out = export_jpeg(&src, Fit::LongEdge(600), None, None).unwrap();
         let img = image::load_from_memory(&out).unwrap();
         assert_eq!((img.width(), img.height()), (400, 600), "ด้านยาวตามที่ขอ และหมุนตั้งตรงแล้ว");
         let exif = read_exif(&out);
@@ -666,7 +704,7 @@ mod tests {
         assert!(out.len() < src.len());
 
         // รูปที่เล็กกว่าค่าที่ขอไม่ถูกขยาย
-        let small = export_jpeg(&src, Fit::LongEdge(5000), None).unwrap();
+        let small = export_jpeg(&src, Fit::LongEdge(5000), None, None).unwrap();
         let img = image::load_from_memory(&small).unwrap();
         assert_eq!((img.width(), img.height()), (800, 1200));
     }
@@ -675,12 +713,12 @@ mod tests {
     fn export_by_file_size_fits_the_budget_and_uses_it() {
         let src = camera_jpeg(2400, 1600, 1);
         for max in [150_000u64, 400_000] {
-            let out = export_jpeg(&src, Fit::MaxBytes(max), None).unwrap();
+            let out = export_jpeg(&src, Fit::MaxBytes(max), None, None).unwrap();
             assert!(out.len() as u64 <= max, "{} > {max}", out.len());
             assert!(out.len() as u64 > max / 2, "ใช้งบให้คุ้ม ไม่ย่อจนเล็กเกินจำเป็น: {} จาก {max}", out.len());
             assert_eq!(read_exif(&out).taken_at_local.as_deref(), Some("2026-11-18T10:20:30"));
         }
-        let tiny = export_jpeg(&src, Fit::MaxBytes(2_000), None);
+        let tiny = export_jpeg(&src, Fit::MaxBytes(2_000), None, None);
         assert_eq!(tiny.unwrap_err().code, "INVALID_INPUT", "ตั้งเล็กจนรูปใช้ไม่ได้: แจ้งผู้ใช้ ไม่สร้างไฟล์จิ๋ว");
     }
 
@@ -706,7 +744,7 @@ mod tests {
         let near = |p: [u8; 3], want: [u8; 3]| p.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 14);
 
         let wm = Watermark::new(&png, (2, 2), 25, 100).unwrap();
-        let out = export_jpeg(&white, Fit::Original, Some(&wm)).unwrap();
+        let out = export_jpeg(&white, Fit::Original, Some(&wm), None).unwrap();
         assert_eq!(jpeg_dimensions(&out), Some((1000, 800)), "ใส่ลายน้ำอย่างเดียวไม่ย่อภาพ");
         // กรอบโลโก้ = (776, 576) ขนาด 200×200
         assert!(near(pixel(&out, 826, 676), [255, 0, 0]), "ส่วนทึบของโลโก้: {:?}", pixel(&out, 826, 676));
@@ -714,11 +752,11 @@ mod tests {
         assert!(near(pixel(&out, 700, 676), [255, 255, 255]), "นอกกรอบไม่ถูกแตะ");
 
         let half = Watermark::new(&png, (2, 2), 25, 50).unwrap();
-        let out = export_jpeg(&white, Fit::Original, Some(&half)).unwrap();
+        let out = export_jpeg(&white, Fit::Original, Some(&half), None).unwrap();
         assert!(near(pixel(&out, 826, 676), [255, 128, 128]), "ความทึบ 50%: {:?}", pixel(&out, 826, 676));
 
         // ย่อขนาดด้วย: ลายน้ำวาดบนภาพที่ย่อแล้ว สัดส่วนเท่าเดิม (กรอบ = (388, 288) ขนาด 100×100)
-        let out = export_jpeg(&white, Fit::LongEdge(500), Some(&wm)).unwrap();
+        let out = export_jpeg(&white, Fit::LongEdge(500), Some(&wm), None).unwrap();
         assert_eq!(jpeg_dimensions(&out), Some((500, 400)));
         assert!(near(pixel(&out, 413, 338), [255, 0, 0]));
         assert!(near(pixel(&out, 470, 338), [255, 255, 255]));

@@ -272,6 +272,33 @@ export interface PhotoResult {
   suggestedPeople: { person: PersonRef; faceId: Id }[];
   /** ใบหน้าในรูปนี้ที่ผู้ใช้แจ้งว่าไม่ใช่บุคคลที่ถาม (มีเมื่อค้นด้วย `rejectedPersonId`) */
   rejectedFaces: Id[];
+  /** รหัสการแต่งล่าสุด (null = ไม่ได้แต่ง) — ใช้เป็นรุ่นของภาพย่อ */
+  editId: Id | null;
+}
+
+/** สี่เหลี่ยมเป็นสัดส่วน 0–1 */
+export interface UnitRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** ค่าที่แต่งของรูปหนึ่ง (ไฟล์ต้นฉบับไม่ถูกแตะ) — DECISIONS ข้อ 17 */
+export interface EditSettings {
+  /** หมุนตามเข็มนาฬิกาทีละ 90° */
+  rotate: 0 | 90 | 180 | 270;
+  /** ปรับเอียง องศาตามเข็มนาฬิกา (−45 ถึง 45) */
+  straighten: number;
+  /** กรอบตัด เป็นสัดส่วนของภาพหลังหมุนและปรับเอียง (null = ไม่ตัด) */
+  crop: UnitRect | null;
+}
+
+export interface PhotoEdit {
+  settings: EditSettings;
+  /** ขนาดภาพที่แต่งแล้ว (เต็มความละเอียด) */
+  width: number;
+  height: number;
 }
 
 export interface Coverage {
@@ -298,8 +325,12 @@ export interface PhotoPage {
 
 export interface FaceBox {
   id: Id;
-  /** พิกัดสัดส่วน [0,1] บนภาพที่หมุนตาม EXIF แล้ว (มุมซ้ายบน + กว้าง/สูง) */
+  /** พิกัดสัดส่วน [0,1] บนภาพที่แสดง (หมุนตาม EXIF แล้ว · รูปที่แต่ง = บนภาพที่แต่ง) */
   bbox: { x: number; y: number; w: number; h: number };
+  /** พิกัดที่เก็บไว้บนภาพเดิม (ไม่เปลี่ยนเมื่อแต่ง) */
+  sourceBbox: { x: number; y: number; w: number; h: number };
+  /** อยู่นอกกรอบที่ตัดไว้ — ไม่วาดบนภาพ แต่ใบหน้าและชื่อยังอยู่ครบ */
+  outsideCrop: boolean;
   origin: 'manual' | 'detector' | 'legacy';
   /** บุคคลที่ผู้ใช้ยืนยันแล้ว */
   person: PersonRef | null;
@@ -319,6 +350,8 @@ export interface PhotoDetails extends PhotoResult {
   originalAvailable: boolean;
   decodeError: string | null;
   faces: FaceBox[];
+  /** การแต่งของรูปนี้ (null = ภาพต้นฉบับ) */
+  edit: PhotoEdit | null;
 }
 
 export interface SearchSuggestions {
@@ -832,6 +865,8 @@ export interface Commands {
   get_export_report: [{ jobId: Id }, ExportReport];
   /** แสดงโฟลเดอร์ปลายทางของงานส่งออกในตัวจัดการไฟล์ */
   reveal_export_destination: [{ jobId: Id }, null];
+  save_photo_edit: [{ photoId: Id; settings: EditSettings }, PhotoDetails];
+  reset_photo_edit: [{ photoId: Id }, PhotoDetails];
   list_watermarks: [Record<string, never>, WatermarkInfo[]];
   add_watermark: [{ path: string }, WatermarkInfo];
   /** คืนรายการที่เหลือ */
@@ -878,7 +913,7 @@ export type CommandName = keyof Commands;
  *   draft/{previewId}/{draftId} รูปตัวอย่างในหน้าตรวจรายการก่อนเพิ่ม
  *   sample/{sampleId}          ครอปใบหน้าตัวอย่างของบุคคลที่นำเข้าจากรุ่นเดิม
  */
-export type AssetKind = 'thumb' | 'photo' | 'face' | 'draft' | 'sample' | 'watermark';
+export type AssetKind = 'thumb' | 'photo' | 'original' | 'face' | 'draft' | 'sample' | 'watermark';
 
 /** Event ที่ Rust ส่งหลัง commit สำเร็จ (ในแอป Tauri); UI ต้องทำงานได้แม้ไม่ได้รับ (ใช้ polling) */
 export interface DataChangedEvent {
