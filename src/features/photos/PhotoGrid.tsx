@@ -5,6 +5,7 @@ import { Spinner } from '@/components/ui/Feedback';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import type { PhotoResult } from '@/lib/ipc/types';
+import { THUMB_SIZES, useSettings } from '@/stores/settings';
 import { PhotoThumb } from './PhotoThumb';
 import { EMPTY_SELECTION, isSelected, selectLoaded, selectRange, selectionCount, toggle, type Selection } from './selection';
 
@@ -50,6 +51,9 @@ export function PhotoGrid({ items, label, selection, onSelectionChange, onOpen, 
   const loadMoreRef = useRef(onLoadMore);
   loadMoreRef.current = onLoadMore;
   const anySelected = selectionCount(selection) > 0;
+  const thumbSize = useSettings((s) => s.thumbSize);
+  // รูปเล็กมาก: ซ่อนชื่อไฟล์ (ยังอยู่ใน title/aria-label) ให้เห็นรูปได้มากขึ้น
+  const compact = thumbSize === 0;
 
   useEffect(() => {
     const el = sentinel.current;
@@ -84,7 +88,13 @@ export function PhotoGrid({ items, label, selection, onSelectionChange, onOpen, 
 
   return (
     <div onKeyDown={onKeyDown}>
-      <ul aria-label={label} data-testid="photo-grid" className="grid grid-cols-[repeat(auto-fill,minmax(212px,1fr))] gap-x-3 gap-y-3.5">
+      <ul
+        aria-label={label}
+        data-testid="photo-grid"
+        data-size={thumbSize}
+        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${THUMB_SIZES[thumbSize]}px, 1fr))` }}
+        className={cn('grid', compact ? 'gap-2' : 'gap-x-3 gap-y-3.5')}
+      >
         {items.map((photo) => {
           const selected = isSelected(selection, photo.id);
           return (
@@ -123,10 +133,12 @@ export function PhotoGrid({ items, label, selection, onSelectionChange, onOpen, 
               >
                 <Check className="size-4" strokeWidth={3} aria-hidden />
               </button>
-              <p className="mt-1 truncate px-0.5 text-[12.5px] text-muted" title={photo.filename}>
-                {photo.filename}
-              </p>
-              {showEvent && (
+              {!compact && (
+                <p className="mt-1 truncate px-0.5 text-[12.5px] text-muted" title={photo.filename}>
+                  {photo.filename}
+                </p>
+              )}
+              {showEvent && !compact && (
                 <p className="-mt-0.5 truncate px-0.5 text-[12px] text-faint" title={photo.eventTitle}>
                   {photo.eventTitle}
                 </p>

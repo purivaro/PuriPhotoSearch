@@ -7,6 +7,7 @@ import type { Coverage, PhotoResult } from '@/lib/ipc/types';
 import { usePhotoList, type PhotoQuery } from '@/lib/queries';
 import { PhotoGrid } from './PhotoGrid';
 import { SelectionBar } from './SelectionBar';
+import { ThumbSizeSlider } from './ThumbSizeSlider';
 import { EMPTY_SELECTION, selectionCount, toSelectionSpec, type Selection } from './selection';
 
 export interface PhotoResultsMeta {
@@ -32,13 +33,15 @@ interface PhotoResultsProps {
   summary?: (meta: PhotoResultsMeta) => ReactNode;
   /** ปุ่มเพิ่มในแถบเลือกหลายรูป; `photos` คือรูปที่ติ๊กเลือกเอง หรือ null เมื่อเลือกแบบ "ผลทั้งหมด" (ไม่ได้โหลดครบ) */
   selectionActions?: (ctx: { photos: PhotoResult[] | null; clear: () => void }) => ReactNode;
+  /** แสดงแถบปรับขนาดรูปในแถวหัว (ปิดได้เมื่อหน้านั้นวางแถบไว้ในแถบเครื่องมือของตัวเอง) */
+  sizeControl?: boolean;
 }
 
 /**
  * ผลรูปหนึ่งชุด: โหลด/ผิดพลาด/ว่าง → grid → แถบเลือกหลายรูป → ส่งออก → เปิดตัวดูภาพตามลำดับผลเดิม
  * ใช้ร่วมกันในหน้ากิจกรรม บุคคล และค้นหา เพื่อให้พฤติกรรมการเลือกและเปิดรูปตรงกันทุกหน้า
  */
-export function PhotoResults({ query, label, originLabel, showEvent, selectionKey, empty, summary, selectionActions }: PhotoResultsProps) {
+export function PhotoResults({ query, label, originLabel, showEvent, selectionKey, empty, summary, selectionActions, sizeControl = true }: PhotoResultsProps) {
   const list = usePhotoList(query);
   const viewer = useViewer();
   const [selection, setSelection] = useState<Selection>(EMPTY_SELECTION);
@@ -76,10 +79,22 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
     refreshing: list.isFetching && !list.isFetchingNextPage,
   };
 
+  // แถวหัว: สรุปผลของแต่ละหน้า + แถบปรับขนาดรูป (แสดงเมื่อมีรูปให้ปรับ)
+  const header = (withSize: boolean) => {
+    const content = summary?.(meta);
+    if (!withSize) return content ? <div className="mb-3">{content}</div> : null;
+    return (
+      <div className="mb-3 flex items-center gap-x-4 gap-y-2">
+        <div className="min-w-0 flex-1">{content}</div>
+        <ThumbSizeSlider />
+      </div>
+    );
+  };
+
   if (list.isPending) {
     return (
       <>
-        {summary?.(meta)}
+        {header(false)}
         <LoadingBlock label="กำลังโหลดรูป…" />
       </>
     );
@@ -90,7 +105,7 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
   if (list.items.length === 0) {
     return (
       <>
-        {summary?.(meta)}
+        {header(false)}
         {empty}
       </>
     );
@@ -100,7 +115,7 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
   const count = selectionCount(selection);
   return (
     <>
-      {summary?.(meta)}
+      {header(sizeControl)}
       <PhotoGrid
         items={list.items}
         label={label}

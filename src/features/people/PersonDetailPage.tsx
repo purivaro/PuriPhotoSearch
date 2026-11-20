@@ -283,7 +283,7 @@ function PersonPhotos({ person, eventId, onEventChange }: { person: PersonDetail
         }
         summary={(meta) =>
           meta.total > 0 ? (
-            <p className="mb-2.5 text-sm text-muted" aria-live="polite">
+            <p className="text-sm text-muted" aria-live="polite">
               {formatCount(meta.total)} รูป{eventId ? ' ในกิจกรรมที่เลือก' : ' จากทุกกิจกรรม'}
             </p>
           ) : null
