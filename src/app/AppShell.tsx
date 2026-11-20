@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Outlet } from 'react-router';
+import { AssistantPanel } from '@/features/assistant/AssistantPanel';
 import { useSettings } from '@/stores/settings';
+import { useUi } from '@/stores/ui';
 import { useViewerOpen } from './navigation';
 import { Sidebar } from './Sidebar';
 
@@ -22,6 +24,7 @@ export function AppShell() {
   const narrow = useNarrowWindow();
   const preference = useSettings((s) => s.sidebarCollapsed);
   const viewerOpen = useViewerOpen();
+  const assistantOpen = useUi((s) => s.assistantOpen);
 
   return (
     <div className="flex h-full bg-canvas">
@@ -33,6 +36,8 @@ export function AppShell() {
         </div>
         {/* ตัวดูภาพถูกวางลงใน #app-main ผ่าน portal จาก App (ต้องเห็นตำแหน่งจริงของ router) */}
       </main>
+      {/* ผู้ช่วย AI อยู่ข้างเนื้อหาและตัวดูภาพ: เห็นรูปเปลี่ยนไปพร้อมกับที่ AI แต่ง */}
+      {assistantOpen && <AssistantPanel />}
     </div>
   );
 }

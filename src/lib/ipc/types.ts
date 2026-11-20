@@ -355,6 +355,37 @@ export interface Vignette {
   roundness: number;
 }
 
+export type AiProvider = 'claude' | 'codex' | 'gemini';
+
+/** CLI ของ AI ที่พบในเครื่อง (ใช้บัญชีที่ผู้ใช้ล็อกอินไว้ใน CLI นั้น) */
+export interface AiCliStatus {
+  provider: AiProvider;
+  installed: boolean;
+  path: string | null;
+  version: string | null;
+  /** null = ไม่รู้ */
+  signedIn: boolean | null;
+  loginCommand: string;
+  canGenerateImages: boolean;
+}
+
+export interface AiStartArgs {
+  provider: AiProvider;
+  model?: string | null;
+  messages: { role: 'user' | 'assistant'; text: string }[];
+  context?: string | null;
+  tools: boolean;
+}
+
+export type AiEvent =
+  | { kind: 'started'; model: string | null }
+  | { kind: 'answer'; text: string }
+  | { kind: 'tool'; id: number; name: string; summary: string }
+  | { kind: 'toolDone'; id: number; ok: boolean; result: string }
+  | { kind: 'photos'; title: string; photoIds: Id[] }
+  | { kind: 'changed'; photoIds: Id[] }
+  | { kind: 'finished'; ok: boolean; stopped: boolean; error: string | null; undoable: number };
+
 /** preset ของค่าแสงและสี (บันทึกเองหรือนำเข้าจาก Lightroom) */
 export interface EditPreset {
   id: Id;
@@ -974,6 +1005,12 @@ export interface Commands {
   rename_edit_preset: [{ id: Id; name: string }, EditPreset[]];
   delete_edit_preset: [{ id: Id }, EditPreset[]];
   import_lightroom_preset: [{ path: string }, EditPreset];
+  ai_status: [Record<string, never>, AiCliStatus[]];
+  ai_start: [AiStartArgs, { turnId: Id }];
+  ai_events: [{ turnId: Id; after: number }, { events: AiEvent[]; done: boolean }];
+  ai_cancel: [{ turnId: Id }, null];
+  /** คืนจำนวนรูปที่ย้อน */
+  ai_undo: [{ turnId: Id }, number];
   list_watermarks: [Record<string, never>, WatermarkInfo[]];
   add_watermark: [{ path: string }, WatermarkInfo];
   /** คืนรายการที่เหลือ */

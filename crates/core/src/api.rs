@@ -6,8 +6,8 @@
 
 use crate::error::{AppError, Result};
 use crate::{
-    ai, assets, backup, catalog, db, edit, export, faces, import, jobs, legacy, media, people, platform, preset,
-    relink, review, setup, shrink, watermark, App,
+    ai, assets, assistant, backup, catalog, db, edit, export, faces, import, jobs, legacy, media, people, platform,
+    preset, relink, review, setup, shrink, watermark, App,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -200,6 +200,22 @@ enum Command {
     ImportLightroomPreset {
         path: String,
     },
+    AiStatus {},
+    AiStart(assistant::StartArgs),
+    #[serde(rename_all = "camelCase")]
+    AiEvents {
+        turn_id: String,
+        #[serde(default)]
+        after: usize,
+    },
+    #[serde(rename_all = "camelCase")]
+    AiCancel {
+        turn_id: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    AiUndo {
+        turn_id: String,
+    },
     ListWatermarks {},
     AddWatermark {
         path: String,
@@ -354,6 +370,11 @@ pub const COMMAND_NAMES: &[&str] = &[
     "rename_edit_preset",
     "delete_edit_preset",
     "import_lightroom_preset",
+    "ai_status",
+    "ai_start",
+    "ai_events",
+    "ai_cancel",
+    "ai_undo",
     "list_watermarks",
     "add_watermark",
     "delete_watermark",
@@ -515,6 +536,15 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         RenameEditPreset { id, name } => ok(preset::rename(app, &id, &name)?),
         DeleteEditPreset { id } => ok(preset::delete(app, &id)?),
         ImportLightroomPreset { path } => ok(preset::import_lightroom(app, &path)?),
+        AiStatus {} => ok(assistant::detect::detect_all()),
+        AiStart(args) => ok(serde_json::json!({ "turnId": assistant::start(app, args)? })),
+        AiEvents { turn_id, after } => ok(assistant::events(app, &turn_id, after)?),
+        AiCancel { turn_id } => ok(assistant::cancel(app, &turn_id)?),
+        AiUndo { turn_id } => {
+            let restored = assistant::undo(app, &turn_id)?;
+            app.notify(&["photos"]);
+            ok(restored)
+        }
         ListWatermarks {} => ok(watermark::list(&app.db())?),
         AddWatermark { path } => ok(watermark::add(app, &path)?),
         DeleteWatermark { id } => {

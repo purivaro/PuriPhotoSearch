@@ -7,6 +7,7 @@ pub mod adjust;
 pub mod ai;
 pub mod api;
 pub mod assets;
+pub mod assistant;
 pub mod backup;
 pub mod catalog;
 pub mod db;
@@ -34,7 +35,7 @@ use rusqlite::Connection;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 /// ช่องทางแจ้ง UI หลัง commit สำเร็จ; UI ต้องทำงานได้แม้ไม่ได้รับ (query snapshot ใหม่ได้เสมอ)
 pub trait EventSink: Send + Sync {
@@ -75,6 +76,10 @@ pub struct App {
     pub(crate) review_cache: Mutex<Option<Arc<review::ReviewData>>>,
     pub(crate) face_vectors: Mutex<review::VectorCache>,
     pub(crate) match_state: Mutex<Option<review::MatchState>>,
+    /// ผู้ช่วย AI: รอบการคุยที่ยังอ่าน/ย้อนได้ (DECISIONS ข้อ 22)
+    pub(crate) assistant: assistant::Assistant,
+    /// ตัวเอง (สำหรับงานเบื้องหลังที่ต้องถือ App ไว้ เช่นรอบการคุยกับ AI)
+    pub(crate) me: Weak<App>,
     /// กันสอง process เปิดคลังเดียวกัน (Blueprint 8.4)
     _lock: File,
 }
@@ -103,7 +108,7 @@ impl App {
 
         let ai =
             Arc::new(ai::AiState::new(opts.face_engine, opts.face_engine_unavailable, &opts.data_dir.join("models")));
-        let app = Arc::new(App {
+        let app = Arc::new_cyclic(|me| App {
             db: Mutex::new(conn),
             db_path: db_path.clone(),
             cache_dir: opts.cache_dir.clone(),
@@ -117,6 +122,8 @@ impl App {
             review_cache: Mutex::new(None),
             face_vectors: Mutex::new(HashMap::new()),
             match_state: Mutex::new(None),
+            assistant: assistant::Assistant::default(),
+            me: me.clone(),
             _lock: lock,
         });
         if opts.start_worker {

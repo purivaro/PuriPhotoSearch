@@ -1416,6 +1416,91 @@ fn edit_presets_save_import_rename_delete_and_survive_restart() {
 }
 
 #[test]
+fn ai_tools_find_view_edit_apply_presets_and_undo_without_touching_files() {
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-21 งานบุญ AI");
+    std::fs::create_dir_all(&root).unwrap();
+    for (name, t) in [("a.jpg", "10:00"), ("b.jpg", "10:01"), ("c.jpg", "10:02")] {
+        std::fs::write(root.join(name), jpeg_with_exif(400, 300, 1, &format!("2026:11:21 {t}:00"))).unwrap();
+    }
+    lib.import(&root, "single_event", |_| true);
+    let before = tree_state(&root);
+    let (a, b, c) = (lib.photo_id("a.jpg"), lib.photo_id("b.jpg"), lib.photo_id("c.jpg"));
+    let crop = json!({ "x": 0.1, "y": 0.1, "w": 0.5, "h": 0.5 });
+    lib.call("save_photo_edit", json!({ "photoId": c, "settings": { "crop": crop } }));
+    let (tools, turn) = puri_core::assistant::test_tools(&lib.app).unwrap();
+    let text = |out: &puri_core::assistant::mcp::ToolOutput| {
+        out.content.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")
+    };
+
+    // ค้นรูปตามกิจกรรม/ชื่อไฟล์ และรายการกิจกรรม
+    let found = tools.call("search_photos", json!({ "event": "งานบุญ" }));
+    assert!(!found.is_error && text(&found).starts_with("3 photos match"), "{}", text(&found));
+    assert!(text(&tools.call("search_photos", json!({ "text": "b.jpg" }))).contains(&b));
+    assert!(text(&tools.call("list_events", json!({}))).contains("งานบุญ AI"));
+    assert!(text(&tools.call("search_photos", json!({ "people": ["ไม่มีคนนี้"] }))).starts_with("No person named"));
+
+    // ดูรูป: ได้ภาพ JPEG จริง (base64) ขนาดไม่เกินที่ขอ
+    let seen = tools.call("view_photo", json!({ "photo_id": a, "size": 256 }));
+    assert_eq!(seen.content[0]["type"], "image");
+    assert_eq!(seen.content[0]["mimeType"], "image/jpeg");
+    assert!(seen.content[0]["data"].as_str().unwrap().starts_with("/9j/"), "JPEG เริ่มด้วย FF D8 FF");
+    assert!(tools.call("view_photo", json!({ "photo_id": "missing" })).is_error);
+
+    // แต่งรูปเดียว (รวมค่าเข้ากับของเดิม) แล้วหลายรูป
+    let out =
+        tools.call("edit_photo", json!({ "photo_id": a, "adjust": { "exposure": 0.4, "levels": { "gamma": 1.2 } } }));
+    assert!(!out.is_error, "{}", text(&out));
+    let out = tools.call("edit_photo", json!({ "photo_id": a, "adjust": { "lum": [0, 30, 0, 0, 0, 0, 0, 0] } }));
+    assert!(!out.is_error);
+    let edit_of = |id: &str| lib.call("get_photo_details", json!({ "photoId": id }))["edit"]["settings"].clone();
+    let ea = edit_of(&a);
+    assert_eq!(
+        (ea["adjust"]["exposure"].as_f64(), ea["adjust"]["levels"]["gamma"].as_f64(), ea["adjust"]["lum"][1].as_f64()),
+        (Some(0.4), Some(1.2), Some(30.0))
+    );
+    assert_eq!(ea["adjust"]["levels"]["inWhite"].as_f64(), Some(255.0), "ค่าที่ไม่ได้ให้มาคงเดิม");
+    let bad = tools.call("edit_photo", json!({ "photo_id": a, "adjust": { "exposure": 9 } }));
+    assert!(bad.is_error, "ค่าเกินช่วงถูกปฏิเสธ");
+    let out = tools.call("edit_photos", json!({ "photo_ids": [b, c], "adjust": { "temperature": 20 } }));
+    assert_eq!(text(&out), "Edited 2 photos.");
+    assert_eq!(edit_of(&c)["crop"], crop, "แต่งแสงสีไม่แตะกรอบตัดเดิม");
+
+    // preset: บันทึกจากรูปที่แต่ง แล้วใช้กับรูปอื่น (แทนแสงสีทั้งชุด คงกรอบตัด)
+    assert!(!tools.call("save_preset", json!({ "name": "AI สว่างใส", "photo_id": a })).is_error);
+    assert!(text(&tools.call("list_presets", json!({}))).contains("AI สว่างใส"));
+    let out = tools.call("apply_preset", json!({ "preset": "AI สว่างใส", "photo_ids": [c] }));
+    assert_eq!(text(&out), "Applied “AI สว่างใส” to 1 photos.");
+    let ec = edit_of(&c);
+    assert_eq!(
+        (ec["crop"].clone(), ec["adjust"]["temperature"].as_f64(), ec["adjust"]["exposure"].as_f64()),
+        (crop.clone(), Some(0.0), Some(0.4))
+    );
+
+    // แสดงรูปในแชต และเหตุการณ์ของรอบ
+    assert!(!tools.call("show_photos", json!({ "photo_ids": [a, b], "title": "ที่แต่ง" })).is_error);
+    let events = lib.call("ai_events", json!({ "turnId": turn, "after": 0 }));
+    let kinds: Vec<&str> = events["events"].as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap()).collect();
+    assert!(
+        kinds.contains(&"tool")
+            && kinds.contains(&"toolDone")
+            && kinds.contains(&"changed")
+            && kinds.contains(&"photos")
+    );
+    let photos = events["events"].as_array().unwrap().iter().find(|e| e["kind"] == "photos").unwrap().clone();
+    assert_eq!(photos["photoIds"], json!([a, b]));
+
+    // ย้อนทุกการแก้ของรอบ: a, b กลับเป็นไม่แต่ง · c กลับเป็นแค่กรอบตัดเดิม · preset ที่บันทึกยังอยู่ (ผู้ใช้ลบเองได้)
+    assert_eq!(lib.call("ai_undo", json!({ "turnId": turn })), json!(3));
+    assert!(lib.call("get_photo_details", json!({ "photoId": a }))["edit"].is_null());
+    assert!(lib.call("get_photo_details", json!({ "photoId": b }))["edit"].is_null());
+    assert_eq!(edit_of(&c), json!({ "rotate": 0, "straighten": 0.0, "crop": crop, "adjust": edit_of(&c)["adjust"] }));
+    assert_eq!(edit_of(&c)["adjust"]["temperature"].as_f64(), Some(0.0));
+    assert_eq!(edit_of(&c)["adjust"]["exposure"].as_f64(), Some(0.0));
+    assert_eq!(tree_state(&root), before, "AI ไม่แตะไฟล์ต้นฉบับ");
+}
+
+#[test]
 fn t27b_export_refuses_source_changed_since_import_and_cancel_keeps_finished_copies() {
     let lib = Lib::new();
     let (root, dest) = export_fixture(&lib);
