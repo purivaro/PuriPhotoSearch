@@ -56,7 +56,8 @@ if [ "${SHOTS:-0}" = 1 ]; then
 import CoreGraphics
 let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as! [[String: Any]]
 var best = (id: 0, area: 0.0)
-for w in list where ["puri-photo-search", "puri photo search"].contains((w[kCGWindowOwnerName as String] as? String)?.lowercased() ?? "") {
+let pid = Int(CommandLine.arguments.last ?? "") ?? -1
+for w in list where (w[kCGWindowOwnerPID as String] as? Int) == pid {
   let b = w[kCGWindowBounds as String] as? [String: Double] ?? [:]
   let area = (b["Width"] ?? 0) * (b["Height"] ?? 0)
   if area > best.area { best = (w[kCGWindowNumber as String] as! Int, area) }
@@ -83,7 +84,8 @@ for _ in $(seq 1 2400); do
   if [ "${SHOTS:-0}" = 1 ] && [ "$stage" != done ] && [ "$stage" != FAILED ]; then
     mkdir -p "$ROOT/screenshots/e2e-setup"
     sleep 0.5
-    [ -n "$window" ] || window=$("$WORK/winid" || true)
+    # แอปที่ผู้ใช้เปิดใช้อยู่มีชื่อเดียวกัน: เลือกหน้าต่างจาก PID ของแอปทดสอบเท่านั้น
+    [ -n "$window" ] || window=$("$WORK/winid" "$(pgrep -f "$ROOT/target/debug/puri-photo-search" | head -1 || true)" || true)
     [ -n "$window" ] && screencapture -x -o -l "$window" "$ROOT/screenshots/e2e-setup/$(printf '%02d' $shot)-$stage.png" 2>/dev/null || true
     shot=$((shot + 1))
   fi
