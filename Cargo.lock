@@ -2925,7 +2925,7 @@ dependencies = [
 
 [[package]]
 name = "puri-core"
-version = "2.0.0-alpha.11"
+version = "2.0.0-alpha.12"
 dependencies = [
  "image",
  "jpeg-decoder",
@@ -2949,7 +2949,7 @@ dependencies = [
 
 [[package]]
 name = "puri-devbridge"
-version = "2.0.0-alpha.11"
+version = "2.0.0-alpha.12"
 dependencies = [
  "puri-core",
  "puri-faces",
@@ -2959,7 +2959,7 @@ dependencies = [
 
 [[package]]
 name = "puri-faces"
-version = "2.0.0-alpha.11"
+version = "2.0.0-alpha.12"
 dependencies = [
  "image",
  "jpeg-decoder",
@@ -2971,7 +2971,7 @@ dependencies = [
 
 [[package]]
 name = "puri-photo-search"
-version = "2.0.0-alpha.11"
+version = "2.0.0-alpha.12"
 dependencies = [
  "puri-core",
  "puri-faces",
