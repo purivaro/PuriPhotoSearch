@@ -165,6 +165,9 @@ enum Command {
     PreviewExport {
         selection: export::SelectionSpec,
         destination: String,
+        /// ไม่ส่งมา = คัดลอกต้นฉบับ (เหมือนรุ่นก่อน)
+        #[serde(default)]
+        resize: export::Resize,
     },
     #[serde(rename_all = "camelCase")]
     StartExport {
@@ -436,7 +439,7 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         RetryFailedItems { job_id } => ok(jobs::retry_failed(app, &job_id)?),
 
         CreateSelection(p) => ok(catalog::create_selection(app, &p)?),
-        PreviewExport { selection, destination } => ok(export::preview(app, &selection, &destination)?),
+        PreviewExport { selection, destination, resize } => ok(export::preview(app, &selection, &destination, resize)?),
         StartExport { plan_id, request_id } => ok(export::start(app, &plan_id, &request_id)?),
         GetExportReport { job_id } => ok(export::report(&app.db(), &job_id)?),
         RevealExportDestination { job_id } => {

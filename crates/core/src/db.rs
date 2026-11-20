@@ -7,8 +7,11 @@ use std::path::Path;
 /// "PURI" — ใช้แยกไฟล์คลังของเราออกจาก SQLite อื่น (เช่นฐานของรุ่น Python)
 pub const APPLICATION_ID: i64 = 0x5055_5249;
 
-const MIGRATIONS: &[(i64, &str)] =
-    &[(1, include_str!("../migrations/0001_init.sql")), (2, include_str!("../migrations/0002_faces.sql"))];
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("../migrations/0001_init.sql")),
+    (2, include_str!("../migrations/0002_faces.sql")),
+    (3, include_str!("../migrations/0003_export_resize.sql")),
+];
 
 pub fn latest_version() -> i64 {
     MIGRATIONS.last().map(|m| m.0).unwrap_or(0)
