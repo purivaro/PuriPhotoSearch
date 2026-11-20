@@ -219,6 +219,10 @@ fn finish_cancelled(conn: &Connection, job_id: &str) -> Result<()> {
         "UPDATE export_items SET status = 'cancelled' WHERE status = 'planned' AND run_id IN (SELECT id FROM export_runs WHERE job_id = ?1)",
         [job_id],
     )?;
+    conn.execute(
+        "UPDATE shrink_items SET status = 'cancelled' WHERE status = 'planned' AND run_id IN (SELECT id FROM shrink_runs WHERE job_id = ?1)",
+        [job_id],
+    )?;
     Ok(())
 }
 
@@ -253,6 +257,7 @@ fn run_next(inner: &Inner, conn: &Connection) -> Result<bool> {
     let outcome = match job.kind.as_str() {
         "catalog" => run_catalog(&ctx),
         "export" => crate::export::run(&ctx),
+        "shrink" => crate::shrink::run(&ctx),
         "model" => crate::ai::run_install(&ctx),
         other => Err(AppError::internal(format!("ไม่รู้จักชนิดงาน {other}"))),
     };

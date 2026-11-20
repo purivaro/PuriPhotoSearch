@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { parseResizeChoice, type ResizeChoice } from '@/features/export/resizeChoice';
+import { DEFAULT_SHRINK_CHOICE, SHRINK_OPTIONS, parseResizeChoice, type ResizeChoice } from '@/features/export/resizeChoice';
 
 export type ThemeChoice = 'light' | 'dark' | 'system';
 
@@ -8,6 +8,7 @@ const SIDEBAR_KEY = 'puriphoto.sidebarCollapsed';
 const AUTO_UPDATE_KEY = 'puriphoto.autoUpdate';
 const THUMB_SIZE_KEY = 'puriphoto.thumbSize';
 const EXPORT_RESIZE_KEY = 'puriphoto.exportResize';
+const SHRINK_RESIZE_KEY = 'puriphoto.shrinkResize';
 
 /** ความกว้างขั้นต่ำของรูปในกริดแต่ละระดับ (px) · ภาพย่อมีขนาด 512 px จึงไม่ขยายเกินนี้มากเพื่อไม่ให้ภาพแตก */
 export const THUMB_SIZES = [120, 160, 212, 280, 360] as const;
@@ -73,6 +74,9 @@ interface SettingsState {
   /** ขนาดของสำเนาที่ส่งออกครั้งล่าสุด ใช้เป็นค่าตั้งต้นของครั้งถัดไป */
   exportResize: ResizeChoice;
   setExportResize: (choice: ResizeChoice) => void;
+  /** ขนาดที่เลือกครั้งล่าสุดในหน้าต่าง "ย่อไฟล์ต้นฉบับ" */
+  shrinkResize: ResizeChoice;
+  setShrinkResize: (choice: ResizeChoice) => void;
 }
 
 /** ค่าตั้งของหน้าจอที่ไม่ใช่ข้อมูลคลัง (ธีม, การยุบ sidebar, อัปเดตแอปเอง, ขนาดรูปในกริด, ขนาดของสำเนาที่ส่งออก) เก็บในเครื่องผ่าน localStorage */
@@ -103,5 +107,10 @@ export const useSettings = create<SettingsState>((set) => ({
   setExportResize: (exportResize) => {
     write(EXPORT_RESIZE_KEY, JSON.stringify(exportResize));
     set({ exportResize });
+  },
+  shrinkResize: parseResizeChoice(read(SHRINK_RESIZE_KEY), DEFAULT_SHRINK_CHOICE, SHRINK_OPTIONS),
+  setShrinkResize: (shrinkResize) => {
+    write(SHRINK_RESIZE_KEY, JSON.stringify(shrinkResize));
+    set({ shrinkResize });
   },
 }));

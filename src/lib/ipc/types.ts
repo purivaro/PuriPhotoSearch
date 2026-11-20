@@ -512,7 +512,7 @@ export type JobState =
 export interface JobSnapshot {
   id: Id;
   /** model = ดาวน์โหลดตัววิเคราะห์ใบหน้า (counts เป็น MB) */
-  kind: 'catalog' | 'export' | 'model';
+  kind: 'catalog' | 'export' | 'model' | 'shrink';
   state: JobState;
   /** catalog: discovery | thumbnail | done; export: copy | done; model: download | verify | done */
   stage: string;
@@ -596,6 +596,47 @@ export interface ExportReport {
   sourceBytes: number;
   outputBytes: number;
   items: ExportReportItem[];
+}
+
+// ───────────────────────── ย่อไฟล์ต้นฉบับในที่เดิม ─────────────────────────
+
+/** แผนย่อไฟล์ต้นฉบับ: ต้นฉบับขนาดเต็มของรูปที่ย่อไปถังขยะ ข้อมูลในคลัง (ใบหน้า ชื่อ) อยู่ครบ */
+export interface ShrinkPlan {
+  planId: Id;
+  resize: ExportResize;
+  inputCount: number;
+  plannedCount: number;
+  alreadySmall: number;
+  notJpeg: number;
+  unavailable: number;
+  /** ขนาดรวมของต้นฉบับที่จะย่อ และขนาดโดยประมาณหลังย่อ */
+  sourceBytes: number;
+  estimatedBytes: number;
+}
+
+export interface ShrinkReportItem {
+  photoId: Id;
+  filename: string;
+  status: 'planned' | 'replacing' | 'shrunk' | 'skipped' | 'unavailable' | 'failed' | 'cancelled';
+  /** เหตุผลที่ข้ามหรือไม่สำเร็จ */
+  note: string | null;
+}
+
+export interface ShrinkReport {
+  jobId: Id;
+  resize: ExportResize;
+  inputCount: number;
+  shrunk: number;
+  skipped: number;
+  failed: number;
+  unavailable: number;
+  cancelled: number;
+  /** ยังไม่ได้ทำ หรือค้างระหว่างแทนที่ (ทำต่อเมื่อเปิดแอปครั้งหน้า) */
+  pending: number;
+  /** ขนาดรวมก่อนและหลังย่อ ของรูปที่ย่อสำเร็จ */
+  sourceBytes: number;
+  outputBytes: number;
+  items: ShrinkReportItem[];
 }
 
 // ───────────────────────── ย้ายข้อมูลเดิม (dry-run เท่านั้น) ─────────────────────────
@@ -758,6 +799,9 @@ export interface Commands {
   get_export_report: [{ jobId: Id }, ExportReport];
   /** แสดงโฟลเดอร์ปลายทางของงานส่งออกในตัวจัดการไฟล์ */
   reveal_export_destination: [{ jobId: Id }, null];
+  preview_shrink: [{ selection: SelectionSpec; resize: ExportResize }, ShrinkPlan];
+  start_shrink: [{ planId: Id; requestId: Id }, JobSnapshot];
+  get_shrink_report: [{ jobId: Id }, ShrinkReport];
 
   preview_relink: [{ eventId: Id; newFolder: string }, RelinkPreview];
   commit_relink: [{ eventId: Id; newFolder: string; includeSiblings: boolean }, RelinkResult];

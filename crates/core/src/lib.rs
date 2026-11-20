@@ -21,6 +21,7 @@ pub mod platform;
 pub mod relink;
 pub mod review;
 pub mod setup;
+pub mod shrink;
 pub mod util;
 
 pub use error::{AppError, Result};
@@ -64,6 +65,7 @@ pub struct App {
     pub(crate) folder_picker: &'static str,
     pub(crate) previews: Mutex<HashMap<String, Arc<import::PreviewSession>>>,
     pub(crate) export_plans: Mutex<HashMap<String, export::PlanData>>,
+    pub(crate) shrink_plans: Mutex<HashMap<String, shrink::PlanData>>,
     pub(crate) worker: jobs::Worker,
     pub(crate) ai: Arc<ai::AiState>,
     pub(crate) review_cache: Mutex<Option<Arc<review::ReviewData>>>,
@@ -92,6 +94,8 @@ impl App {
         let db_path = opts.data_dir.join("library.sqlite");
         let conn = db::open_library(&db_path)?;
         jobs::recover_after_restart(&conn)?;
+        // ย่อไฟล์ต้นฉบับที่ค้างกลางคัน: ทำให้จบก่อน worker เริ่มสแกน
+        shrink::recover(&conn)?;
 
         let ai =
             Arc::new(ai::AiState::new(opts.face_engine, opts.face_engine_unavailable, &opts.data_dir.join("models")));
@@ -103,6 +107,7 @@ impl App {
             folder_picker: opts.folder_picker,
             previews: Mutex::new(HashMap::new()),
             export_plans: Mutex::new(HashMap::new()),
+            shrink_plans: Mutex::new(HashMap::new()),
             worker: jobs::Worker::new(db_path, opts.cache_dir, opts.sink, ai.clone()),
             ai,
             review_cache: Mutex::new(None),

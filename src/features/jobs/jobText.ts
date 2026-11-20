@@ -3,6 +3,7 @@ import type { ErrorCode, JobSnapshot, JobState } from '@/lib/ipc/types';
 
 export function jobKindLabel(job: JobSnapshot): string {
   if (job.kind === 'model') return 'ดาวน์โหลดตัววิเคราะห์ใบหน้า';
+  if (job.kind === 'shrink') return 'ย่อไฟล์ต้นฉบับ';
   return job.kind === 'export' ? 'ส่งออกสำเนา' : 'เพิ่มรูปเข้าคลัง';
 }
 
@@ -45,6 +46,7 @@ export function jobStateTone(state: JobState): 'neutral' | 'ok' | 'warn' | 'dang
 export function jobStageLabel(job: JobSnapshot): string {
   if (job.kind === 'model') return job.stage === 'verify' ? 'ตรวจและติดตั้งไฟล์' : job.stage === 'download' ? 'ดาวน์โหลด' : 'เสร็จขั้นตอน';
   if (job.kind === 'export') return 'คัดลอกไฟล์ต้นฉบับ';
+  if (job.kind === 'shrink') return 'ย่อและแทนที่ไฟล์';
   if (job.stage === 'discovery') return 'ตรวจรายการ';
   if (job.stage === 'thumbnail') return 'เตรียมข้อมูลรูป';
   return 'เสร็จขั้นตอน';
@@ -62,7 +64,7 @@ export function jobProgressText(job: JobSnapshot): string {
   if (!job.totalKnown) return `กำลังตรวจรายการ พบแล้ว ${formatCount(total)} ไฟล์`;
   const processed = done + failed + job.counts.skipped;
   const unit = job.kind === 'export' ? 'ไฟล์' : 'รูป';
-  const head = job.kind === 'export' ? 'คัดลอกแล้ว' : 'เตรียมข้อมูลรูป';
+  const head = job.kind === 'export' ? 'คัดลอกแล้ว' : job.kind === 'shrink' ? 'ย่อแล้ว' : 'เตรียมข้อมูลรูป';
   return `${head} ${formatCount(processed)} / ${formatCount(total)} ${unit}`;
 }
 
@@ -81,7 +83,7 @@ export function jobResultText(job: JobSnapshot): string {
 }
 
 const ERROR_LABEL: Partial<Record<ErrorCode, string>> = {
-  ACCESS_DENIED: 'ไม่มีสิทธิ์อ่านไฟล์',
+  ACCESS_DENIED: 'ไม่มีสิทธิ์เข้าถึงไฟล์',
   SOURCE_UNAVAILABLE: 'ไม่พบไฟล์ต้นทาง',
   UNSUPPORTED_FORMAT: 'ชนิดไฟล์ยังไม่รองรับ',
   DECODE_FAILED: 'ไฟล์รูปเสียหรืออ่านไม่ได้',

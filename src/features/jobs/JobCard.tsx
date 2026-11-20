@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { toast } from 'sonner';
-import { ChevronDown, CircleCheck, Download, FileText, FolderOpen, History, Pause, Play, RotateCcw, Square, TriangleAlert, Upload } from 'lucide-react';
+import { ChevronDown, CircleCheck, Download, FileText, FolderOpen, History, Minimize2, Pause, Play, RotateCcw, Square, TriangleAlert, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog, Dialog } from '@/components/ui/Dialog';
 import { ErrorState, LoadingBlock, ProgressBar, StatusBadge } from '@/components/ui/Feedback';
 import { ExportReportView } from '@/features/export/ExportDialog';
+import { ShrinkReportView } from '@/features/export/ShrinkDialog';
 import { cn } from '@/lib/cn';
 import { errorMessage, formatCount, formatInstant } from '@/lib/format';
 import { call } from '@/lib/ipc/client';
@@ -40,7 +41,7 @@ export function JobCard({ job, defaultExpanded = false }: { job: JobSnapshot; de
   const finished = FINISHED.includes(job.state);
   const active = isJobActive(job);
   const processed = job.counts.done + job.counts.failed + job.counts.skipped;
-  const KindIcon = job.kind === 'export' ? Upload : job.kind === 'model' ? Download : FolderOpen;
+  const KindIcon = job.kind === 'export' ? Upload : job.kind === 'model' ? Download : job.kind === 'shrink' ? Minimize2 : FolderOpen;
   const isModel = job.kind === 'model';
 
   return (
@@ -94,7 +95,7 @@ export function JobCard({ job, defaultExpanded = false }: { job: JobSnapshot; de
               เปิดกิจกรรม
             </Link>
           )}
-          {job.kind === 'export' && finished && (
+          {(job.kind === 'export' || job.kind === 'shrink') && finished && (
             <Button size="sm" icon={<FileText className="size-4" aria-hidden />} onClick={() => setReportOpen(true)}>
               ดูรายงาน
             </Button>
@@ -140,7 +141,9 @@ export function JobCard({ job, defaultExpanded = false }: { job: JobSnapshot; de
         description={
           isModel
             ? 'ตัววิเคราะห์ใบหน้าจะยังไม่ถูกติดตั้ง กดดาวน์โหลดใหม่ได้ภายหลัง รูปและชื่อบุคคลในคลังไม่กระทบ'
-            : 'ข้อมูลที่ทำสำเร็จแล้วจะยังอยู่ การยกเลิกงานไม่ใช่การนำกิจกรรมออกจากคลัง และรูปต้นฉบับไม่ถูกแก้ไข'
+            : job.kind === 'shrink'
+              ? 'รูปที่ย่อเสร็จแล้วยังเป็นไฟล์ที่ย่อ (ต้นฉบับขนาดเต็มอยู่ในถังขยะ) รูปที่เหลือไม่ถูกแตะ'
+              : 'ข้อมูลที่ทำสำเร็จแล้วจะยังอยู่ การยกเลิกงานไม่ใช่การนำกิจกรรมออกจากคลัง และรูปต้นฉบับไม่ถูกแก้ไข'
         }
         confirmLabel={isModel ? 'ยกเลิกการดาวน์โหลด' : 'ยกเลิกส่วนที่เหลือ'}
         cancelLabel={isModel ? 'ดาวน์โหลดต่อ' : 'ทำงานต่อ'}
@@ -149,6 +152,7 @@ export function JobCard({ job, defaultExpanded = false }: { job: JobSnapshot; de
         onConfirm={() => controls.cancel.mutate(undefined, { onSettled: () => setConfirmCancel(false) })}
       />
       {job.kind === 'export' && <ExportReportDialog jobId={job.id} open={reportOpen} onOpenChange={setReportOpen} />}
+      {job.kind === 'shrink' && <ShrinkReportDialog jobId={job.id} open={reportOpen} onOpenChange={setReportOpen} />}
     </li>
   );
 }
@@ -181,6 +185,21 @@ function ExportReportDialog({ jobId, open, onOpenChange }: { jobId: string; open
         <ErrorState compact error={report.error} onRetry={() => void report.refetch()} />
       ) : (
         <ExportReportView report={report.data} />
+      )}
+    </Dialog>
+  );
+}
+
+function ShrinkReportDialog({ jobId, open, onOpenChange }: { jobId: string; open: boolean; onOpenChange: (open: boolean) => void }) {
+  const report = useQuery({ queryKey: ['shrink-report', jobId], queryFn: () => call('get_shrink_report', { jobId }), enabled: open });
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange} title="รายงานการย่อไฟล์ต้นฉบับ" size="lg" footer={<Button onClick={() => onOpenChange(false)}>ปิด</Button>}>
+      {report.isPending ? (
+        <LoadingBlock label="กำลังโหลดรายงาน…" className="py-10" />
+      ) : report.isError ? (
+        <ErrorState compact error={report.error} onRetry={() => void report.refetch()} />
+      ) : (
+        <ShrinkReportView report={report.data} />
       )}
     </Dialog>
   );

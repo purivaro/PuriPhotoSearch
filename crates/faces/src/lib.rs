@@ -20,6 +20,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// ค่าเดียวกับรุ่น Python (`app/services/face_service.py`)
 pub const MAX_IMAGE_DIM: u32 = 1280;
+// ย่อไฟล์ต้นฉบับในที่เดิม (puri_core::shrink) ต้องไม่ต่ำกว่าภาพที่ตัววิเคราะห์ใช้
+// ไม่งั้นการวิเคราะห์ใหม่ภายหลังจะได้ผลแย่กว่าที่ได้จากต้นฉบับ — เพิ่มค่านี้เมื่อไรต้องเพิ่ม MIN_EDGE ด้วย
+const _: () = assert!(puri_core::shrink::MIN_EDGE >= MAX_IMAGE_DIM);
 const DET_SIZE: u32 = 640;
 const DET_THRESHOLD: f32 = 0.5;
 const NMS_THRESHOLD: f32 = 0.4;

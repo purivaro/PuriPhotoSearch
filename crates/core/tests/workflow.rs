@@ -803,6 +803,211 @@ fn t27c_export_resized_copies_keep_dates_and_leave_originals_alone() {
     assert_eq!(tree_state(&root), before);
 }
 
+fn db_text(lib: &Lib, sql: &str, arg: &str) -> Option<String> {
+    let conn = rusqlite::Connection::open(lib.tmp.path().join("data/library.sqlite")).unwrap();
+    conn.query_row(sql, [arg], |r| r.get(0)).unwrap()
+}
+
+/// ต้นฉบับที่ถูกย้ายไปถังขยะระหว่างเทสต์: ตรวจว่าเป็นไฟล์เดิมทุกไบต์ แล้วลบออกจากถังขยะของเครื่อง
+/// (Windows ไม่บอกตำแหน่งในถังขยะ — runner ของ CI ถูกทิ้งหลังจบงานอยู่แล้ว)
+fn take_from_trash(lib: &Lib, filename: &str, original: Option<&[u8]>) {
+    let trashed =
+        db_text(lib, "SELECT trashed_path FROM shrink_items WHERE filename = ?1 AND status = 'shrunk'", filename);
+    if cfg!(target_os = "macos") {
+        let trashed = trashed.unwrap_or_else(|| panic!("{filename}: ไม่รู้ตำแหน่งในถังขยะ"));
+        if let Some(original) = original {
+            assert_eq!(std::fs::read(&trashed).unwrap(), original, "{filename}: ต้นฉบับในถังขยะครบทุกไบต์");
+        }
+        let _ = std::fs::remove_file(&trashed);
+    }
+}
+
+fn no_temp_files(dir: &Path) -> bool {
+    walkdir::WalkDir::new(dir).into_iter().all(|e| !e.unwrap().file_name().to_string_lossy().contains("puri-shrink"))
+}
+
+#[test]
+fn t27d_shrink_originals_in_place_keeps_faces_names_and_dates() {
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-20 งานย่อต้นฉบับ");
+    std::fs::create_dir_all(&root).unwrap();
+    // เซนเซอร์บันทึก 3000×2000 แต่ EXIF บอกให้หมุน 90° → ภาพที่เห็นคือแนวตั้ง 2000×3000
+    let original = jpeg_with_exif(3000, 2000, 6, "2026:11:20 08:15:00");
+    std::fs::write(root.join("big.jpg"), &original).unwrap();
+    image::RgbImage::from_fn(2400, 1600, |x, y| image::Rgb([x as u8, y as u8, 40]))
+        .save_with_format(root.join("scan.png"), image::ImageFormat::Png)
+        .unwrap();
+    write_jpeg(&root.join("small.jpg"), 3);
+    lib.import(&root, "single_event", |_| true);
+    let mtime = std::fs::metadata(root.join("big.jpg")).unwrap().modified().unwrap();
+    let others = ["scan.png", "small.jpg"].map(|name| (name, std::fs::read(root.join(name)).unwrap()));
+
+    // คำตัดสินของผู้ใช้บนรูปที่จะย่อ: ใบหน้าที่วาดเองพร้อมชื่อ
+    let big = lib.photo_id("big.jpg");
+    let face = lib.label("big.jpg", 0.3, ("name", "คุณกานต์"))["faces"][0].clone();
+    let revision = db_text(&lib, "SELECT current_revision_id FROM photos WHERE id = ?1", &big).unwrap();
+    let ids: Vec<Value> = arr(&lib.query(json!({}))["items"]).iter().map(|i| i["id"].clone()).collect();
+    let selection = json!({ "kind": "explicit", "photoIds": ids });
+
+    // ไม่ยอมย่อต่ำกว่าภาพที่ตัววิเคราะห์ใบหน้าใช้ และต้องเลือกขนาดก่อน
+    for resize in [
+        json!({ "mode": "long_edge", "px": 1080 }),
+        json!({ "mode": "max_bytes", "bytes": 200 * 1024 }),
+        json!({ "mode": "original" }),
+    ] {
+        let err = lib.try_call("preview_shrink", json!({ "selection": selection, "resize": resize })).unwrap_err();
+        assert_eq!(err.code, "INVALID_INPUT", "{resize}");
+    }
+
+    let plan =
+        lib.call("preview_shrink", json!({ "selection": selection, "resize": { "mode": "long_edge", "px": 1600 } }));
+    assert_eq!(
+        (plan["plannedCount"].as_i64(), plan["alreadySmall"].as_i64(), plan["notJpeg"].as_i64()),
+        (Some(1), Some(1), Some(1)),
+        "{plan}"
+    );
+    assert!(plan["estimatedBytes"].as_u64().unwrap() < plan["sourceBytes"].as_u64().unwrap());
+    let job = lib.call("start_shrink", json!({ "planId": plan["planId"], "requestId": new_id() }));
+    assert_eq!(job["kind"], "shrink");
+    lib.run_jobs();
+    let report = lib.call("get_shrink_report", json!({ "jobId": job["id"] }));
+    assert_eq!(
+        (report["shrunk"].as_i64(), report["skipped"].as_i64(), report["failed"].as_i64()),
+        (Some(1), Some(2), Some(0)),
+        "{report}"
+    );
+    assert!(report["outputBytes"].as_u64().unwrap() < report["sourceBytes"].as_u64().unwrap());
+
+    // ไฟล์ที่ที่เดิม: หมุนตั้งตรง ด้านยาว 1600 เก็บวันถ่าย เวลาแก้ไขไฟล์เท่าต้นฉบับ
+    let out = std::fs::read(root.join("big.jpg")).unwrap();
+    let img = image::load_from_memory(&out).unwrap();
+    assert_eq!((img.width(), img.height()), (1067, 1600));
+    let exif = exif::Reader::new().read_from_container(&mut std::io::Cursor::new(&out)).unwrap();
+    assert_eq!(exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY).unwrap().value.get_uint(0), Some(1));
+    assert_eq!(
+        exif.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY).unwrap().display_value().to_string(),
+        "2026-11-20 08:15:00"
+    );
+    assert_eq!(std::fs::metadata(root.join("big.jpg")).unwrap().modified().unwrap(), mtime);
+    for (name, bytes) in &others {
+        assert_eq!(&std::fs::read(root.join(name)).unwrap(), bytes, "{name} ไม่ถูกแตะ");
+    }
+    assert!(no_temp_files(&root));
+    take_from_trash(&lib, "big.jpg", Some(&original));
+
+    // คลัง: revision เดิม ใบหน้าเดิม ชื่อเดิม ขนาดใหม่
+    assert_eq!(db_text(&lib, "SELECT current_revision_id FROM photos WHERE id = ?1", &big).unwrap(), revision);
+    let details = lib.call("get_photo_details", json!({ "photoId": big.clone() }));
+    assert_eq!((details["width"].as_i64(), details["height"].as_i64()), (Some(1067), Some(1600)));
+    assert_eq!(details["takenAt"], "2026-11-20T08:15:00");
+    assert_eq!(details["faces"][0]["id"], face["id"]);
+    assert_eq!(details["faces"][0]["bbox"], face["bbox"], "กรอบเป็นสัดส่วนของภาพ จึงตรงตำแหน่งเดิม");
+    assert_eq!(lib.filenames(json!({ "text": "คุณกานต์" })), ["big.jpg"]);
+    puri_core::api::asset(&lib.app, &format!("face/{}", face["id"].as_str().unwrap())).unwrap();
+
+    // ตรวจรูปใหม่: ไฟล์ที่ย่อไม่ถูกมองเป็นเนื้อหาใหม่ (ไม่สร้าง revision ใหม่ ไม่วิเคราะห์ซ้ำ)
+    let event_id = lib.call("list_events", json!({}))[0]["id"].clone();
+    lib.call("rescan_event", json!({ "eventId": event_id }));
+    lib.run_jobs();
+    assert_eq!(lib.count("SELECT COUNT(*) FROM photo_revisions"), 3);
+    assert_eq!(db_text(&lib, "SELECT current_revision_id FROM photos WHERE id = ?1", &big).unwrap(), revision);
+    assert_eq!(lib.filenames(json!({ "text": "คุณกานต์" })), ["big.jpg"]);
+
+    // ย่อซ้ำ: เล็กพออยู่แล้วทั้งหมด จึงไม่มีอะไรให้เริ่ม
+    let again =
+        lib.call("preview_shrink", json!({ "selection": selection, "resize": { "mode": "long_edge", "px": 1600 } }));
+    assert_eq!(again["plannedCount"], 0);
+    assert_eq!(
+        lib.try_call("start_shrink", json!({ "planId": again["planId"], "requestId": new_id() })).unwrap_err().code,
+        "INVALID_INPUT"
+    );
+}
+
+#[test]
+fn t27e_shrink_interrupted_at_any_step_finishes_or_reverts_on_next_open() {
+    use sha2::Digest;
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-20 ปิดกลางคัน");
+    std::fs::create_dir_all(&root).unwrap();
+    let names = ["a.jpg", "b.jpg", "c.jpg", "d.jpg"];
+    for name in names {
+        std::fs::write(root.join(name), jpeg_with_exif(2400, 1600, 1, "2026:11:20 09:00:00")).unwrap();
+    }
+    lib.import(&root, "single_event", |_| true);
+    lib.label("a.jpg", 0.4, ("name", "คุณเอ"));
+    let ids: Vec<Value> = arr(&lib.query(json!({}))["items"]).iter().map(|i| i["id"].clone()).collect();
+    let plan = lib.call(
+        "preview_shrink",
+        json!({ "selection": { "kind": "explicit", "photoIds": ids }, "resize": { "mode": "long_edge", "px": 1600 } }),
+    );
+    let job = lib.call("start_shrink", json!({ "planId": plan["planId"], "requestId": new_id() }));
+
+    // จำลองแอปปิดตรงแต่ละขั้น ด้วยไฟล์และสถานะเดียวกับที่งานจริงทิ้งไว้
+    let original = std::fs::read(root.join("a.jpg")).unwrap();
+    let resized = puri_core::media::export_jpeg(&original, puri_core::media::Fit::LongEdge(1600)).unwrap();
+    let sha = puri_core::util::hex(&sha2::Sha256::digest(&resized));
+    let (w, h) = image::load_from_memory(&resized).map(|i| (i.width(), i.height())).unwrap();
+    let conn = rusqlite::Connection::open(lib.tmp.path().join("data/library.sqlite")).unwrap();
+    let mark = |name: &str, status: &str, temp: &Path| {
+        conn.execute(
+            "UPDATE shrink_items SET status = ?2, temp_path = ?3, new_sha256 = ?4, new_width = ?5, new_height = ?6 WHERE filename = ?1",
+            rusqlite::params![name, status, temp.to_string_lossy(), sha, w, h],
+        )
+        .unwrap();
+    };
+    let temp = |name: &str| root.join(format!(".puri-shrink-test-{name}.part"));
+    let away = lib.tmp.path().join("ถังขยะจำลอง");
+    std::fs::create_dir_all(&away).unwrap();
+    // a: ต้นฉบับไปถังขยะแล้ว ไฟล์ที่ย่อยังเป็นไฟล์ชั่วคราว
+    std::fs::write(temp("a"), &resized).unwrap();
+    std::fs::rename(root.join("a.jpg"), away.join("a.jpg")).unwrap();
+    mark("a.jpg", "replacing", &temp("a"));
+    // b: เขียนไฟล์ที่ย่อแล้ว แต่ต้นฉบับยังไม่ถูกย้าย
+    std::fs::write(temp("b"), &resized).unwrap();
+    mark("b.jpg", "replacing", &temp("b"));
+    // c: วางไฟล์ที่ย่อแทนแล้ว แต่ยังไม่ได้บันทึกในคลัง
+    std::fs::rename(root.join("c.jpg"), away.join("c.jpg")).unwrap();
+    std::fs::write(root.join("c.jpg"), &resized).unwrap();
+    mark("c.jpg", "replacing", &temp("c"));
+    // d: ไฟล์ชั่วคราวค้างก่อนถึงขั้นแทนที่
+    std::fs::write(temp("d"), &resized).unwrap();
+    mark("d.jpg", "planned", &temp("d"));
+    drop(conn);
+
+    let lib = lib.reopen();
+    let status = |name: &str| db_text(&lib, "SELECT status FROM shrink_items WHERE filename = ?1", name).unwrap();
+    assert_eq!(
+        (status("a.jpg"), status("b.jpg"), status("c.jpg"), status("d.jpg")),
+        ("shrunk".into(), "planned".into(), "shrunk".into(), "planned".into())
+    );
+    assert!(no_temp_files(&root), "ไม่มีไฟล์ชั่วคราวค้างในโฟลเดอร์ของผู้ใช้");
+    for name in ["a.jpg", "c.jpg"] {
+        assert_eq!(std::fs::read(root.join(name)).unwrap(), resized);
+        let size = lib.count(&format!(
+            "SELECT r.size FROM photo_revisions r JOIN photos p ON p.current_revision_id = r.id JOIN photo_locations l ON l.photo_id = p.id WHERE l.filename = '{name}'"
+        ));
+        assert_eq!(size as usize, resized.len(), "{name}: คลังรู้จักไฟล์ที่ย่อแล้ว");
+    }
+    assert_eq!(std::fs::read(root.join("b.jpg")).unwrap(), original, "b: ต้นฉบับอยู่ที่เดิม");
+    assert_eq!(lib.filenames(json!({ "text": "คุณเอ" })), ["a.jpg"]);
+
+    // งานทำต่อเฉพาะรูปที่ยังไม่เสร็จ
+    lib.run_jobs();
+    let report = lib.call("get_shrink_report", json!({ "jobId": job["id"] }));
+    assert_eq!(
+        (report["shrunk"].as_i64(), report["failed"].as_i64(), report["pending"].as_i64()),
+        (Some(4), Some(0), Some(0)),
+        "{report}"
+    );
+    take_from_trash(&lib, "b.jpg", Some(&original));
+    take_from_trash(&lib, "d.jpg", Some(&original));
+    let event_id = lib.call("list_events", json!({}))[0]["id"].clone();
+    lib.call("rescan_event", json!({ "eventId": event_id }));
+    lib.run_jobs();
+    assert_eq!(lib.count("SELECT COUNT(*) FROM photo_revisions"), 4, "ไม่มีรูปถูกมองเป็นเนื้อหาใหม่");
+    assert_eq!(lib.filenames(json!({ "text": "คุณเอ" })), ["a.jpg"]);
+}
+
 #[test]
 fn t27b_export_refuses_source_changed_since_import_and_cancel_keeps_finished_copies() {
     let lib = Lib::new();

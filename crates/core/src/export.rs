@@ -44,7 +44,7 @@ pub enum Resize {
 }
 
 impl Resize {
-    fn validate(self) -> Result<()> {
+    pub(crate) fn validate(self) -> Result<()> {
         match self {
             Resize::LongEdge { px } if !(320..=10_000).contains(&px) => {
                 Err(AppError::invalid("ด้านยาวต้องอยู่ระหว่าง 320 ถึง 10,000 พิกเซล"))
@@ -59,7 +59,7 @@ impl Resize {
 
     /// วิธีย่อของรูปนี้ หรือ None เมื่อคัดลอกไฟล์เดิมได้เลย (ไม่ได้เลือกย่อ หรือรูปเล็กพออยู่แล้ว)
     /// `width`/`height` เป็น 0 เมื่อยังไม่รู้ขนาดภาพ: ถือว่าต้องย่อ (ตัวย่อไม่ขยายรูปที่เล็กกว่า)
-    fn fit_for(self, size: u64, width: u32, height: u32) -> Option<media::Fit> {
+    pub(crate) fn fit_for(self, size: u64, width: u32, height: u32) -> Option<media::Fit> {
         match self {
             Resize::Original => None,
             Resize::LongEdge { px } => {
@@ -82,7 +82,7 @@ fn jpeg_name(filename: &str) -> String {
 
 /// ขนาดไฟล์โดยประมาณของสำเนา: ย่อด้านยาวคิดจากจำนวนพิกเซลของสำเนา × ไบต์ต่อพิกเซลของ JPEG คุณภาพ 90
 /// (ไม่เกินขนาดต้นฉบับ) · โหมดขนาดไฟล์ใช้เพดานที่ตั้งไว้
-fn estimate_bytes(fit: Option<media::Fit>, size: u64, width: u32, height: u32) -> u64 {
+pub(crate) fn estimate_bytes(fit: Option<media::Fit>, size: u64, width: u32, height: u32) -> u64 {
     match fit {
         None => size,
         Some(media::Fit::MaxBytes(max)) => max,
@@ -100,6 +100,7 @@ struct PlanItem {
     revision_id: String,
     filename: String,
     source_path: String,
+    size: u64,
     /// None = ต้นฉบับไม่พร้อม จึงไม่มีไฟล์ปลายทาง
     planned_name: Option<String>,
 }
@@ -166,18 +167,18 @@ fn existing_names(dir: &Path) -> Result<HashSet<String>> {
     Ok(names)
 }
 
-struct SourceRow {
-    photo_id: String,
-    revision_id: String,
-    filename: String,
-    source_path: String,
-    size: u64,
+pub(crate) struct SourceRow {
+    pub photo_id: String,
+    pub revision_id: String,
+    pub filename: String,
+    pub source_path: String,
+    pub size: u64,
     /// ขนาดภาพหลังหมุนตาม EXIF (0 = ยังไม่รู้)
-    width: u32,
-    height: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
-fn load_items(conn: &Connection, selection: &SelectionSpec) -> Result<Vec<SourceRow>> {
+pub(crate) fn load_items(conn: &Connection, selection: &SelectionSpec) -> Result<Vec<SourceRow>> {
     const ROW: &str = "p.id, p.current_revision_id, l.filename, l.os_path, r.size, r.width, r.height
         FROM photos p JOIN photo_locations l ON l.photo_id = p.id JOIN photo_revisions r ON r.id = p.current_revision_id";
     let map = |r: &rusqlite::Row| {
@@ -284,7 +285,7 @@ pub fn preview(app: &App, selection: &SelectionSpec, destination: &str, resize: 
             unavailable += 1;
             None
         };
-        items.push(PlanItem { photo_id, revision_id, filename, source_path, planned_name });
+        items.push(PlanItem { photo_id, revision_id, filename, source_path, size, planned_name });
     }
     samples.sort_by_key(|s| s.source == s.output);
     samples.truncate(5);
@@ -364,8 +365,8 @@ pub fn start(app: &App, plan_id: &str, request_id: &str) -> Result<JobSnapshot> 
         )?;
         for (ord, item) in plan.items.iter().enumerate() {
             tx.execute(
-                "INSERT INTO export_items(run_id, ord, photo_id, revision_id, filename, source_path, planned_name, status)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO export_items(run_id, ord, photo_id, revision_id, filename, source_path, planned_name, status, source_bytes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     run_id,
                     ord as i64,
@@ -374,7 +375,8 @@ pub fn start(app: &App, plan_id: &str, request_id: &str) -> Result<JobSnapshot> 
                     item.filename,
                     item.source_path,
                     item.planned_name,
-                    if item.planned_name.is_some() { "planned" } else { "unavailable" }
+                    if item.planned_name.is_some() { "planned" } else { "unavailable" },
+                    item.size as i64
                 ],
             )?;
         }
@@ -389,7 +391,7 @@ pub fn start(app: &App, plan_id: &str, request_id: &str) -> Result<JobSnapshot> 
 }
 
 /// rename ที่ไม่เขียนทับไฟล์ปลายทาง (atomic บน APFS/HFS+ ผ่าน `renamex_np(RENAME_EXCL)`)
-fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+pub(crate) fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     {
         use std::os::unix::ffi::OsStrExt;
@@ -471,15 +473,15 @@ fn write_resized(src: &Path, stamp: media::FileStamp, sha: Option<&str>, fit: me
 }
 
 /// ข้อมูลของ revision ที่คลังรู้จัก ใช้ตรวจว่าต้นฉบับไม่เปลี่ยน และตัดสินว่าต้องย่อหรือไม่
-struct Revision {
-    size: i64,
-    mtime_ns: i64,
-    sha: Option<String>,
-    width: u32,
-    height: u32,
+pub(crate) struct Revision {
+    pub size: i64,
+    pub mtime_ns: i64,
+    pub sha: Option<String>,
+    pub width: u32,
+    pub height: u32,
 }
 
-fn load_revision(conn: &Connection, revision_id: &str) -> Result<Revision> {
+pub(crate) fn load_revision(conn: &Connection, revision_id: &str) -> Result<Revision> {
     Ok(conn.query_row(
         "SELECT size, mtime_ns, sha256, width, height FROM photo_revisions WHERE id = ?1",
         [revision_id],
@@ -654,8 +656,9 @@ pub fn report(conn: &Connection, job_id: &str) -> Result<ExportReport> {
         .ok_or_else(|| AppError::not_found("งานส่งออก"))?;
     let resize: Resize = resize.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
     // งานที่ทำก่อนมีคอลัมน์ output_bytes คัดลอกไฟล์เดิมเสมอ: ขนาดสำเนาเท่าต้นฉบับ
+    // งานที่ทำก่อนมี source_bytes ใช้ขนาดปัจจุบันของ revision (ตรงเว้นแต่ต้นฉบับถูกย่อในที่เดิมภายหลัง)
     let (source_bytes, output_bytes): (i64, i64) = conn.query_row(
-        "SELECT COALESCE(SUM(r.size), 0), COALESCE(SUM(COALESCE(i.output_bytes, r.size)), 0)
+        "SELECT COALESCE(SUM(COALESCE(i.source_bytes, r.size)), 0), COALESCE(SUM(COALESCE(i.output_bytes, r.size)), 0)
          FROM export_items i JOIN photo_revisions r ON r.id = i.revision_id
          WHERE i.run_id = ?1 AND i.status = 'copied'",
         [&run_id],
