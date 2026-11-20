@@ -34,6 +34,8 @@ pub struct EditSettings {
     pub straighten: f64,
     /// กรอบตัด เป็นสัดส่วนของภาพหลังหมุนและปรับเอียง — None = ไม่ตัด
     pub crop: Option<Rect>,
+    /// แสงและสี (ทำหลังตัด/หมุน)
+    pub adjust: crate::adjust::Adjust,
 }
 
 pub const MAX_STRAIGHTEN: f64 = 45.0;
@@ -43,6 +45,7 @@ const EPS: f64 = 1e-6;
 
 impl EditSettings {
     pub fn validate(&self) -> Result<()> {
+        self.adjust.validate()?;
         if ![0, 90, 180, 270].contains(&self.rotate) {
             return Err(AppError::invalid("หมุนได้ทีละ 90 องศาเท่านั้น"));
         }
@@ -66,6 +69,11 @@ impl EditSettings {
 
     /// ไม่ได้แต่งอะไรเลย (เก็บแบบนี้ = ลบการแต่ง)
     pub fn is_identity(&self) -> bool {
+        self.is_geometry_identity() && self.adjust.is_neutral()
+    }
+
+    /// ไม่ได้ตัด หมุน หรือปรับเอียง (ขนาดและตำแหน่งของภาพเท่าเดิม)
+    pub fn is_geometry_identity(&self) -> bool {
         self.rotate == 0 && self.straighten == 0.0 && self.crop.is_none_or(|c| c == FULL)
     }
 }
@@ -173,7 +181,12 @@ fn bounds(pts: &[(f64, f64); 4]) -> (f64, f64, f64, f64) {
 
 /// ภาพที่แต่งจากภาพเดิมที่หมุนตาม EXIF แล้ว (ขนาดใดก็ได้ — พิกัดเป็นสัดส่วน)
 pub fn render(img: DynamicImage, s: &EditSettings) -> DynamicImage {
-    if s.is_identity() {
+    crate::adjust::apply(render_geometry(img, s), &s.adjust)
+}
+
+/// ตัด หมุน ปรับเอียง
+fn render_geometry(img: DynamicImage, s: &EditSettings) -> DynamicImage {
+    if s.is_geometry_identity() {
         return img;
     }
     let g = Geometry::new(img.width(), img.height(), s);
@@ -248,7 +261,7 @@ pub(crate) fn load(conn: &Connection, photo_id: &str) -> Result<Option<Stored>> 
     row.map(|(edit_id, json)| Ok(Stored { edit_id, settings: serde_json::from_str(&json)? })).transpose()
 }
 
-/// การแปลงพิกัดของรูปที่ revision นี้เป็นของ — None เมื่อไม่ได้แต่งหรือยังไม่รู้ขนาดภาพ
+/// การแปลงพิกัดของรูปที่ revision นี้เป็นของ — None เมื่อไม่ได้ตัด/หมุน หรือยังไม่รู้ขนาดภาพ
 pub(crate) fn geometry_for_revision(conn: &Connection, revision_id: &str) -> Result<Option<Geometry>> {
     let row: Option<(u32, u32, Option<String>)> = conn
         .query_row(
@@ -259,7 +272,11 @@ pub(crate) fn geometry_for_revision(conn: &Connection, revision_id: &str) -> Res
         )
         .optional()?;
     Ok(match row {
-        Some((w, h, Some(json))) if w > 0 && h > 0 => Some(Geometry::new(w, h, &serde_json::from_str(&json)?)),
+        Some((w, h, Some(json))) if w > 0 && h > 0 => {
+            let settings: EditSettings = serde_json::from_str(&json)?;
+            // แต่งแค่แสงสี: ตำแหน่งเท่าเดิม ไม่ต้องแปลงกรอบ
+            (!settings.is_geometry_identity()).then(|| Geometry::new(w, h, &settings))
+        }
         _ => None,
     })
 }
@@ -331,7 +348,7 @@ mod tests {
     use super::*;
 
     fn settings(rotate: u16, straighten: f64, crop: Option<Rect>) -> EditSettings {
-        EditSettings { rotate, straighten, crop }
+        EditSettings { rotate, straighten, crop, ..Default::default() }
     }
 
     fn close(a: (f64, f64), b: (f64, f64)) -> bool {
