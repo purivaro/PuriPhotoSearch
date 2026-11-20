@@ -347,10 +347,9 @@ impl Watermark {
     pub fn new(image_bytes: &[u8], anchor: (u8, u8), scale_pct: u32, opacity_pct: u32) -> Result<Self> {
         let mut logo = image::load_from_memory(image_bytes).map_err(decode_error)?.to_rgba8();
         for p in logo.pixels_mut() {
-            let a = p.0[3] as u32;
-            for c in 0..3 {
-                p.0[c] = ((p.0[c] as u32 * a + 127) / 255) as u8;
-            }
+            let [r, g, b, a] = p.0;
+            let times_alpha = |v: u8| ((v as u32 * a as u32 + 127) / 255) as u8;
+            p.0 = [times_alpha(r), times_alpha(g), times_alpha(b), a];
         }
         Ok(Watermark { logo, anchor, scale: scale_pct as f32 / 100.0, opacity: opacity_pct as f32 / 100.0 })
     }
@@ -364,11 +363,10 @@ impl Watermark {
             if a <= 0.0 || x + i >= w || y + j >= h {
                 continue;
             }
-            let dst = img.get_pixel_mut(x + i, y + j);
-            for c in 0..3 {
-                // premultiplied: สีของโลโก้คูณ alpha มาแล้ว
-                let v = dst.0[c] as f32 * (1.0 - a) + p.0[c] as f32 * self.opacity;
-                dst.0[c] = v.round().clamp(0.0, 255.0) as u8;
+            // premultiplied: สีของโลโก้คูณ alpha มาแล้ว (zip หยุดที่สามช่องสีของภาพ)
+            for (dst, src) in img.get_pixel_mut(x + i, y + j).0.iter_mut().zip(p.0) {
+                let v = *dst as f32 * (1.0 - a) + src as f32 * self.opacity;
+                *dst = v.round().clamp(0.0, 255.0) as u8;
             }
         }
     }
