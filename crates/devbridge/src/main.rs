@@ -57,6 +57,12 @@ fn handle(app: &App, mut request: Request) {
 }
 
 fn main() {
+    // โหมด bridge ของผู้ช่วย AI (เหมือนแอปจริง): CLI ของ AI รัน dev bridge เป็น MCP server แบบ stdio
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--mcp-bridge") {
+        let port = args.get(2).and_then(|p| p.parse().ok()).unwrap_or(0);
+        std::process::exit(if puri_core::assistant::mcp::bridge(port).is_ok() { 0 } else { 1 });
+    }
     let base =
         std::env::var_os("PURI_DATA_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("target/dev-library"));
     let app = App::open(Options {

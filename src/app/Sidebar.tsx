@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router';
-import { Folder, HardDrive, House, Moon, PanelLeft, ScanFace, Search, Settings, Sun, Users, type LucideIcon } from 'lucide-react';
+import { Folder, HardDrive, House, Moon, PanelLeft, ScanFace, Search, Settings, Sparkles, Sun, Users, type LucideIcon } from 'lucide-react';
 import { Tooltip } from '@/components/ui/Overlay';
 import { UpdateNotice } from '@/features/update/UpdateNotice';
 import { cn } from '@/lib/cn';
@@ -8,6 +8,7 @@ import { isTauri } from '@/lib/ipc/client';
 import { isMac } from '@/lib/platform';
 import { useSummary } from '@/lib/queries';
 import { resolveTheme, useSettings } from '@/stores/settings';
+import { useUi } from '@/stores/ui';
 import { Wordmark } from './Logo';
 import { useBackgroundLocation } from './navigation';
 
@@ -117,6 +118,9 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
             </li>
           );
         })}
+        <li className="mt-2 border-t border-line pt-2">
+          <AssistantToggle collapsed={collapsed} />
+        </li>
       </ul>
 
       <UpdateNotice collapsed={collapsed} />
@@ -124,7 +128,7 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
         {collapsed ? (
           <div className="flex flex-col items-center gap-1">
             <ThemeToggle collapsed />
-            <Tooltip label="ข้อมูลอยู่ในเครื่อง ไม่มีการส่งรูปหรือชื่อบุคคลออกไปที่อื่น" side="right">
+            <Tooltip label="ข้อมูลอยู่ในเครื่อง · ส่งออกไปเฉพาะสิ่งที่ผู้ช่วย AI ใช้ เมื่อคุยกับ AI" side="right">
               <div className="flex h-9 items-center justify-center text-muted" role="img" aria-label="ข้อมูลอยู่ในเครื่อง">
                 <HardDrive className="size-5" aria-hidden />
               </div>
@@ -132,7 +136,7 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
           </div>
         ) : (
           <div className="flex items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-2.5 text-sm text-muted" title="ไม่มีการส่งรูปหรือชื่อบุคคลออกไปที่อื่น">
+            <div className="flex min-w-0 items-center gap-2.5 text-sm text-muted" title="รูปและชื่อบุคคลอยู่ในเครื่อง · ส่งออกไปเฉพาะสิ่งที่ผู้ช่วย AI ใช้ เมื่อคุยกับ AI">
               <HardDrive className="size-5 shrink-0" aria-hidden />
               ข้อมูลอยู่ในเครื่อง
             </div>
@@ -141,6 +145,36 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
         )}
       </div>
     </nav>
+  );
+}
+
+/** เปิด/ปิดแผงผู้ช่วย AI ด้านขวา (ไม่ใช่หน้าแยก — เปิดค้างไว้ระหว่างดูรูปได้) */
+function AssistantToggle({ collapsed }: { collapsed: boolean }) {
+  const open = useUi((s) => s.assistantOpen);
+  const setOpen = useUi((s) => s.setAssistantOpen);
+  const button = (
+    <button
+      type="button"
+      aria-pressed={open}
+      aria-label={collapsed ? 'ผู้ช่วย AI' : undefined}
+      onClick={() => setOpen(!open)}
+      className={cn(
+        'flex h-11 w-full items-center rounded-control text-[15px] font-semibold transition-colors',
+        collapsed ? 'justify-center' : 'gap-3 px-3',
+        open ? 'bg-selected text-action' : 'text-ink hover:bg-sunken',
+      )}
+      data-testid="nav-assistant"
+    >
+      <Sparkles className="size-[22px] shrink-0" strokeWidth={open ? 2.3 : 1.9} aria-hidden />
+      {!collapsed && <span className="min-w-0 flex-1 truncate text-left">ผู้ช่วย AI</span>}
+    </button>
+  );
+  return collapsed ? (
+    <Tooltip label="ผู้ช่วย AI" side="right">
+      {button}
+    </Tooltip>
+  ) : (
+    button
   );
 }
 
