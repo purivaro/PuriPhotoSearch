@@ -13,6 +13,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (3, include_str!("../migrations/0003_export_resize.sql")),
     (4, include_str!("../migrations/0004_shrink_originals.sql")),
     (5, include_str!("../migrations/0005_watermarks.sql")),
+    (6, include_str!("../migrations/0006_photo_edits.sql")),
 ];
 
 pub fn latest_version() -> i64 {

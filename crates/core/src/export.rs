@@ -188,11 +188,15 @@ pub(crate) struct SourceRow {
     /// ขนาดภาพหลังหมุนตาม EXIF (0 = ยังไม่รู้)
     pub width: u32,
     pub height: u32,
+    /// แต่งแล้ว (สำเนาต้องสร้างจากภาพที่แต่ง)
+    pub edited: bool,
 }
 
 pub(crate) fn load_items(conn: &Connection, selection: &SelectionSpec) -> Result<Vec<SourceRow>> {
-    const ROW: &str = "p.id, p.current_revision_id, l.filename, l.os_path, r.size, r.width, r.height
-        FROM photos p JOIN photo_locations l ON l.photo_id = p.id JOIN photo_revisions r ON r.id = p.current_revision_id";
+    const ROW: &str =
+        "p.id, p.current_revision_id, l.filename, l.os_path, r.size, r.width, r.height, pe.photo_id IS NOT NULL
+        FROM photos p JOIN photo_locations l ON l.photo_id = p.id JOIN photo_revisions r ON r.id = p.current_revision_id
+        LEFT JOIN photo_edits pe ON pe.photo_id = p.id";
     let map = |r: &rusqlite::Row| {
         Ok(SourceRow {
             photo_id: r.get(0)?,
@@ -202,6 +206,7 @@ pub(crate) fn load_items(conn: &Connection, selection: &SelectionSpec) -> Result
             size: r.get::<_, i64>(4)? as u64,
             width: r.get(5)?,
             height: r.get(6)?,
+            edited: r.get(7)?,
         })
     };
     match selection {
@@ -283,9 +288,9 @@ pub fn preview(
     let (mut items, mut samples) = (Vec::with_capacity(rows.len()), Vec::new());
     let (mut planned, mut unavailable, mut renamed, mut resized) = (0usize, 0usize, 0usize, 0usize);
     let (mut bytes, mut source_bytes) = (0u64, 0u64);
-    for SourceRow { photo_id, revision_id, filename, source_path, size, width, height } in rows {
+    for SourceRow { photo_id, revision_id, filename, source_path, size, width, height, edited } in rows {
         let planned_name = if Path::new(&source_path).is_file() {
-            let fit = fit_with(resize, watermark.is_some(), size, width, height);
+            let fit = fit_with(resize, watermark.is_some() || edited, size, width, height);
             let wanted = if fit.is_some() { jpeg_name(&filename) } else { filename.clone() };
             let name = unique_name(&wanted, &mut taken);
             planned += 1;
@@ -492,6 +497,7 @@ fn write_resized(
     sha: Option<&str>,
     fit: media::Fit,
     watermark: Option<&media::Watermark>,
+    edit: Option<&crate::edit::EditSettings>,
     tmp: &Path,
 ) -> Result<u64> {
     let bytes = media::read_file(src)?;
@@ -499,7 +505,7 @@ fn write_resized(
     if !same_file || sha.is_some_and(|s| s != util::hex(&Sha256::digest(&bytes))) {
         return Err(revision_changed());
     }
-    let jpeg = media::export_jpeg(&bytes, fit, watermark)?;
+    let jpeg = media::export_jpeg(&bytes, fit, watermark, edit)?;
     drop(bytes);
     let mut output = OpenOptions::new().write(true).create_new(true).open(tmp)?;
     output.write_all(&jpeg)?;
@@ -534,6 +540,7 @@ fn copy_one(
     dest: &Path,
     resize: Resize,
     watermark: Option<&media::Watermark>,
+    edit: Option<&crate::edit::EditSettings>,
 ) -> Result<(PathBuf, u64)> {
     let Revision { size, mtime_ns, ref sha, width, height } = *rev;
     let src = Path::new(&item.source_path);
@@ -545,8 +552,8 @@ fn copy_one(
     // เขียนไฟล์ชั่วคราวในปลายทางก่อน แล้วค่อยเปลี่ยนเป็นชื่อจริงเมื่อครบ: ไฟล์ชื่อจริงจึงสมบูรณ์เสมอ
     // วิธีย่อตัดสินจากข้อมูลของ revision เดียวกับตอนวางแผน จึงตรงกับนามสกุลที่วางแผนไว้
     let tmp = dest.join(format!(".puri-export-{}.part", util::new_id()));
-    let written = match fit_with(resize, watermark.is_some(), size as u64, width, height) {
-        Some(fit) => write_resized(src, stamp, sha.as_deref(), fit, watermark, &tmp),
+    let written = match fit_with(resize, watermark.is_some() || edit.is_some(), size as u64, width, height) {
+        Some(fit) => write_resized(src, stamp, sha.as_deref(), fit, watermark, edit, &tmp),
         None => write_copy(src, stamp, sha.as_deref(), &tmp),
     };
     let written = match written {
@@ -631,15 +638,23 @@ pub(crate) fn run(ctx: &JobCtx) -> Result<Outcome> {
             ctx.progress(total, done, failed, ctx.job.skipped, true)?;
             return Ok(JobCtx::outcome_for(c));
         }
-        let revisions: Vec<Result<Revision>> =
-            chunk.iter().map(|item| load_revision(conn, &item.revision_id)).collect();
+        // revision และการแต่ง อ่านในเธรดนี้ (ฐานข้อมูลอยู่เธรดเดียว) ก่อนแบ่งงานย่อ
+        let prepared: Vec<Result<(Revision, Option<crate::edit::EditSettings>)>> = chunk
+            .iter()
+            .map(|item| {
+                let edit = crate::edit::load(conn, &item.photo_id)?.map(|stored| stored.settings);
+                Ok((load_revision(conn, &item.revision_id)?, edit))
+            })
+            .collect();
         let results: Vec<Result<(PathBuf, u64)>> = std::thread::scope(|scope| {
             let handles: Vec<_> = chunk
                 .iter()
-                .zip(revisions)
-                .map(|(item, rev)| {
+                .zip(prepared)
+                .map(|(item, prepared)| {
                     let dest = &dest;
-                    scope.spawn(move || rev.and_then(|rev| copy_one(item, &rev, dest, resize, watermark)))
+                    scope.spawn(move || {
+                        prepared.and_then(|(rev, edit)| copy_one(item, &rev, dest, resize, watermark, edit.as_ref()))
+                    })
                 })
                 .collect();
             handles

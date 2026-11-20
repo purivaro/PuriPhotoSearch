@@ -260,7 +260,7 @@ fn prepare(item: &Item, rev: &Revision, resize: Resize) -> Result<Step> {
     let Some(fit) = resize.fit_for(stamp.size, rev.width, rev.height) else {
         return Ok(Step::Skip(NOTE_SMALL.into()));
     };
-    let out = match media::export_jpeg(&bytes, fit, None) {
+    let out = match media::export_jpeg(&bytes, fit, None, None) {
         Ok(out) => out,
         // ตั้งขนาดไฟล์เล็กเกินกว่ารูปนี้จะทำได้: ไม่ใช่ความผิดพลาดของไฟล์
         Err(e) if e.code == "INVALID_INPUT" => return Ok(Step::Skip(e.message)),

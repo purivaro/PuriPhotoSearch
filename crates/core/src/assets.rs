@@ -1,5 +1,6 @@
 //! เสิร์ฟภาพให้ UI ด้วย ID ทึบ (Blueprint 7.3): ไม่มี path จากฝั่ง UI และไม่เปิดสิทธิ์อ่านทั้งดิสก์
-//!   thumb/{photoId} · photo/{photoId} · face/{faceId} · draft/{previewId}/{draftId} · watermark/{watermarkId}
+//!   thumb/{photoId} · photo/{photoId} · original/{photoId} · face/{faceId} · draft/{previewId}/{draftId} · watermark/{watermarkId}
+//! รูปที่แต่งแล้ว: thumb/photo เป็นภาพที่แต่ง ส่วน original เป็นไฟล์ต้นฉบับเสมอ (ใช้ในหน้าแต่งภาพ)
 
 use crate::error::{AppError, Result};
 use crate::{media, App};
@@ -25,9 +26,14 @@ pub fn resolve(app: &App, request_path: &str) -> Result<Asset> {
     match (kind, extra) {
         ("thumb", None) => thumb(app, id),
         ("photo", None) => {
-            let path = PathBuf::from(crate::catalog::photo_path(&app.db(), id)?);
-            Ok(Asset { bytes: std::fs::read(&path)?, mime: media::mime_for(&path) })
+            // อ่านค่าที่แต่งให้เสร็จก่อน (ปล่อยฐานข้อมูล) เพราะ edited() ต้องใช้ฐานข้อมูลอีก
+            let stored = crate::edit::load(&app.db(), id)?;
+            match stored {
+                Some(stored) => edited(app, id, &stored, "view"),
+                None => original(app, id),
+            }
         }
+        ("original", None) => original(app, id),
         ("face", None) => face(app, id),
         ("watermark", None) => Ok(Asset {
             bytes: crate::watermark::image_bytes(&app.db(), id)?.ok_or_else(|| AppError::not_found("ลายน้ำ"))?,
@@ -55,7 +61,41 @@ pub fn resolve(app: &App, request_path: &str) -> Result<Asset> {
     }
 }
 
+fn original(app: &App, photo_id: &str) -> Result<Asset> {
+    let path = PathBuf::from(crate::catalog::photo_path(&app.db(), photo_id)?);
+    Ok(Asset { bytes: std::fs::read(&path)?, mime: media::mime_for(&path) })
+}
+
+/// ภาพที่แต่งแล้ว (เก็บใน cache ตามรหัสการแต่ง): ภาพย่อ หรือภาพสำหรับตัวดูภาพ
+fn edited(app: &App, photo_id: &str, stored: &crate::edit::Stored, kind: &str) -> Result<Asset> {
+    let cached = crate::edit::cache_path(&app.cache_dir, photo_id, &stored.edit_id, kind);
+    if let Ok(bytes) = std::fs::read(&cached) {
+        return Ok(jpeg(bytes));
+    }
+    let (edge, quality) = if kind == "thumb" { (media::THUMB_EDGE, 82) } else { (crate::edit::VIEW_EDGE, 90) };
+    let source = PathBuf::from(crate::catalog::photo_path(&app.db(), photo_id)?);
+    let bytes = match media::read_file(&source) {
+        Ok(original) => crate::edit::preview_jpeg(&original, &stored.settings, edge, quality)?,
+        // ต้นฉบับไม่พร้อม (ไดรฟ์ไม่ได้ต่อ): แต่งจากภาพย่อของแอปแทน ภาพเล็กลงแต่ตัด/หมุนถูก — ไม่เก็บลง cache
+        Err(_) => {
+            let thumb = plain_thumb(app, photo_id)?;
+            return Ok(jpeg(crate::edit::preview_jpeg(&thumb.bytes, &stored.settings, edge, quality)?));
+        }
+    };
+    let _ = media::write_cache_file(&cached, &bytes);
+    Ok(jpeg(bytes))
+}
+
 fn thumb(app: &App, photo_id: &str) -> Result<Asset> {
+    let stored = crate::edit::load(&app.db(), photo_id)?;
+    if let Some(stored) = stored {
+        // ภาพย่อของรูปที่แต่ง: ถ้ายังไม่เคยสร้าง อ่านต้นฉบับ (หรือภาพย่อเดิมเมื่อต้นฉบับไม่พร้อม)
+        return edited(app, photo_id, &stored, "thumb");
+    }
+    plain_thumb(app, photo_id)
+}
+
+fn plain_thumb(app: &App, photo_id: &str) -> Result<Asset> {
     let (revision_id, source): (String, String) = app
         .db()
         .query_row(

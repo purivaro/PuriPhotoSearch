@@ -53,12 +53,14 @@ export const ViewerStage = forwardRef<ViewerStageHandle, ViewerStageProps>(funct
   // ใบหน้าที่ยังไม่มีชื่อซึ่งกำลังเปิดช่องตั้งชื่ออยู่ (คลิกกรอบแล้วตั้งชื่อได้ทันที ไม่ต้องลากกรอบเอง)
   const [namingFaceId, setNamingFaceId] = useState<Id | null>(null);
 
-  const image: Size = natural ?? (details && details.width > 0 && details.height > 0 ? { w: details.width, h: details.height } : { w: 3, h: 2 });
+  const shown = details?.edit ? { w: details.edit.width, h: details.edit.height } : details ? { w: details.width, h: details.height } : null;
+  const image: Size = natural ?? (shown && shown.w > 0 && shown.h > 0 ? shown : { w: 3, h: 2 });
   const rect = imageRect(container, image, zoom, pan);
   const view = useRef({ container, image, zoom, pan });
   view.current = { container, image, zoom, pan };
 
-  // เปลี่ยนรูป = เริ่มมุมมองใหม่
+  // เปลี่ยนรูป (หรือแต่งรูปนี้ใหม่) = เริ่มมุมมองใหม่
+  const editId = details?.editId ?? null;
   useEffect(() => {
     setNatural(null);
     setFullLoaded(false);
@@ -69,7 +71,7 @@ export const ViewerStage = forwardRef<ViewerStageHandle, ViewerStageProps>(funct
     setDrag(null);
     setPending(null);
     setNamingFaceId(null);
-  }, [photoId]);
+  }, [photoId, editId]);
 
   useEffect(() => onZoomChange(zoom), [zoom, onZoomChange]);
 
@@ -170,8 +172,9 @@ export const ViewerStage = forwardRef<ViewerStageHandle, ViewerStageProps>(funct
 
   const original = Boolean(details?.originalAvailable) && !fullFailed;
   const draft = drag ? boxFromDrag(drag.start, drag.current) : pending;
-  const faces = details?.faces ?? [];
-  const thumbVersion = details?.revisionId;
+  // ใบหน้าที่อยู่นอกกรอบตัดไม่วาดบนภาพ (ยังอยู่ในรายการคนในรูป)
+  const faces = (details?.faces ?? []).filter((face) => !face.outsideCrop);
+  const thumbVersion = details?.editId ?? details?.revisionId;
 
   return (
     <div
@@ -190,7 +193,7 @@ export const ViewerStage = forwardRef<ViewerStageHandle, ViewerStageProps>(funct
         {/* ภาพย่อแสดงทันที แล้วภาพต้นฉบับค่อยขึ้นทับเมื่อโหลดเสร็จ */}
         {!thumbFailed && (
           <img
-            key={`thumb-${photoId}`}
+            key={`thumb-${photoId}-${thumbVersion}`}
             src={assetUrl('thumb', photoId, thumbVersion)}
             alt=""
             draggable={false}
@@ -204,8 +207,8 @@ export const ViewerStage = forwardRef<ViewerStageHandle, ViewerStageProps>(funct
         )}
         {details?.originalAvailable && !fullFailed && (
           <img
-            key={`full-${photoId}`}
-            src={assetUrl('photo', photoId, details.revisionId)}
+            key={`full-${photoId}-${thumbVersion}`}
+            src={assetUrl('photo', photoId, thumbVersion)}
             alt={details.filename}
             draggable={false}
             decoding="async"
@@ -297,7 +300,9 @@ export const ViewerStage = forwardRef<ViewerStageHandle, ViewerStageProps>(funct
           {details
             ? original
               ? fullLoaded
-                ? `ต้นฉบับ ${formatCount(image.w)} × ${formatCount(image.h)}`
+                ? details.edit
+                  ? `แต่งแล้ว ${formatCount(details.edit.width)} × ${formatCount(details.edit.height)}`
+                  : `ต้นฉบับ ${formatCount(image.w)} × ${formatCount(image.h)}`
                 : 'กำลังโหลดภาพต้นฉบับ…'
               : 'ภาพย่อ — ภาพต้นฉบับไม่พร้อม'
             : 'กำลังโหลดข้อมูลรูป…'}

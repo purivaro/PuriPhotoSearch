@@ -22,11 +22,16 @@ pub struct BBox {
 #[serde(rename_all = "camelCase")]
 pub struct FaceBox {
     pub id: String,
+    /// กรอบบนภาพที่แสดง (รูปที่แต่งแล้ว = บนภาพที่แต่ง)
     pub bbox: BBox,
+    /// กรอบที่เก็บไว้บนภาพเดิม (หน้าแต่งภาพใช้คำนวณว่าใบหน้าไหนจะอยู่นอกกรอบตัด)
+    pub source_bbox: BBox,
     pub origin: String,
     pub person: Option<PersonRef>,
     pub suggestion: Option<Suggestion>,
     pub record_version: i64,
+    /// อยู่นอกกรอบที่ตัดไว้ (รูปที่แต่งแล้ว) — ไม่วาดบนภาพ แต่ใบหน้าและชื่อยังอยู่ครบ
+    pub outside_crop: bool,
 }
 
 /// ข้อเสนอของ AI สำหรับใบหน้าที่ยังไม่มีคนที่ยืนยัน — ไม่ใช่คำยืนยัน
@@ -59,12 +64,15 @@ pub fn for_revision(conn: &Connection, revision_id: &str) -> Result<Vec<FaceBox>
         .prepare(&sql)?
         .query_map([revision_id], |r| {
             let person_id: Option<String> = r.get(7)?;
+            let bbox = BBox { x: r.get(1)?, y: r.get(2)?, w: r.get(3)?, h: r.get(4)? };
             Ok(FaceBox {
                 id: r.get(0)?,
-                bbox: BBox { x: r.get(1)?, y: r.get(2)?, w: r.get(3)?, h: r.get(4)? },
+                bbox,
+                source_bbox: bbox,
                 origin: r.get(5)?,
                 suggestion: None,
                 record_version: r.get(6)?,
+                outside_crop: false,
                 person: match person_id {
                     Some(id) => Some(PersonRef::new(id, r.get(8)?, r.get(9)?)),
                     None => None,
@@ -82,6 +90,15 @@ pub fn for_revision_with_suggestions(app: &App, conn: &Connection, revision_id: 
         for face in faces.iter_mut().filter(|f| f.person.is_none()) {
             if let Some((person_id, level)) = suggestions.get(&face.id) {
                 face.suggestion = Some(Suggestion { person: crate::review::person_ref(conn, person_id)?, level });
+            }
+        }
+    }
+    // รูปที่แต่งแล้ว: กรอบเก็บบนภาพเดิม แปลงไปยังภาพที่แต่งเพื่อแสดง
+    if let Some(g) = crate::edit::geometry_for_revision(conn, revision_id)? {
+        for face in &mut faces {
+            match g.map_box(face.bbox) {
+                Some(b) => face.bbox = b,
+                None => face.outside_crop = true,
             }
         }
     }
@@ -209,6 +226,11 @@ pub fn create_manual(app: &App, a: CreateManualArgs) -> Result<FaceMutationResul
             )
             .optional()?
             .ok_or_else(|| AppError::not_found("รูป"))?;
+        // วาดบนภาพที่แต่ง: เก็บเป็นพิกัดบนภาพเดิม
+        let bbox = match crate::edit::geometry_for_revision(&tx, &revision_id)? {
+            Some(g) => clean_bbox(g.unmap_box(bbox))?,
+            None => bbox,
+        };
         let (person_id, created) = resolve_person(&tx, a.person_id.as_deref(), a.new_person_name.as_deref())?;
         let face_id = util::new_id();
         let op = record_operation(

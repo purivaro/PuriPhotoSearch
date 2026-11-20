@@ -8,9 +8,11 @@ import type { PhotoResult } from '@/lib/ipc/types';
  * ภาพย่อของรูปหนึ่งใบ พร้อมสถานะที่ไม่ใช่ภาพ: กำลังเตรียม / อ่านไม่ได้
  * ภาพย่ออาจ crop เพื่อ layout ได้ ส่วนตัวดูภาพแสดงภาพเต็มเสมอ
  */
-export function PhotoThumb({ photo, className, fit = 'cover' }: { photo: Pick<PhotoResult, 'id' | 'revisionId' | 'thumbStatus' | 'filename'>; className?: string; fit?: 'cover' | 'contain' }) {
+export function PhotoThumb({ photo, className, fit = 'cover' }: { photo: Pick<PhotoResult, 'id' | 'revisionId' | 'editId' | 'thumbStatus' | 'filename'>; className?: string; fit?: 'cover' | 'contain' }) {
   const [failedKey, setFailedKey] = useState<string | null>(null);
-  const key = `${photo.id}:${photo.revisionId}`;
+  // รุ่นของภาพย่อ: เปลี่ยนเมื่อไฟล์เปลี่ยนหรือแต่งใหม่
+  const version = photo.editId ?? photo.revisionId;
+  const key = `${photo.id}:${version}`;
   if (photo.thumbStatus !== 'ready' || failedKey === key) {
     const failed = photo.thumbStatus === 'failed' || failedKey === key;
     return (
@@ -22,7 +24,7 @@ export function PhotoThumb({ photo, className, fit = 'cover' }: { photo: Pick<Ph
   }
   return (
     <img
-      src={assetUrl('thumb', photo.id, photo.revisionId)}
+      src={assetUrl('thumb', photo.id, version)}
       alt=""
       loading="lazy"
       decoding="async"

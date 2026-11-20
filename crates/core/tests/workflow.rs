@@ -944,7 +944,7 @@ fn t27e_shrink_interrupted_at_any_step_finishes_or_reverts_on_next_open() {
 
     // จำลองแอปปิดตรงแต่ละขั้น ด้วยไฟล์และสถานะเดียวกับที่งานจริงทิ้งไว้
     let original = std::fs::read(root.join("a.jpg")).unwrap();
-    let resized = puri_core::media::export_jpeg(&original, puri_core::media::Fit::LongEdge(1600), None).unwrap();
+    let resized = puri_core::media::export_jpeg(&original, puri_core::media::Fit::LongEdge(1600), None, None).unwrap();
     let sha = puri_core::util::hex(&sha2::Sha256::digest(&resized));
     let (w, h) = image::load_from_memory(&resized).map(|i| (i.width(), i.height())).unwrap();
     let conn = rusqlite::Connection::open(lib.tmp.path().join("data/library.sqlite")).unwrap();
@@ -1089,6 +1089,113 @@ fn t27f_export_with_watermark_marks_every_copy_and_never_the_original() {
     assert_eq!(job["state"], "blocked", "{job}");
     assert!(job["blockedReason"].as_str().unwrap().contains("ลายน้ำ"));
     assert_eq!(std::fs::read_dir(&dest3).unwrap().count(), 0);
+}
+
+#[test]
+fn edit_crop_and_rotate_keep_faces_names_and_the_original_file() {
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-21 แต่งภาพ");
+    std::fs::create_dir_all(&root).unwrap();
+    // ภาพ 400×300 (EXIF ไม่หมุน) วันถ่ายอยู่ใน EXIF
+    std::fs::write(root.join("group.jpg"), jpeg_with_exif(400, 300, 1, "2026:11:21 09:00:00")).unwrap();
+    lib.import(&root, "single_event", |_| true);
+    let before = tree_state(&root);
+    let id = lib.photo_id("group.jpg");
+    // ใบหน้าซ้ายและขวา พร้อมชื่อ
+    let left = lib.call(
+        "create_manual_face",
+        json!({ "requestId": new_id(), "photoId": id, "bbox": { "x": 0.1, "y": 0.2, "w": 0.1, "h": 0.2 }, "newPersonName": "คุณซ้าย" }),
+    )["faces"][0]["id"]
+        .clone();
+    lib.call(
+        "create_manual_face",
+        json!({ "requestId": new_id(), "photoId": id, "bbox": { "x": 0.7, "y": 0.2, "w": 0.1, "h": 0.2 }, "newPersonName": "คุณขวา" }),
+    );
+    let face_of = |details: &Value, name: &str| {
+        arr(&details["faces"]).iter().find(|f| f["person"]["displayName"] == name).unwrap().clone()
+    };
+
+    // ค่าที่ผิดถูกปฏิเสธ
+    for bad in [
+        json!({ "rotate": 45 }),
+        json!({ "straighten": 60.0 }),
+        json!({ "crop": { "x": 0.5, "y": 0.0, "w": 0.8, "h": 1.0 } }),
+    ] {
+        assert_eq!(
+            lib.try_call("save_photo_edit", json!({ "photoId": id, "settings": bad })).unwrap_err().code,
+            "INVALID_INPUT"
+        );
+    }
+
+    // หมุนตามเข็ม 90° แล้วตัดครึ่งล่างทิ้ง: ภาพที่แต่งเป็น 300×200 · ใบหน้าซ้ายเดิมย้ายไปอยู่ขวาบน
+    let settings = json!({ "rotate": 90, "straighten": 0.0, "crop": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 0.5 } });
+    let details = lib.call("save_photo_edit", json!({ "photoId": id, "settings": settings }));
+    assert_eq!((details["edit"]["width"].as_i64(), details["edit"]["height"].as_i64()), (Some(300), Some(200)));
+    assert!(details["editId"].is_string());
+    let l = face_of(&details, "คุณซ้าย");
+    assert_eq!(l["id"], left, "ใบหน้าเดิม ไม่ใช่ใบใหม่");
+    assert_eq!(l["outsideCrop"], false);
+    let close = |v: &Value, want: f64| (v.as_f64().unwrap() - want).abs() < 1e-6;
+    // (0.1, 0.2)–(0.2, 0.4) บนภาพเดิม → หมุน 90°: x = 1−0.4 … 1−0.2, y = 0.1 … 0.2 → ตัดครึ่งบน: y × 2
+    assert!(
+        close(&l["bbox"]["x"], 0.6)
+            && close(&l["bbox"]["w"], 0.2)
+            && close(&l["bbox"]["y"], 0.2)
+            && close(&l["bbox"]["h"], 0.2),
+        "{l}"
+    );
+    assert_eq!(face_of(&details, "คุณขวา")["outsideCrop"], true, "ใบหน้าขวาอยู่ครึ่งที่ตัดทิ้ง");
+    assert_eq!(lib.filenames(json!({ "text": "คุณขวา" })), ["group.jpg"], "ไม่แตะไฟล์: ชื่อและการค้นหายังอยู่ครบ");
+
+    // ภาพที่แสดงเป็นภาพที่แต่ง · ต้นฉบับยังเปิดได้สำหรับหน้าแต่งภาพ
+    let dims = |kind: &str| {
+        let a = puri_core::api::asset(&lib.app, &format!("{kind}/{id}")).unwrap();
+        let img = image::load_from_memory(&a.bytes).unwrap();
+        (img.width(), img.height())
+    };
+    assert_eq!(dims("photo"), (300, 200));
+    assert_eq!(dims("thumb"), (300, 200));
+    assert_eq!(dims("original"), (400, 300));
+
+    // วาดกรอบบนภาพที่แต่ง: เก็บเป็นพิกัดบนภาพเดิม และแสดงกลับตรงที่วาด
+    let drawn = lib.call(
+        "create_manual_face",
+        json!({ "requestId": new_id(), "photoId": id, "bbox": { "x": 0.1, "y": 0.5, "w": 0.2, "h": 0.3 }, "newPersonName": "คุณใหม่" }),
+    );
+    let shown = arr(&drawn["faces"]).iter().find(|f| f["person"]["displayName"] == "คุณใหม่").unwrap().clone();
+    assert!(
+        close(&shown["bbox"]["x"], 0.1) && close(&shown["bbox"]["y"], 0.5) && close(&shown["bbox"]["w"], 0.2),
+        "{shown}"
+    );
+    let conn = rusqlite::Connection::open(lib.tmp.path().join("data/library.sqlite")).unwrap();
+    let stored: (f64, f64) = conn
+        .query_row("SELECT bbox_x, bbox_y FROM faces WHERE id = ?1", [shown["id"].as_str().unwrap()], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    // บนภาพที่แต่ง (0.1, 0.5) = บนภาพหลังหมุน (0.1, 0.25)–(0.3, 0.4) → ภาพเดิม x = 0.25, y = 1−0.3 = 0.7
+    assert!((stored.0 - 0.25).abs() < 1e-6 && (stored.1 - 0.7).abs() < 1e-6, "{stored:?}");
+
+    // ส่งออก: ได้ภาพที่แต่งเต็มความละเอียด พร้อมวันถ่าย
+    let dest = lib.tmp.path().join("ส่งออกที่แต่ง");
+    std::fs::create_dir_all(&dest).unwrap();
+    let plan = lib
+        .call("preview_export", json!({ "selection": { "kind": "explicit", "photoIds": [id] }, "destination": dest }));
+    lib.call("start_export", json!({ "planId": plan["planId"], "requestId": new_id() }));
+    lib.run_jobs();
+    let out = std::fs::read(dest.join("group.jpg")).unwrap();
+    let img = image::load_from_memory(&out).unwrap();
+    assert_eq!((img.width(), img.height()), (300, 200));
+    let exif = exif::Reader::new().read_from_container(&mut std::io::Cursor::new(&out)).unwrap();
+    assert!(exif.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY).is_some());
+
+    // กลับเป็นต้นฉบับ: กรอบเดิม ภาพเดิม · ไฟล์ต้นฉบับไม่เคยถูกแตะ
+    let details = lib.call("reset_photo_edit", json!({ "photoId": id }));
+    assert!(details["edit"].is_null() && details["editId"].is_null());
+    let l = face_of(&details, "คุณซ้าย");
+    assert!(close(&l["bbox"]["x"], 0.1) && close(&l["bbox"]["y"], 0.2));
+    assert_eq!(dims("photo"), (400, 300));
+    assert_eq!(tree_state(&root), before, "แต่งภาพไม่แตะไฟล์ต้นฉบับ");
 }
 
 #[test]
