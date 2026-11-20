@@ -1,19 +1,19 @@
 {
-  "version": "2.0.0-alpha.7",
-  "notes": "• หน้าบุคคล: คนที่ปักหมุดขึ้นมาอยู่ข้างบนก่อนเสมอ ทั้งเรียงตามชื่อและตามจำนวนรูป",
-  "pub_date": "2026-11-20T01:49:29Z",
+  "version": "2.0.0-alpha.8",
+  "notes": "• ปุ่มสลับธีมสว่าง/มืดที่มุมล่างของเมนูซ้าย กดได้จากทุกหน้า (ตัวเลือก “ตามระบบ” ยังอยู่ในหน้าตั้งค่า)",
+  "pub_date": "2026-11-20T02:24:14Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZStkNGg1QmhTVlZyNU0yd0QyUHhQTXVFcVJXS3pSMEh5MStvczlwcmJuZVRXTVdTVDl1QSs4WjU1a3dwdFlvMmx2L2hCbkRwcGpvRXBuK0ROM0F1ZnBIQWNIS1JzK3dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MTM5Mjg5CWZpbGU6UHVyaSBQaG90byBTZWFyY2guYXBwLnRhci5negl2ZXJzaW9uOjIuMC4wLWFscGhhLjcKSnlQa0ZUTnFoS0x2Um5XSHhhV1VFSXk0ancyOTZVbnVXNG1tekpGSFd6dW56Y0EzZUx2N3k1OFh0Y2ZSNFVSdU1NaWwxTG4rNFBuWmV0OTNqT0ZmQ0E9PQo=",
-      "url": "https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.7/PuriPhotoSearch-mac.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZStkNGg1QmhTVmJBbmpLVjl3aVV5R0I3cWdabXRuVGt4ckx1dzhOWm96ZlhwZzhna2U2WW9wYmhRSG8rZXJPWC84RFVqSC9oUC9uczNIVkdBK3g5TmlMTGM2bFl0dEF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MTQxMzc3CWZpbGU6UHVyaSBQaG90byBTZWFyY2guYXBwLnRhci5negl2ZXJzaW9uOjIuMC4wLWFscGhhLjgKQU9BODBTbXNXdEpVOVF6QzFuZVB6U3h6ZnpaWGM1bEd1allIVHdIb1l2NGFGNEhUZXRJUjFGaFJlMm40SmdOakZncEQ3WStqZXdqYXlwTERYc2VpRFE9PQo=",
+      "url": "https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.8/PuriPhotoSearch-mac.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZStkNGg1QmhTVlZyNU0yd0QyUHhQTXVFcVJXS3pSMEh5MStvczlwcmJuZVRXTVdTVDl1QSs4WjU1a3dwdFlvMmx2L2hCbkRwcGpvRXBuK0ROM0F1ZnBIQWNIS1JzK3dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MTM5Mjg5CWZpbGU6UHVyaSBQaG90byBTZWFyY2guYXBwLnRhci5negl2ZXJzaW9uOjIuMC4wLWFscGhhLjcKSnlQa0ZUTnFoS0x2Um5XSHhhV1VFSXk0ancyOTZVbnVXNG1tekpGSFd6dW56Y0EzZUx2N3k1OFh0Y2ZSNFVSdU1NaWwxTG4rNFBuWmV0OTNqT0ZmQ0E9PQo=",
-      "url": "https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.7/PuriPhotoSearch-mac.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZStkNGg1QmhTVmJBbmpLVjl3aVV5R0I3cWdabXRuVGt4ckx1dzhOWm96ZlhwZzhna2U2WW9wYmhRSG8rZXJPWC84RFVqSC9oUC9uczNIVkdBK3g5TmlMTGM2bFl0dEF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MTQxMzc3CWZpbGU6UHVyaSBQaG90byBTZWFyY2guYXBwLnRhci5negl2ZXJzaW9uOjIuMC4wLWFscGhhLjgKQU9BODBTbXNXdEpVOVF6QzFuZVB6U3h6ZnpaWGM1bEd1allIVHdIb1l2NGFGNEhUZXRJUjFGaFJlMm40SmdOakZncEQ3WStqZXdqYXlwTERYc2VpRFE9PQo=",
+      "url": "https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.8/PuriPhotoSearch-mac.app.tar.gz"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZStkNGg1QmhTVmFtcmFoK2tKTVd4STNGK2Q4MjBtby9pSU9QVHp5aVFQS0RZc0FHTk13d3loWVo4cnJKVG1hN1NBT2xoRGg4cEJIWkRURm1ZK2ZhZEpuaWUvckdWdVFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MTM4ODQ2CWZpbGU6UHVyaSBQaG90byBTZWFyY2hfMi4wLjAtYWxwaGEuN194NjQtc2V0dXAuZXhlCXZlcnNpb246Mi4wLjAtYWxwaGEuNwpTc1N1Q3hWMllGQURaa1FYVmNwRlUrbzNOdlNJdXd6UC9pMGk4aUtNVWdIVVNZY2VXcm1oUjk5cjQybzNHa1U0SHQ4bnlQMm5HS3FpdjBvZkR2VGNDdz09Cg==",
-      "url": "https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.7/PuriPhotoSearch-windows-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZStkNGg1QmhTVlFPMVhnS3hGU0l0Q0VUc2pSK2g3d1FkRTg0Q1lBN0tndk1mVEczekovVlZrQ0tDRVF2UmNxQVBQWlNmMUs3ZDNnTzByOUxoc1NzNCtldk9DK0ljTUFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MTQxMjE3CWZpbGU6UHVyaSBQaG90byBTZWFyY2hfMi4wLjAtYWxwaGEuOF94NjQtc2V0dXAuZXhlCXZlcnNpb246Mi4wLjAtYWxwaGEuOApWSnEwLzhLUWhab3JQTy9rdlBTY3ZzaVRUeWtkTEtmdXh5eWo2b0ZudTIvNGd4MXYydlZ5ZnFwREFHZi9BNmVVYnRRaUdtT1ZjekVxYytRREpKM29CZz09Cg==",
+      "url": "https://github.com/purivaro/PuriPhotoSearch/releases/download/v2.0.0-alpha.8/PuriPhotoSearch-windows-setup.exe"
     }
   }
 }
