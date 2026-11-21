@@ -544,7 +544,7 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
             ok(export::preview(app, &selection, &destination, resize, watermark)?)
         }
         SavePhotoEdit { photo_id, settings } => ok(edit::save(app, &photo_id, settings)?),
-        ResetPhotoEdit { photo_id } => ok(edit::save(app, &photo_id, edit::EditSettings::default())?),
+        ResetPhotoEdit { photo_id } => ok(edit::reset(app, &photo_id)?),
         ApplyPhotoEdits { selection, settings, parts } => ok(edit::apply_many(app, &selection, &settings, parts)?),
         ListEditPresets {} => ok(preset::list(&app.db())?),
         SaveEditPreset { name, adjust } => ok(preset::save(app, &name, &adjust)?),

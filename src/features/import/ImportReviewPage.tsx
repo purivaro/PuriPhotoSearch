@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { toast } from 'sonner';
-import { Calendar, Check, CircleAlert, Folder, FolderPlus, FolderSearch, Image as ImageIcon, Info, Lock, Pencil, SquareArrowOutUpRight, TriangleAlert } from 'lucide-react';
+import { Aperture, Calendar, Check, CircleAlert, Folder, FolderPlus, FolderSearch, Image as ImageIcon, Info, Lock, Pencil, SquareArrowOutUpRight, TriangleAlert } from 'lucide-react';
 import { Page, PageHeader, useDocumentTitle } from '@/app/PageLayout';
 import { useStartImport, type ImportLocationState } from '@/app/navigation';
 import { Button } from '@/components/ui/Button';
@@ -205,9 +205,10 @@ function ReviewForm({
   // เปิดสวิตช์ได้เมื่อพร้อมใช้ หรือกำลังดาวน์โหลดอยู่ (ดาวน์โหลดเสร็จแล้วแอปจะวิเคราะห์รูปในคลังต่อเอง)
   const faceAnalysisAvailable = faceState === 'ready' || faceState === 'installing';
   const [watch, setWatch] = useState(true);
-  // ไฟล์ RAW: เปิดไว้เมื่อโฟลเดอร์มีแต่ RAW · มี JPEG ด้วยปิดไว้ก่อน (มักเป็นไฟล์ที่ export จาก RAW เดียวกัน — DECISIONS ข้อ 25)
+  // ไฟล์ RAW ที่ไม่มี JPEG คู่: เปิดไว้เมื่อโฟลเดอร์มีแต่ RAW · มี JPEG ด้วยปิดไว้ก่อน (DECISIONS ข้อ 25–26) · RAW ที่เป็นคู่รวมกับ JPEG เสมอ
   const [includeRaw, setIncludeRaw] = useState(() => rawDefault(preview));
   const rawTotal = preview.single.rawCount;
+  const rawPaired = preview.single.rawPairedCount;
   const [showTitleErrors, setShowTitleErrors] = useState(false);
   // requestId เดียวต่อการยืนยันชุดเดิม: กดซ้ำ/ลองใหม่ไม่สร้างกิจกรรมซ้ำ; แก้รายการแล้วจึงเป็นคำขอใหม่
   const requestId = useRef<string | null>(null);
@@ -343,6 +344,15 @@ function ReviewForm({
         </InlineNotice>
       )}
 
+      {rawPaired > 0 && (
+        <InlineNotice tone="brand" icon={<Aperture aria-hidden />} className="mt-3">
+          <span data-testid="import-raw-paired">
+            ไฟล์ RAW {formatCount(rawPaired)} ไฟล์เป็นคู่ของ JPEG ที่ส่งออกจาก RAW เดียวกัน — รวมเป็นรูปเดียว แสดง JPEG ตามเดิม
+            และใช้ RAW ตอนแต่งภาพ (ไฟล์ทั้งสองไม่ถูกแก้ไข)
+          </span>
+        </InlineNotice>
+      )}
+
       <div className="mt-4 flex flex-wrap items-start gap-x-8 gap-y-3">
         {rawTotal > 0 && (
           <Switch
@@ -352,10 +362,14 @@ function ReviewForm({
               setIncludeRaw(on);
             }}
             testId="import-include-raw"
-            label={`รวมไฟล์ RAW (${formatCount(rawTotal)} ไฟล์)`}
+            label={
+              rawPaired > 0
+                ? `รวมไฟล์ RAW ที่ไม่มี JPEG คู่ (${formatCount(rawTotal)} ไฟล์)`
+                : `รวมไฟล์ RAW (${formatCount(rawTotal)} ไฟล์)`
+            }
             description={
               preview.single.photoCount > 0
-                ? 'โฟลเดอร์นี้มีทั้ง JPEG และ RAW — ถ้า JPEG เป็นไฟล์ที่ export มาจาก RAW เดียวกัน รูปจะซ้ำกัน · แต่งจาก RAW ได้ละเอียดที่สุด'
+                ? 'RAW ที่ไม่ได้ส่งออกเป็น JPEG — เพิ่มเป็นรูปแยก · แต่งจาก RAW ได้ละเอียดที่สุด ส่งออกเป็น JPEG'
                 : 'แต่งจากข้อมูล RAW ได้ละเอียดที่สุด · ไฟล์ RAW ไม่ถูกแก้ไข ส่งออกเป็น JPEG'
             }
           />
@@ -594,6 +608,7 @@ function DraftRow({
                 : edit.selected
                   ? 'จะเพิ่มใหม่ทั้งหมด'
                   : 'ยังไม่เลือก'}
+          {draft.rawPairedCount > 0 ? ` · RAW คู่ ${formatCount(draft.rawPairedCount)}` : ''}
           {draft.rawCount > 0 ? ` · RAW ${formatCount(draft.rawCount)}${includeRaw ? '' : ' (ไม่รวม)'}` : ''}
           {draft.unsupportedCount > 0 ? ` · ไม่รองรับ ${formatCount(draft.unsupportedCount)}` : ''}
         </p>

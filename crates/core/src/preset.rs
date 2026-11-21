@@ -281,6 +281,13 @@ pub fn parse_lightroom(text: &str) -> Result<Parsed> {
             unsupported.push(format!("{label} {}", if bipolar { signed(v) } else { format!("{v}") }));
         }
     }
+    if attr(text, "LensProfileEnable") == Some("1") {
+        unsupported.push("แก้เลนส์ (Lens Corrections)".into());
+    }
+    // ฟิลเตอร์ AI ของ Lightroom (Denoise / Raw Details / Super Resolution)
+    if text.contains("<crs:Filters>") {
+        unsupported.push(if text.contains("Filter/Title/Denoise") { "Denoise (AI)" } else { "Enhance (AI)" }.into());
+    }
     let mut masks: Vec<String> = text
         .match_indices("crs:CorrectionName=\"")
         .filter_map(|(i, m)| {

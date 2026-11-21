@@ -492,6 +492,37 @@ fn write_copy(src: &Path, stamp: media::FileStamp, sha: Option<&str>, tmp: &Path
     Ok(total)
 }
 
+/// การแต่งของรูปที่จะส่งออก และไฟล์ RAW คู่เมื่อแต่งจาก RAW
+pub(crate) struct Edit {
+    settings: crate::edit::EditSettings,
+    raw: Option<Box<crate::pair::RawBase>>,
+}
+
+impl Edit {
+    fn load(conn: &Connection, photo_id: &str) -> Result<Option<Edit>> {
+        let Some(stored) = crate::edit::load(conn, photo_id)? else { return Ok(None) };
+        let raw = if stored.settings.from_raw {
+            match crate::pair::raw_edit(conn, photo_id)? {
+                crate::pair::RawEdit::Ready(base) => Some(base),
+                crate::pair::RawEdit::Unusable(why) => return Err(AppError::new("SOURCE_UNAVAILABLE", why)),
+                crate::pair::RawEdit::None => {
+                    return Err(AppError::new("SOURCE_UNAVAILABLE", "ไม่พบไฟล์ RAW คู่ที่ใช้แต่งรูปนี้"))
+                }
+            }
+        } else {
+            None
+        };
+        Ok(Some(Edit { settings: stored.settings, raw }))
+    }
+}
+
+fn raw_unavailable(base: &crate::pair::RawBase) -> AppError {
+    AppError::new(
+        "SOURCE_UNAVAILABLE",
+        format!("เปิดไฟล์ RAW คู่ “{}” ไม่ได้ (รูปนี้แต่งจาก RAW) — ต่อไดรฟ์แล้วส่งออกใหม่", util::file_name(&base.raw_path)),
+    )
+}
+
 /// อ่านต้นฉบับทั้งไฟล์ ตรวจว่าตรงกับที่คลังรู้จัก แล้วเขียนสำเนาที่ย่อแล้วลง `tmp` (เวลาแก้ไขไฟล์เท่าต้นฉบับ)
 fn write_resized(
     src: &Path,
@@ -499,7 +530,7 @@ fn write_resized(
     sha: Option<&str>,
     fit: media::Fit,
     watermark: Option<&media::Watermark>,
-    edit: Option<&crate::edit::EditSettings>,
+    edit: Option<&Edit>,
     tmp: &Path,
 ) -> Result<u64> {
     let bytes = media::read_file(src)?;
@@ -507,7 +538,14 @@ fn write_resized(
     if !same_file || sha.is_some_and(|s| s != util::hex(&Sha256::digest(&bytes))) {
         return Err(revision_changed());
     }
-    let jpeg = media::export_jpeg(&bytes, fit, watermark, edit)?;
+    // แต่งจาก RAW คู่: ภาพมาจากไฟล์ RAW (ไม่พร้อม = ส่งออกรูปนี้ไม่ได้ ดีกว่าได้ภาพที่ไม่ได้แต่งโดยไม่รู้ตัว)
+    let raw_bytes = match edit.and_then(|e| e.raw.as_deref()) {
+        Some(base) => Some(media::read_file(&base.raw_path).map_err(|_| raw_unavailable(base))?),
+        None => None,
+    };
+    let job =
+        edit.map(|e| media::ExportEdit { settings: &e.settings, raw: raw_bytes.as_deref().zip(e.raw.as_deref()) });
+    let jpeg = media::export_jpeg(&bytes, fit, watermark, job.as_ref())?;
     drop(bytes);
     let mut output = OpenOptions::new().write(true).create_new(true).open(tmp)?;
     output.write_all(&jpeg)?;
@@ -542,7 +580,7 @@ fn copy_one(
     dest: &Path,
     resize: Resize,
     watermark: Option<&media::Watermark>,
-    edit: Option<&crate::edit::EditSettings>,
+    edit: Option<&Edit>,
 ) -> Result<(PathBuf, u64)> {
     let Revision { size, mtime_ns, ref sha, width, height } = *rev;
     let src = Path::new(&item.source_path);
@@ -642,12 +680,9 @@ pub(crate) fn run(ctx: &JobCtx) -> Result<Outcome> {
             return Ok(JobCtx::outcome_for(c));
         }
         // revision และการแต่ง อ่านในเธรดนี้ (ฐานข้อมูลอยู่เธรดเดียว) ก่อนแบ่งงานย่อ
-        let prepared: Vec<Result<(Revision, Option<crate::edit::EditSettings>)>> = chunk
+        let prepared: Vec<Result<(Revision, Option<Edit>)>> = chunk
             .iter()
-            .map(|item| {
-                let edit = crate::edit::load(conn, &item.photo_id)?.map(|stored| stored.settings);
-                Ok((load_revision(conn, &item.revision_id)?, edit))
-            })
+            .map(|item| Ok((load_revision(conn, &item.revision_id)?, Edit::load(conn, &item.photo_id)?)))
             .collect();
         let results: Vec<Result<(PathBuf, u64)>> = std::thread::scope(|scope| {
             let handles: Vec<_> = chunk

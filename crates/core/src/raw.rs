@@ -68,6 +68,8 @@ pub struct RawInfo {
     pub make: String,
     pub model: String,
     pub shot: Shot,
+    /// จุดขาว (CIE xy) ของแสงตามที่กล้องบันทึก — คิดจากสมดุลแสงขาวกับเมทริกซ์สีของกล้อง · ไม่มีข้อมูล = None
+    pub white_xy: Option<[f64; 2]>,
 }
 
 /// ข้อมูลการถ่ายที่ใส่ใน EXIF ของสำเนา JPEG ที่ส่งออก
@@ -107,7 +109,8 @@ impl RawInfo {
         let (w, h) = cropped_dims(raw);
         let (w, h) = if exif.orientation >= 5 { (h, w) } else { (w, h) };
         let shot = shot_of(&md);
-        RawInfo { width: w as u32, height: h as u32, exif, make: md.make, model: md.model, shot }
+        let white_xy = white_of(raw);
+        RawInfo { width: w as u32, height: h as u32, exif, make: md.make, model: md.model, shot, white_xy }
     }
 
     /// segment APP1 "Exif" สำหรับ JPEG ที่สร้างจาก RAW: ยี่ห้อ/รุ่นกล้อง Orientation = 1 (ภาพตั้งตรงแล้ว) วันถ่าย
@@ -219,6 +222,24 @@ fn orientation_of(raw: &RawImage) -> u8 {
         O::Transverse => 7,
         O::Rotate270 => 8,
     }
+}
+
+/// จุดขาวของแสงตามกล้อง: สีที่เซนเซอร์เห็นของวัตถุสีเทาใต้แสงนั้น (ส่วนกลับของตัวคูณสมดุลแสงขาว) แปลงเป็น XYZ
+/// ด้วยเมทริกซ์สีของกล้อง (แบบเดียวกับ AsShotNeutral ของ DNG — ใช้เมทริกซ์ของแสง D65 ตัวเดียว จึงเป็นค่าโดยประมาณ)
+fn white_of(raw: &RawImage) -> Option<[f64; 2]> {
+    let c = raw.wb_coeffs;
+    // ตัวคูณ 1 ทุกช่อง = กล้องปรับสมดุลแสงขาวมาในข้อมูลแล้ว (เช่น RAW ขนาด M ของ Sony) — ไม่รู้แสงจริง
+    let unit = c[..3].iter().all(|v| (v - 1.0).abs() < 1e-6);
+    if unit || !c[..3].iter().all(|v| v.is_finite() && *v > 0.0) {
+        return None;
+    }
+    let neutral = [c[1] / c[0], 1.0, c[1] / c[2]];
+    let cam2xyz = matrix::pseudo_inverse(CameraToRgb::xyz_to_camera(raw)?);
+    let xyz = matrix::multiply_row1(&cam2xyz, &neutral);
+    let sum = xyz.iter().sum::<f32>();
+    (sum > 0.0 && xyz.iter().all(|v| v.is_finite()))
+        .then(|| [(xyz[0] / sum) as f64, (xyz[1] / sum) as f64])
+        .filter(|[x, y]| *x > 0.0 && *y > 0.0)
 }
 
 /// ขนาดหลังตัดขอบ (ก่อนหมุน)
@@ -337,14 +358,14 @@ impl CameraToRgb {
         } else {
             [1.0; 3]
         };
-        let xyz2cam = Self::xyz_to_camera(raw);
+        let identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let xyz2cam = Self::xyz_to_camera(raw).unwrap_or(identity);
         let rgb2cam = matrix::normalize(matrix::multiply(&xyz2cam, &SRGB_TO_XYZ_D65));
         CameraToRgb { wb, cam2rgb: matrix::pseudo_inverse(rgb2cam) }
     }
 
-    /// เมทริกซ์ XYZ → กล้อง ของแสง D65 (แปลงจากแสงอื่นด้วย Bradford ถ้ากล้องมีแต่แสงอื่น) — ไม่มีเลยใช้เมทริกซ์เอกลักษณ์
-    fn xyz_to_camera(raw: &RawImage) -> [[f32; 3]; 3] {
-        let identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    /// เมทริกซ์ XYZ → กล้อง ของแสง D65 (แปลงจากแสงอื่นด้วย Bradford ถ้ากล้องมีแต่แสงอื่น) — ไม่มีเลย = None
+    fn xyz_to_camera(raw: &RawImage) -> Option<[[f32; 3]; 3]> {
         let order = [
             Illuminant::D65,
             Illuminant::D55,
@@ -354,13 +375,9 @@ impl CameraToRgb {
             Illuminant::A,
             Illuminant::Flash,
         ];
-        let Some((illu, flat)) = raw.color_matrix_find_first(order) else { return identity };
-        let Some(m) = matrix::transform_1d::<3, 3>(flat.get(..9).unwrap_or(&[])) else { return identity };
-        if illu == Illuminant::D65 {
-            m
-        } else {
-            adapt_bradford(&illu, &Illuminant::D65, &m)
-        }
+        let (illu, flat) = raw.color_matrix_find_first(order)?;
+        let m = matrix::transform_1d::<3, 3>(flat.get(..9)?)?;
+        Some(if illu == Illuminant::D65 { m } else { adapt_bradford(&illu, &Illuminant::D65, &m) })
     }
 
     fn apply(&self, c: [f32; 3]) -> [f32; 3] {

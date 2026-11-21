@@ -16,6 +16,7 @@ function draft(partial: Partial<EventDraft> & { draftId: string }): EventDraft {
     unsupportedCount: 0,
     rawCount: 0,
     rawNewCount: 0,
+    rawPairedCount: 0,
     readable: true,
     unreadableReason: null,
     existingEventId: null,

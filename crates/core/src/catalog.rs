@@ -341,6 +341,25 @@ pub struct PhotoResult {
     pub edit_id: Option<String>,
     /// ไฟล์ RAW จากกล้อง: หน้าแต่งภาพใช้สูตรของ RAW (DECISIONS ข้อ 25)
     pub raw: bool,
+    /// ชื่อไฟล์ RAW คู่ของรูปนี้ (DECISIONS ข้อ 26) — None = ไม่มีคู่
+    pub raw_pair: Option<String>,
+}
+
+/// รูปที่มีคู่ RAW (DECISIONS ข้อ 26): สิ่งที่หน้าแต่งภาพต้องรู้
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawPairInfo {
+    pub filename: String,
+    /// JPEG ที่ส่งออกจาก Lightroom (มีค่าที่แต่งไว้) · false = JPEG จากกล้อง (ชื่อเดียวกันในโฟลเดอร์เดียวกัน)
+    pub lightroom: bool,
+    /// หน้าแต่งภาพแต่งจาก RAW: ภาพต้นทาง `rawframe/{id}` และสูตรของ RAW
+    pub edit_from_raw: bool,
+    /// ค่าเริ่มต้นเมื่อแต่งจาก RAW (ค่าจาก Lightroom) — "ไม่ได้แต่ง" ของรูปนี้
+    pub start: Option<crate::edit::EditSettings>,
+    /// ส่วนที่แต่งใน Lightroom แต่ทำตามไม่ได้ (Mask, Denoise, แก้เลนส์ …)
+    pub unsupported: Vec<String>,
+    /// ใช้ RAW ตอนนี้ไม่ได้: เหตุผล
+    pub problem: Option<String>,
 }
 
 /// การแต่งของรูป (DECISIONS ข้อ 17)
@@ -389,6 +408,7 @@ pub struct PhotoDetails {
     pub edit: Option<PhotoEdit>,
     /// ภาพที่ผู้ช่วย AI สร้างจากรูปในคลัง: ที่มา (DECISIONS ข้อ 23)
     pub ai_origin: Option<crate::assistant::generate::AiOrigin>,
+    pub raw_pair_info: Option<RawPairInfo>,
 }
 
 const PHOTO_FROM: &str = "FROM photos p
@@ -397,10 +417,12 @@ const PHOTO_FROM: &str = "FROM photos p
   JOIN event_photos ep ON ep.photo_id = p.id
   JOIN events e ON e.id = ep.event_id
   LEFT JOIN photo_edits pe ON pe.photo_id = p.id
+  LEFT JOIN photo_raw_pairs rp ON rp.photo_id = p.id
   WHERE p.catalog_state = 'active' AND e.catalog_state = 'active'";
 
 const PHOTO_COLS: &str = "p.id, r.id, l.filename, e.id, e.title, r.taken_at_local, r.date_source, r.width, r.height, \
-                          r.thumbnail_status, l.available, l.os_path, r.size, e.event_date, r.decode_error, pe.edit_id";
+                          r.thumbnail_status, l.available, l.os_path, r.size, e.event_date, r.decode_error, pe.edit_id, \
+                          rp.filename";
 
 fn photo_from_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoResult> {
     let filename: String = r.get(2)?;
@@ -421,6 +443,7 @@ fn photo_from_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoResult> {
         suggested_people: vec![],
         rejected_faces: vec![],
         edit_id: r.get(15)?,
+        raw_pair: r.get(16)?,
     })
 }
 
@@ -716,6 +739,7 @@ pub fn create_selection(app: &App, p: &SearchParams) -> Result<SelectionSnapshot
 }
 
 pub fn get_photo_details(app: &App, photo_id: &str) -> Result<PhotoDetails> {
+    crate::pair::ensure_start(app, photo_id)?;
     let conn = &app.db();
     let sql = format!("SELECT {PHOTO_COLS} {PHOTO_FROM} AND p.id = ?1");
     let (photo, path, file_size, event_date, decode_error) = conn
@@ -747,7 +771,58 @@ pub fn get_photo_details(app: &App, photo_id: &str) -> Result<PhotoDetails> {
         Some(sha) => crate::assistant::generate::origin(conn, &sha)?,
         None => None,
     };
-    Ok(PhotoDetails { photo, path, file_size, event_date, original_available, decode_error, faces, edit, ai_origin })
+    let raw_pair_info = match &photo.raw_pair {
+        Some(filename) => Some(raw_pair_info(conn, &photo.id, filename, edit.as_ref().map(|e| &e.settings))?),
+        None => None,
+    };
+    Ok(PhotoDetails {
+        photo,
+        path,
+        file_size,
+        event_date,
+        original_available,
+        decode_error,
+        faces,
+        edit,
+        ai_origin,
+        raw_pair_info,
+    })
+}
+
+fn raw_pair_info(
+    conn: &Connection,
+    photo_id: &str,
+    filename: &str,
+    stored: Option<&crate::edit::EditSettings>,
+) -> Result<RawPairInfo> {
+    let lightroom = crate::pair::load(conn, photo_id)?.is_some_and(|p| p.lightroom.is_some());
+    let mut info = RawPairInfo {
+        filename: filename.to_string(),
+        lightroom,
+        edit_from_raw: false,
+        start: None,
+        unsupported: vec![],
+        problem: None,
+    };
+    // การแต่งเดิมที่ทำกับ JPEG ยังเป็นของ JPEG (ค่าเดิมมีความหมายเท่าเดิม) จนกว่าจะกลับเป็นต้นฉบับ
+    if stored.is_some_and(|s| !s.from_raw) {
+        info.problem = Some("รูปนี้แต่งไว้จาก JPEG ก่อนพบไฟล์ RAW คู่ — กลับเป็นต้นฉบับแล้วแต่งใหม่เพื่อแต่งจาก RAW".into());
+        return Ok(info);
+    }
+    match crate::pair::raw_edit(conn, photo_id)? {
+        crate::pair::RawEdit::Ready(base) => {
+            info.edit_from_raw = true;
+            info.start = Some(base.start.clone());
+            info.unsupported = base.unsupported.clone();
+        }
+        crate::pair::RawEdit::Unusable(why) => {
+            // แต่งจาก RAW ไว้แล้วแต่ตอนนี้ไฟล์ไม่พร้อม: ยังต้องแต่งจาก RAW (หน้าแต่งภาพบอกเหตุผล)
+            info.edit_from_raw = stored.is_some();
+            info.problem = Some(why);
+        }
+        crate::pair::RawEdit::None => {}
+    }
+    Ok(info)
 }
 
 /// ตำแหน่งไฟล์ต้นฉบับของรูป (ใช้ภายใน Rust เท่านั้น; UI ส่งมาแค่ ID)

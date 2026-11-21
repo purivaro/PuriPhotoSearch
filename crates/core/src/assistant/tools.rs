@@ -455,16 +455,16 @@ impl PhotoTools {
 
     /// แต่งรูปหนึ่งรูป (จำค่าเดิมไว้ให้ย้อนได้) — คืนค่าที่บันทึก
     fn apply_edit(&self, photo_id: &str, patch: &Value, reset: bool) -> Result<EditSettings, String> {
-        let current = { edit::load(&self.app.db(), photo_id).map_err(|e| e.message)? }.map(|s| s.settings);
+        // รูปคู่ RAW: ค่าที่ "ไม่ได้แต่ง" คือค่าจาก Lightroom (DECISIONS ข้อ 26)
+        let state = edit::state(&self.app, photo_id).map_err(|e| e.message)?;
         let mut value =
-            serde_json::to_value(if reset { EditSettings::default() } else { current.clone().unwrap_or_default() })
-                .map_err(|e| e.to_string())?;
+            serde_json::to_value(if reset { &state.unedited } else { &state.current }).map_err(|e| e.to_string())?;
         merge(&mut value, patch);
         let next: EditSettings = serde_json::from_value(value).map_err(|e| format!("Invalid settings: {e}"))?;
-        if current.as_ref() == Some(&next) || (current.is_none() && next.is_identity()) {
+        if next == state.current || (state.stored.is_none() && next.is_identity()) {
             return Ok(next);
         }
-        self.turn.remember(photo_id, current);
+        self.turn.remember(photo_id, state.stored);
         edit::save(&self.app, photo_id, next.clone()).map_err(|e| e.message)?;
         Ok(next)
     }
@@ -518,7 +518,7 @@ impl PhotoTools {
                 continue;
             }
             self.turn.remember(id, current);
-            edit::save(&self.app, id, EditSettings::default()).map_err(|e| e.message)?;
+            edit::reset(&self.app, id).map_err(|e| e.message)?;
             done.push(id.clone());
         }
         self.turn.push(Event::Changed { photo_ids: done.clone() });
@@ -552,8 +552,7 @@ impl PhotoTools {
         let mut done = vec![];
         for id in &ids {
             // แทนแสงและสีทั้งชุด (ไม่ merge) แต่คงการตัด/หมุนของแต่ละรูป
-            let current =
-                { edit::load(&self.app.db(), id).map_err(|e| e.message)? }.map(|s| s.settings).unwrap_or_default();
+            let current = edit::state(&self.app, id).map_err(|e| e.message)?.current;
             let mut base = serde_json::to_value(&current).map_err(|e| e.to_string())?;
             base["adjust"] = adjust.clone();
             let next: EditSettings = serde_json::from_value(base).map_err(|e| e.to_string())?;
@@ -613,14 +612,9 @@ impl PhotoTools {
     fn compare_to_reference(&self, args: &Value) -> Result<ToolOutput, String> {
         let id = str_arg(args, "photo_id").ok_or("photo_id is required")?;
         let RefInfo { look: reference, name, style } = self.reference_info()?;
-        let current =
-            { edit::load(&self.app.db(), id).map_err(|e| e.message)? }.map(|s| s.settings).unwrap_or_default();
-        // คิดจากรูปหลังตัด/หมุนแต่ก่อนปรับแสงสี: ค่าที่เสนอเป็นค่าจริง เรียกซ้ำหลังใส่แล้วได้คำตอบเดิม (ไม่สะสม)
-        let bytes = crate::assets::source_or_plain_thumb(&self.app, id).map_err(|e| e.message)?;
-        let geometry_only = EditSettings { adjust: Default::default(), ..current.clone() };
-        let path = { crate::catalog::photo_path(&self.app.db(), id).map_err(|e| e.message)? };
-        let profile = crate::assets::profile_of(std::path::Path::new(&path));
-        let base = edit::render_small(&bytes, &geometry_only, 256, profile).map_err(|e| e.message)?;
+        let current = edit::state(&self.app, id).map_err(|e| e.message)?.current;
+        // คิดจากรูปหลังตัด/หมุนแต่ก่อนปรับแสงสี (รูปคู่ RAW: จากไฟล์ RAW): ค่าที่เสนอเป็นค่าจริง เรียกซ้ำได้คำตอบเดิม (ไม่สะสม)
+        let (base, profile) = edit::render_base(&self.app, id, &current, 256).map_err(|e| e.message)?;
         let s = look::suggest(&base, &current.adjust, &reference, style.as_ref(), profile);
         let (gap_now, gap_after) = (look::distance(&s.now, &reference), look::distance(&s.after, &reference));
         let mut notes = String::new();

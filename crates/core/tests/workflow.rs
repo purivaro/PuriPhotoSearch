@@ -2106,3 +2106,194 @@ fn a_broken_raw_file_fails_alone_with_a_reason() {
     assert_eq!(good["thumbStatus"], "ready");
     assert_eq!(tree_state(&root), before);
 }
+
+/// JPEG ที่ "Lightroom ส่งออก" จาก DNG สังเคราะห์: ภาพจาก RAW ในกรอบที่ตัด/เอียง ค่าแสง `exposure`
+/// พร้อม EXIF ของกล้อง และ XMP แบบที่ Lightroom เขียน (`xmp` = None → JPEG จากกล้อง ไม่มี XMP)
+fn exported_jpeg(dng: &[u8], frame: puri_core::pair::Frame, exposure: f64, xmp: Option<&str>) -> Vec<u8> {
+    let info = puri_core::raw::info(dng).unwrap();
+    let (fw, fh) = frame.output_size((info.width, info.height), info.exif.orientation);
+    let base = puri_core::pair::RawBase {
+        raw_path: Default::default(),
+        frame,
+        jpeg: (fw.round() as u32, fh.round() as u32),
+        start: Default::default(),
+        unsupported: vec![],
+    };
+    let settings = puri_core::edit::EditSettings {
+        adjust: puri_core::adjust::Adjust { exposure, ..Default::default() },
+        from_raw: true,
+        ..Default::default()
+    };
+    let img = puri_core::pair::render(dng, &base, &settings, u32::MAX).unwrap();
+    let mut encoded = vec![];
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 95).encode_image(&img).unwrap();
+    let mut out = encoded[..2].to_vec();
+    out.extend(info.exif_app1());
+    if let Some(xmp) = xmp {
+        let payload = [b"http://ns.adobe.com/xap/1.0/\0".as_slice(), xmp.as_bytes()].concat();
+        out.extend([0xFF, 0xE1]);
+        out.extend(((payload.len() + 2) as u16).to_be_bytes());
+        out.extend(payload);
+    }
+    out.extend(&encoded[2..]);
+    out
+}
+
+#[test]
+fn raw_and_jpeg_of_one_shot_become_one_photo_edited_from_the_raw() {
+    use puri_core::pair::Frame;
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-21 ส่งออกจาก Lightroom");
+    std::fs::create_dir_all(root.join("sony_raw")).unwrap();
+    // ฉากในแสงเชิงเส้น: ครึ่งซ้ายส้ม ครึ่งขวาฟ้า แถบบนไล่สีเทา (ตัด/เอียงแล้วเนื้อหาเลื่อนให้เห็น)
+    let scene = puri_core::raw::Linear::from_fn(150, 100, |x, y| {
+        if y < 30 {
+            let v = 0.05 + 0.5 * x as f32 / 149.0;
+            image::Rgb([v, v, v])
+        } else if x < 75 {
+            image::Rgb([0.40, 0.12, 0.04])
+        } else {
+            image::Rgb([0.05, 0.18, 0.36])
+        }
+    });
+    // ภาพแนวตั้ง (Orientation 6): กรอบของ Lightroom เป็นพิกัดบนภาพตามแนวที่เก็บในไฟล์
+    let shot = puri_core::raw::test_dng(&scene, 6, "2026:11:21 09:00:00");
+    let frame = Frame { left: 0.04, top: 0.02, right: 0.97, bottom: 0.95, angle: 1.5 };
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+       crs:RawFileName="SHOT001.DNG" crs:WhiteBalance="As Shot" crs:Exposure2012="+0.50" crs:Texture="-10"
+       crs:HasCrop="True" crs:CropLeft="0.04" crs:CropTop="0.02" crs:CropRight="0.97" crs:CropBottom="0.95"
+       crs:CropAngle="1.5" crs:LensProfileEnable="1"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(root.join("SHOT001.jpg"), exported_jpeg(&shot, frame, 0.5, Some(xmp))).unwrap();
+    std::fs::write(root.join("sony_raw/SHOT001.DNG"), &shot).unwrap();
+    // RAW+JPEG จากกล้อง: ชื่อเดียวกันในโฟลเดอร์เดียวกัน ไม่มี XMP
+    let camera = puri_core::raw::test_dng(&scene, 1, "2026:11:21 09:01:00");
+    std::fs::write(root.join("DSC0002.JPG"), exported_jpeg(&camera, Frame::FULL, 0.0, None)).unwrap();
+    std::fs::write(root.join("DSC0002.DNG"), &camera).unwrap();
+    // RAW ที่ไม่ได้ส่งออก และ JPEG ที่ไฟล์ RAW ไม่ได้อยู่ในโฟลเดอร์นี้
+    std::fs::write(root.join("sony_raw/SHOT009.DNG"), puri_core::raw::test_dng(&scene, 1, "2026:11:21 09:09:00"))
+        .unwrap();
+    std::fs::write(
+        root.join("SHOT003.jpg"),
+        exported_jpeg(&camera, Frame::FULL, 0.0, Some(&xmp.replace("SHOT001.DNG", "SHOT003.DNG"))),
+    )
+    .unwrap();
+    let before = tree_state(&root);
+
+    // ตรวจรายการ: RAW ที่เป็นคู่ไม่นับเป็นรูป · สวิตช์รวม RAW มีผลกับ RAW ที่ไม่มีคู่เท่านั้น
+    let preview = lib.preview(&root);
+    let single = &preview["single"];
+    assert_eq!(
+        (single["photoCount"].as_i64(), single["rawPairedCount"].as_i64(), single["rawCount"].as_i64()),
+        (Some(3), Some(2), Some(1)),
+        "{single}"
+    );
+    assert_eq!(preview["suggestedMode"], "single_event", "โฟลเดอร์ RAW ของ JPEG ไม่ใช่งานแยก");
+    lib.import(&root, "single_event", |_| true);
+    assert_eq!(lib.filenames(json!({})), vec!["DSC0002.JPG", "SHOT001.jpg", "SHOT003.jpg"], "รูปละหนึ่ง ไม่มี RAW ซ้ำ");
+    let page = lib.query(json!({}));
+    let pairs: Vec<&Value> = arr(&page["items"]).iter().map(|i| &i["rawPair"]).collect();
+    assert_eq!(pairs, vec![&json!("DSC0002.DNG"), &json!("SHOT001.DNG"), &Value::Null]);
+
+    // ข้อมูลรูป: ขนาด ใบหน้า วันที่ ยังเป็นของ JPEG · แต่งจาก RAW ได้ ค่าเริ่มต้นจาก Lightroom (ค่าแสงใกล้ +0.5)
+    let id = lib.photo_id("SHOT001.jpg");
+    let details = lib.call("get_photo_details", json!({ "photoId": id }));
+    let jpeg_dims = (details["width"].as_u64().unwrap() as u32, details["height"].as_u64().unwrap() as u32);
+    assert!(jpeg_dims.1 > jpeg_dims.0, "แนวตั้ง: {jpeg_dims:?}");
+    let info = &details["rawPairInfo"];
+    assert_eq!((info["lightroom"].as_bool(), info["editFromRaw"].as_bool()), (Some(true), Some(true)), "{info}");
+    assert!(info["problem"].is_null(), "{info}");
+    let start = info["start"].clone();
+    assert_eq!(start["fromRaw"], true);
+    let exposure = start["adjust"]["exposure"].as_f64().unwrap();
+    assert!((exposure - 0.5).abs() < 0.15, "ค่าแสงที่ทำให้ภาพเท่ากับ JPEG: {exposure}");
+    let unsupported: Vec<&str> = arr(&info["unsupported"]).iter().filter_map(Value::as_str).collect();
+    assert_eq!(unsupported, vec!["Texture -10", "แก้เลนส์ (Lens Corrections)"]);
+    let camera_info =
+        lib.call("get_photo_details", json!({ "photoId": lib.photo_id("DSC0002.JPG") }))["rawPairInfo"].clone();
+    assert_eq!((camera_info["lightroom"].as_bool(), camera_info["editFromRaw"].as_bool()), (Some(false), Some(true)));
+    assert!(camera_info["start"]["adjust"]["exposure"].as_f64().unwrap().abs() < 0.15, "{camera_info}");
+    assert!(lib.call("get_photo_details", json!({ "photoId": lib.photo_id("SHOT003.jpg") }))["rawPairInfo"].is_null());
+
+    // ต้นทางของหน้าแต่งภาพ: ภาพจาก RAW ในกรอบเดียวกับ JPEG
+    let asset = |path: String| puri_core::api::asset(&lib.app, &path).unwrap().bytes;
+    let rgb = |bytes: &[u8]| image::load_from_memory(bytes).unwrap().to_rgb8();
+    let frame_img = rgb(&asset(format!("rawframe/{id}")));
+    assert_eq!(frame_img.dimensions(), jpeg_dims);
+
+    // แต่ง: ค่าที่ไม่ได้แต่งของรูปคู่คือค่าเริ่มต้น — แต่งต่อจากนั้นได้ภาพจาก RAW ที่แทบเท่ากับ JPEG (+ ที่ปรับ)
+    let original = rgb(&asset(format!("original/{id}")));
+    let mut settings = start.clone();
+    settings["adjust"]["contrast"] = json!(1.0);
+    let saved = lib.call("save_photo_edit", json!({ "photoId": id, "settings": settings }));
+    assert_eq!(saved["edit"]["settings"]["fromRaw"], true, "{saved}");
+    let edited = rgb(&asset(format!("photo/{id}")));
+    assert_eq!(edited.dimensions(), original.dimensions());
+    let diff = edited.pixels().zip(original.pixels()).map(|(a, b)| (a[1] as f64 - b[1] as f64).abs()).sum::<f64>()
+        / (edited.width() * edited.height()) as f64;
+    assert!(diff < 6.0, "กรอบและโทนตรงกับ JPEG: ต่างเฉลี่ย {diff}");
+    // บันทึกค่าเริ่มต้นกลับไป = ไม่ได้แต่ง (แสดง JPEG ตามเดิม) · กลับเป็นต้นฉบับ = ลบการแต่ง ไม่ใช่ RAW ที่ไม่ได้แต่ง
+    assert!(lib.call("save_photo_edit", json!({ "photoId": id, "settings": start }))["edit"].is_null());
+    settings["adjust"]["exposure"] = json!(1.5);
+    lib.call("save_photo_edit", json!({ "photoId": id, "settings": settings }));
+    assert!(lib.call("reset_photo_edit", json!({ "photoId": id }))["edit"].is_null());
+    let brighter = lib.call("save_photo_edit", json!({ "photoId": id, "settings": settings }));
+    assert_eq!(brighter["edit"]["settings"]["fromRaw"], true);
+
+    // ผู้ช่วย AI: แต่งต่อจากค่าของ Lightroom (ไม่ใช่ RAW ที่ไม่ได้แต่ง) · ย้อนแล้วกลับเป็น JPEG ตามเดิม
+    lib.call("reset_photo_edit", json!({ "photoId": id }));
+    let (tools, turn) = puri_core::assistant::test_tools(&lib.app).unwrap();
+    let out = tools.call("edit_photo", json!({ "photo_id": id, "adjust": { "contrast": 12 } }));
+    assert!(!out.is_error, "{:?}", out.content);
+    let by_ai = lib.call("get_photo_details", json!({ "photoId": id }))["edit"]["settings"].clone();
+    assert_eq!((by_ai["fromRaw"].as_bool(), by_ai["adjust"]["contrast"].as_f64()), (Some(true), Some(12.0)));
+    assert_eq!(by_ai["adjust"]["exposure"], start["adjust"]["exposure"], "คงค่าแสงที่ตรงกับ JPEG");
+    assert_eq!(lib.call("ai_undo", json!({ "turnId": turn })), json!(1));
+    assert!(lib.call("get_photo_details", json!({ "photoId": id }))["edit"].is_null());
+    lib.call("save_photo_edit", json!({ "photoId": id, "settings": settings }));
+
+    // ส่งออก: ภาพจาก RAW ตามที่แต่ง ขนาดเท่า JPEG · EXIF (วันถ่าย) จาก JPEG
+    let dest = lib.tmp.path().join("ส่งออกรูปคู่");
+    std::fs::create_dir_all(&dest).unwrap();
+    let (_, report) = run_export(&lib, json!({ "kind": "explicit", "photoIds": [id] }), &dest);
+    assert_eq!((report["copied"].as_i64(), report["failed"].as_i64()), (Some(1), Some(0)), "{report}");
+    let out = std::fs::read(dest.join("SHOT001.jpg")).unwrap();
+    let exported = rgb(&out);
+    assert_eq!(exported.dimensions(), jpeg_dims);
+    let mean =
+        |img: &image::RgbImage| img.pixels().map(|p| p[1] as f64).sum::<f64>() / (img.width() * img.height()) as f64;
+    assert!(mean(&exported) > mean(&original) + 15.0, "สว่างขึ้นตามที่แต่ง");
+    let exif = exif::Reader::new().read_from_container(&mut std::io::Cursor::new(&out)).unwrap();
+    assert_eq!(
+        exif.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY).unwrap().display_value().to_string(),
+        "2026-11-21 09:00:00"
+    );
+    assert_eq!(tree_state(&root), before, "ไฟล์ JPEG และ RAW ไม่ถูกแตะ");
+
+    // เลือกรวม RAW: เฉพาะ RAW ที่ไม่มีคู่เป็นรูปเพิ่ม · ตรวจรูปใหม่ไม่ซ้ำ
+    let preview = lib.preview(&root);
+    let drafts = drafts_of(&preview, "single_event", |_| true);
+    let result = lib.call(
+        "commit_import",
+        json!({ "previewId": preview["previewId"], "requestId": new_id(), "mode": "single_event", "drafts": drafts,
+                "analyzeFaces": true, "watch": true, "includeRaw": true }),
+    );
+    lib.run_jobs();
+    let names = vec!["DSC0002.JPG", "SHOT001.jpg", "SHOT003.jpg", "SHOT009.DNG"];
+    assert_eq!(lib.filenames(json!({})), names);
+    let event = result["eventIds"][0].as_str().unwrap().to_string();
+    lib.call("rescan_event", json!({ "eventId": event }));
+    lib.run_jobs();
+    assert_eq!(lib.filenames(json!({})), names);
+
+    // ไฟล์ RAW หาย: ยังเป็นรูปเดิม บอกเหตุ · ภาพที่แต่งจาก RAW แสดง JPEG ตามเดิมแทน (ไม่ล้ม) · ส่งออกบอกเหตุรายไฟล์
+    std::fs::rename(root.join("sony_raw/SHOT001.DNG"), lib.tmp.path().join("SHOT001.DNG")).unwrap();
+    lib.call("rescan_event", json!({ "eventId": event }));
+    lib.run_jobs();
+    let details = lib.call("get_photo_details", json!({ "photoId": id }));
+    assert!(details["rawPairInfo"]["problem"].as_str().unwrap().contains("SHOT001.DNG"), "{details}");
+    assert_eq!(details["rawPairInfo"]["editFromRaw"], true, "ยังแต่งจาก RAW ไว้");
+    assert_eq!(rgb(&asset(format!("photo/{id}"))).dimensions(), jpeg_dims);
+    let (_, report) = run_export(&lib, json!({ "kind": "explicit", "photoIds": [id] }), &dest);
+    assert_eq!(report["failed"].as_i64(), Some(1), "{report}");
+}

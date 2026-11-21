@@ -117,13 +117,17 @@ export function PhotoGrid({ items, label, selection, onSelectionChange, onOpen, 
                   </span>
                 )}
                 <PeopleBadge photo={photo} />
-                {photo.raw && (
+                {(photo.raw || photo.rawPair) && (
                   <span
-                    title="ไฟล์ RAW จากกล้อง — แต่งจากข้อมูลเซนเซอร์ ส่งออกเป็น JPEG"
+                    title={
+                      photo.rawPair
+                        ? `มีไฟล์ RAW คู่ (${photo.rawPair}) — ภาพที่เห็นคือ JPEG แต่งจาก RAW ได้`
+                        : 'ไฟล์ RAW จากกล้อง — แต่งจากข้อมูลเซนเซอร์ ส่งออกเป็น JPEG'
+                    }
                     data-testid="photo-card-raw"
                     className="absolute top-1.5 right-1.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-bold tracking-wide text-white"
                   >
-                    RAW
+                    {photo.rawPair ? 'RAW+JPEG' : 'RAW'}
                   </span>
                 )}
               </button>
