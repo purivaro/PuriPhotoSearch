@@ -84,7 +84,9 @@ export function EventDetailPage() {
     onSuccess: (result) => {
       void qc.invalidateQueries({ queryKey: ['jobs'] });
       void qc.invalidateQueries({ queryKey: ['events'] });
-      toast.success(result.jobIds.length > 0 ? 'เริ่มวิเคราะห์ใบหน้าเบื้องหลังแล้ว ชื่อที่ยืนยันไว้ไม่เปลี่ยน' : 'ไม่มีรูปที่ต้องวิเคราะห์เพิ่มในงานนี้');
+      toast.success(
+        result.jobIds.length > 0 ? 'เริ่มสแกนใบหน้าเบื้องหลังแล้ว รูปที่แต่งไว้ใช้ภาพที่แต่ง · ชื่อที่ยืนยันไว้ไม่เปลี่ยน' : 'ไม่มีรูปที่ต้องสแกนเพิ่มในงานนี้',
+      );
     },
     onError: (error) => toast.error(errorMessage(error)),
   });
@@ -157,21 +159,44 @@ export function EventDetailPage() {
               {middleEllipsis(data.folderPath, 64)}
             </span>
           </div>
-          {faceReady && data.photoCount > 0 && (
-            <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
-              <span className="inline-flex items-center gap-1.5 text-muted" data-testid="event-face-progress">
-                <ScanFace className="size-4" aria-hidden />
-                {facesComplete ? 'วิเคราะห์ใบหน้าครบแล้ว' : `วิเคราะห์ใบหน้า ${formatCount(data.faceAnalyzedCount)}/${formatCount(data.photoCount)}`}
-              </span>
-              {!facesComplete && !job && (
-                <Button size="sm" busy={analyze.isPending} disabled={!data.sourceAvailable} onClick={() => analyze.mutate()} data-testid="event-analyze-faces">
-                  วิเคราะห์ใบหน้าที่เหลือ
-                </Button>
-              )}
-              <Link to={`/review?event=${data.id}`} className="font-semibold text-action hover:underline" data-testid="event-review-link">
-                ตรวจสอบใบหน้าของงานนี้
-              </Link>
+          {faceReady && data.photoCount > 0 && data.faceAnalyzedCount === 0 && !job ? (
+            // แต่งก่อน สแกนทีหลัง (หลวงพี่เลือก 21 พ.ย. 2569): ยังไม่ได้สแกนทั้งงาน — สแกนจากภาพที่แต่งในคลัง ไม่สร้างไฟล์ใหม่
+            <div className="mt-3 flex max-w-[640px] flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-brand-line bg-brand-soft/70 px-4 py-3" data-testid="event-scan-prompt">
+              <ScanFace className="size-5 shrink-0 text-action" aria-hidden />
+              <p className="min-w-0 flex-1 text-sm text-ink">
+                <span className="font-semibold">ยังไม่ได้สแกนใบหน้าของงานนี้</span>
+                <span className="block text-[13px] text-muted">แต่งรูปเสร็จแล้วกดสแกน — แอปหาใบหน้าจากภาพที่แต่งแล้ว ไฟล์ต้นฉบับไม่ถูกแตะ</span>
+              </p>
+              <Button
+                variant="primary"
+                size="sm"
+                icon={<ScanFace className="size-4" aria-hidden />}
+                busy={analyze.isPending}
+                disabled={!data.sourceAvailable}
+                onClick={() => analyze.mutate()}
+                data-testid="event-analyze-faces"
+              >
+                สแกนใบหน้า {formatCount(data.photoCount)} รูป
+              </Button>
             </div>
+          ) : (
+            faceReady &&
+            data.photoCount > 0 && (
+              <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
+                <span className="inline-flex items-center gap-1.5 text-muted" data-testid="event-face-progress">
+                  <ScanFace className="size-4" aria-hidden />
+                  {facesComplete ? 'สแกนใบหน้าครบแล้ว' : `สแกนใบหน้าแล้ว ${formatCount(data.faceAnalyzedCount)}/${formatCount(data.photoCount)}`}
+                </span>
+                {!facesComplete && !job && (
+                  <Button size="sm" busy={analyze.isPending} disabled={!data.sourceAvailable} onClick={() => analyze.mutate()} data-testid="event-analyze-faces">
+                    สแกนใบหน้าที่เหลือ
+                  </Button>
+                )}
+                <Link to={`/review?event=${data.id}`} className="font-semibold text-action hover:underline" data-testid="event-review-link">
+                  ตรวจสอบใบหน้าของงานนี้
+                </Link>
+              </div>
+            )
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2.5 self-center">

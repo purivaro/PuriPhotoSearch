@@ -338,6 +338,19 @@ struct ThumbItem {
     path: PathBuf,
     filename: String,
     stamp: FileStamp,
+    /// แต่งก่อน สแกนทีหลัง (หลวงพี่เลือก 21 พ.ย. 2569): รูปที่แต่งแสงสีไว้แล้วหาใบหน้าจากภาพที่แต่ง (เฉพาะแสงสี/เฉพาะส่วน/รีทัช
+    /// ไม่ตัดไม่หมุน — ตำแหน่งใบหน้ายังเป็นพิกัดของภาพเดิม และใบหน้าที่อยู่นอกกรอบตัดยังถูกหา) · None = หาจากไฟล์ตามเดิม
+    edited: Option<crate::edit::EditSettings>,
+}
+
+/// ค่าที่ใช้หาใบหน้าจากภาพที่แต่ง: การแต่งของรูปที่ไม่ได้แต่งจาก RAW คู่ (รูปคู่หาใบหน้าจาก JPEG ที่แต่งมาแล้ว) โดยไม่ตัด/หมุน/เอียง
+fn edited_for_faces(settings_json: Option<String>) -> Option<crate::edit::EditSettings> {
+    let s: crate::edit::EditSettings = serde_json::from_str(&settings_json?).ok()?;
+    if s.from_raw {
+        return None;
+    }
+    let light = crate::edit::EditSettings { rotate: 0, straighten: 0.0, crop: None, ..s };
+    (!light.adjust.is_neutral() || light.has_masks() || light.has_retouch()).then_some(light)
 }
 
 fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
@@ -459,17 +472,27 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
 
     // ── ขั้นเตรียมข้อมูลรูป (+ วิเคราะห์ใบหน้าเมื่อโมเดลพร้อม): ทำเฉพาะ revision ที่ยังค้าง จึงทำต่อจากเดิมได้โดยไม่ประมวลผลซ้ำ
     // ไม่มีโมเดล = ทำเฉพาะข้อมูลรูป; รูปยังดูและค้นได้ และจะถูกวิเคราะห์เมื่อโมเดลพร้อม
-    let analyzer = ctx.ai().analyzer();
+    // วิเคราะห์ใบหน้าเมื่อผู้ใช้ต้องการ (สวิตช์ตอนเพิ่มโฟลเดอร์ / ปุ่มสแกนใบหน้า — `sources.analyze_faces`) · กิจกรรมที่ไม่ได้ผูกกับ
+    // โฟลเดอร์ใดวิเคราะห์ตามเดิม · "แต่งก่อน สแกนทีหลัง" = ปิดไว้ แล้วกดสแกนเมื่อแต่งเสร็จ
+    let wanted: bool = conn.query_row(
+        "SELECT NOT EXISTS(SELECT 1 FROM event_source_bindings WHERE event_id = ?1)
+             OR EXISTS(SELECT 1 FROM event_source_bindings b JOIN sources s ON s.id = b.source_id
+                       WHERE b.event_id = ?1 AND s.analyze_faces = 1)",
+        [&event_id],
+        |r| r.get(0),
+    )?;
+    let analyzer = ctx.ai().analyzer().filter(|_| wanted);
     let space = ctx.ai().space().unwrap_or_default();
     ctx.stage("thumbnail")?;
     let items: Vec<ThumbItem> = conn
         .prepare(
             "SELECT r.id, p.id, l.os_path, l.filename, r.size, r.mtime_ns, r.thumbnail_status = 'pending',
-                    ?2 AND r.face_status = 'not_analyzed'
+                    ?2 AND r.face_status = 'not_analyzed', pe.settings
              FROM event_photos ep
              JOIN photos p ON p.id = ep.photo_id
              JOIN photo_revisions r ON r.id = p.current_revision_id
              JOIN photo_locations l ON l.photo_id = p.id
+             LEFT JOIN photo_edits pe ON pe.photo_id = p.id
              WHERE ep.event_id = ?1 AND l.available = 1 AND (r.thumbnail_status = 'pending'
                     OR (?2 AND r.face_status = 'not_analyzed' AND r.thumbnail_status = 'ready'))
              ORDER BY l.filename_key",
@@ -483,6 +506,7 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
                 path: PathBuf::from(r.get::<_, String>(2)?),
                 filename: r.get(3)?,
                 stamp: FileStamp { size: r.get::<_, i64>(4)? as u64, mtime_ns: r.get(5)? },
+                edited: edited_for_faces(r.get(8)?),
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -836,7 +860,10 @@ fn prepare_photo(
         media::write_cache_file(&crate::thumb_path(cache_dir, &item.revision_id), &p.thumbnail_jpeg)?;
     }
     let faces = match analyzer {
-        Some(a) if item.need_faces => Some(a.analyze(&bytes)),
+        Some(a) if item.need_faces => Some(match &item.edited {
+            Some(settings) => edited_jpeg(&bytes, &item.path, settings).and_then(|jpeg| a.analyze(&jpeg)),
+            None => a.analyze(&bytes),
+        }),
         _ => None,
     };
     // ทำครอปตอนที่ไฟล์ยังอยู่ในมือ (ถอดรหัสครั้งเดียวต่อรูป): คิวตรวจสอบใบหน้าไม่ต้องเปิดต้นฉบับทีละใบอีก
@@ -848,6 +875,17 @@ fn prepare_photo(
         _ => vec![],
     };
     Ok(Prepared { processed, faces, crops })
+}
+
+/// ภาพที่แต่งแล้ว (แสงสี เฉพาะส่วน รีทัช — ไม่ตัดไม่หมุน) เป็น JPEG ด้านยาว 1600 สำหรับหาใบหน้า
+fn edited_jpeg(bytes: &[u8], path: &Path, settings: &crate::edit::EditSettings) -> Result<Vec<u8>> {
+    let img = media::decode_upright(bytes, 1600)?;
+    let profile =
+        if crate::raw::is_raw_path(path) { crate::adjust::Profile::Raw } else { crate::adjust::Profile::Display };
+    let out = crate::edit::render_with(img, settings, profile).into_rgb8();
+    let mut jpeg = std::io::Cursor::new(Vec::new());
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 92).encode_image(&out).map_err(AppError::internal)?;
+    Ok(jpeg.into_inner())
 }
 
 /// งานเบา ๆ ตอน worker ว่าง: สร้างเวกเตอร์ให้ใบหน้าตัวอย่างที่นำเข้าไว้ เมื่อโมเดลพร้อม; คืน true ถ้ายังมีงานเหลือ
