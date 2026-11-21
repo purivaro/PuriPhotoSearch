@@ -240,6 +240,9 @@ pub struct Lightroom {
     pub white_balance: Option<[f64; 2]>,
     /// ส่วนที่ทำตามไม่ได้ (Mask, Denoise, แก้เลนส์ …)
     pub unsupported: Vec<String>,
+    /// Lightroom เปิดแก้เลนส์ (Enable Profile Corrections) — แก้ความโค้งตามข้อมูลของกล้องให้ภาพจาก RAW ตรงกรอบเดียวกัน
+    #[serde(default)]
+    pub lens: bool,
 }
 
 impl Lightroom {
@@ -257,7 +260,8 @@ impl Lightroom {
             (adjust.temperature, adjust.tint) = (0.0, 0.0);
         }
         let unsupported = parsed.unsupported.into_iter().filter(|u| !u.starts_with("อุณหภูมิสี")).collect();
-        Some(Lightroom { frame: Frame::from_xmp(xmp), adjust, white_balance, unsupported })
+        let lens = attr(xmp, "LensProfileEnable") == Some("1");
+        Some(Lightroom { frame: Frame::from_xmp(xmp), adjust, white_balance, unsupported, lens })
     }
 }
 
@@ -405,7 +409,8 @@ pub struct Pair {
 
 /// รุ่นของวิธีคิดค่าเริ่มต้น — เปลี่ยนวิธีคิดเมื่อไร (เช่นทำตามค่าของ Lightroom ได้เพิ่ม) เพิ่มเลขนี้ ค่าที่เก็บไว้จะถูกคิดใหม่
 /// · 3 = อ่านค่าของ Lightroom ใหม่จาก JPEG และทำตาม Texture/Clarity/Dehaze ได้ (DECISIONS ข้อ 27)
-const START_VERSION: u32 = 3;
+/// · 4 = แก้เลนส์ตามข้อมูลของกล้อง กรอบภาพจาก RAW จึงตรงกับ JPEG + หน้าตาพื้นฐานแบบ Adobe Portrait (DECISIONS ข้อ 34–35)
+const START_VERSION: u32 = 4;
 
 /// ค่าเริ่มต้นเมื่อแต่งจาก RAW (คิดจากไฟล์ RAW ครั้งแรกที่ต้องใช้ แล้วเก็บไว้)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -416,6 +421,12 @@ struct Start {
     problem: Option<String>,
     #[serde(default)]
     version: u32,
+    /// แก้เลนส์ด้วยข้อมูลในไฟล์ RAW ได้ (ไม่ต้องบอกว่าแก้เลนส์ของ Lightroom ทำตามไม่ได้)
+    #[serde(default)]
+    lens: bool,
+    /// กล้องรุ่นนี้มีหน้าตาพื้นฐานแบบ Adobe Portrait (ไม่ต้องบอกว่า Profile “Adobe Portrait” ทำตามไม่ได้)
+    #[serde(default)]
+    portrait: bool,
 }
 
 fn json<T: serde::de::DeserializeOwned>(v: Option<String>) -> Option<T> {
@@ -472,7 +483,14 @@ pub struct RawBase {
     pub jpeg: (u32, u32),
     /// ค่าเริ่มต้นเมื่อยังไม่ได้แต่ง (ค่าจาก Lightroom)
     pub start: EditSettings,
+    /// แก้เลนส์ตามข้อมูลในไฟล์ RAW ก่อนวางลงกรอบ (JPEG ผ่านการแก้เลนส์มาแล้ว)
+    pub lens: bool,
     pub unsupported: Vec<String>,
+}
+
+/// JPEG ของรูปคู่ผ่านการแก้เลนส์มาไหม: JPEG จากกล้องแก้เสมอ · Lightroom ตามที่เปิด Enable Profile Corrections ไว้
+fn lens_wanted(lightroom: Option<&Lightroom>) -> bool {
+    lightroom.is_none_or(|l| l.lens)
 }
 
 /// รูปนี้แต่งจาก RAW ได้ไหม
@@ -571,7 +589,17 @@ pub fn raw_edit(conn: &Connection, photo_id: &str) -> Result<RawEdit> {
             frame: pair.lightroom.as_ref().map_or(Frame::FULL, |l| l.frame),
             jpeg: (w, h),
             start: settings,
-            unsupported: pair.lightroom.map(|l| l.unsupported).unwrap_or_default(),
+            lens: lens_wanted(pair.lightroom.as_ref()),
+            unsupported: pair
+                .lightroom
+                .map(|l| l.unsupported)
+                .unwrap_or_default()
+                .into_iter()
+                // แก้เลนส์ด้วยข้อมูลของกล้องได้ · Adobe Portrait = หน้าตาพื้นฐานของ RAW รุ่นนี้ในแอป (DECISIONS ข้อ 34–35)
+                .filter(|u| {
+                    !(start.lens && u.starts_with("แก้เลนส์")) && !(start.portrait && u == "Profile “Adobe Portrait”")
+                })
+                .collect(),
         })),
         None => RawEdit::Unusable(start.problem.unwrap_or_else(|| "ใช้ไฟล์ RAW คู่แต่งรูปนี้ไม่ได้".into())),
     })
@@ -585,7 +613,8 @@ fn compute_start(
     jpeg: (u32, u32),
     jpeg_bytes: Option<&[u8]>,
 ) -> Start {
-    let problem = |p: String| Start { settings: None, problem: Some(p), version: START_VERSION };
+    let problem =
+        |p: String| Start { settings: None, problem: Some(p), version: START_VERSION, lens: false, portrait: false };
     let info = match raw::info(raw_bytes) {
         Ok(info) => info,
         Err(e) => return problem(e.message),
@@ -600,8 +629,14 @@ fn compute_start(
     }
     if let Some(bytes) = jpeg_bytes.filter(|b| is_srgb(b)) {
         if let Ok(target) = crate::media::decode_upright(bytes, FIT_EDGE) {
-            let base =
-                RawBase { raw_path: PathBuf::new(), frame, jpeg, start: EditSettings::default(), unsupported: vec![] };
+            let base = RawBase {
+                raw_path: PathBuf::new(),
+                frame,
+                jpeg,
+                start: EditSettings::default(),
+                lens: lens_wanted(lightroom),
+                unsupported: vec![],
+            };
             if let Ok(framed) = develop_framed(raw_bytes, &base, &EditSettings::default(), FIT_EDGE) {
                 let target = image::imageops::resize(
                     &target.to_rgb8(),
@@ -616,7 +651,13 @@ fn compute_start(
     // ค่าที่อยู่นอกช่วงของเรา (เช่นค่าแสงเกิน ±3) ถูกหนีบไว้แล้วตอนอ่าน — ตรวจซ้ำเผื่อไว้
     let settings = EditSettings { adjust, from_raw: true, ..Default::default() };
     match settings.validate() {
-        Ok(()) => Start { settings: Some(settings), problem: None, version: START_VERSION },
+        Ok(()) => Start {
+            settings: Some(settings),
+            problem: None,
+            version: START_VERSION,
+            lens: info.lens.is_some() && lens_wanted(lightroom),
+            portrait: raw::has_portrait_look(&info.make, &info.model),
+        },
         Err(e) => problem(e.message),
     }
 }
@@ -657,6 +698,12 @@ pub fn render(raw_bytes: &[u8], base: &RawBase, s: &EditSettings, max_edge: u32)
     Ok(crate::edit::with_local_edits(image::DynamicImage::ImageRgb8(out), &g, s).into_rgb8())
 }
 
+/// [`develop_framed`] สำหรับเครื่องมือวัด (`examples/lightroom_fit.rs`)
+#[doc(hidden)]
+pub fn framed_linear(raw_bytes: &[u8], base: &RawBase, s: &EditSettings, max_edge: u32) -> Result<Linear> {
+    develop_framed(raw_bytes, base, s, max_edge)
+}
+
 /// ภาพจาก RAW ในกรอบของ JPEG หลังตัด/หมุนตามที่แต่ง (ยังเป็นแสงเชิงเส้น ยังไม่ปรับแสงสี)
 ///
 /// ขนาดเต็ม = ขนาดของ JPEG ที่แต่งแล้ว (เท่ากันทุกพิกเซลเมื่อ JPEG ส่งออกเต็มขนาด) หรือความละเอียดของ RAW
@@ -684,10 +731,13 @@ fn develop_framed(raw_bytes: &[u8], base: &RawBase, s: &EditSettings, max_edge: 
     let (sw, sh) = if developed > z * 1.05 { size(developed) } else { (tw, th) };
     // หน้าเรียว/หน้าผอม (DECISIONS ข้อ 31) อยู่บนกรอบของ JPEG ซึ่งเป็นพิกัดของใบหน้า
     let aspect = base.jpeg.0 as f64 / base.jpeg.1.max(1) as f64;
+    // แก้เลนส์: กรอบของ JPEG อยู่บนภาพที่แก้แล้ว → จุดเดียวกันบนภาพจากเซนเซอร์ (DECISIONS ข้อ 34)
+    let lens = info.lens.filter(|_| base.lens);
     let framed: Linear = sample(&lin, sw, sh, |a, b| {
         let (u, v) = g.inverse(a, b);
         let (u, v) = s.retouch.as_ref().map_or((u, v), |r| r.source_point(u, v, aspect));
-        base.frame.to_raw(u, v, upright, o)
+        let (x, y) = base.frame.to_raw(u, v, upright, o);
+        lens.as_ref().map_or((x, y), |l| l.source_point(x, y, true))
     });
     Ok(if (sw, sh) == (tw, th) {
         framed
