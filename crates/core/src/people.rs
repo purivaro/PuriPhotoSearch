@@ -41,6 +41,9 @@ pub struct PersonSummary {
     pub groups: Vec<GroupRef>,
     pub archived: bool,
     pub record_version: i64,
+    /// รูปของคนนี้ (ยืนยันแล้ว + AI จัดให้) ที่ยังไม่ได้แต่งในแอป — มีเฉพาะรายชื่อบนหน้าหลัก (แต่งตามคน — DECISIONS ข้อ 32)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unedited_photo_count: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,6 +122,7 @@ fn person_from_row(r: &rusqlite::Row) -> rusqlite::Result<PersonSummary> {
         groups: vec![],
         archived: r.get(6)?,
         record_version: r.get(7)?,
+        unedited_photo_count: None,
     })
 }
 
@@ -497,12 +501,34 @@ pub fn home_people(conn: &Connection, limit: Option<i64>) -> Result<HomePeople> 
         "JOIN recent_person_views rv ON rv.person_id = pe.id WHERE pe.catalog_state = 'active' ORDER BY rv.last_viewed_at DESC, pe.id LIMIT ?1",
         vec![Value::Integer(limit)],
     )?;
+    let (mut pinned, mut recent) = (pinned, recent);
+    attach_unedited(conn, &mut pinned)?;
+    attach_unedited(conn, &mut recent)?;
     let saved: Option<String> = conn
         .query_row("SELECT value FROM ui_preferences WHERE key = 'home_people_tab'", [], |r| r.get(0))
         .optional()?;
     // ยังไม่เคยเลือก: ใช้ปักหมุดเมื่อมีรายการ มิฉะนั้นเปิดล่าสุด (Blueprint 6.5)
     let tab = saved.unwrap_or_else(|| if pinned.is_empty() { "recent".into() } else { "pinned".into() });
     Ok(HomePeople { tab, pinned, recent })
+}
+
+/// รูปของแต่ละคนที่ยังไม่แต่ง (ยืนยันแล้ว + ที่ AI จัดให้ — ผู้เรียกต้องเรียก `review::ensure_matches` ก่อน)
+fn attach_unedited(conn: &Connection, people: &mut [PersonSummary]) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT COUNT(*) FROM (
+           SELECT v.photo_id FROM v_confirmed v WHERE v.person_id = ?1
+           UNION
+           SELECT p.id FROM temp.ai_matches m
+             JOIN photos p ON p.current_revision_id = m.revision_id AND p.catalog_state = 'active'
+             JOIN event_photos ep ON ep.photo_id = p.id
+             JOIN events e ON e.id = ep.event_id AND e.catalog_state = 'active'
+           WHERE m.person_id = ?1) x
+         WHERE NOT EXISTS (SELECT 1 FROM photo_edits ed WHERE ed.photo_id = x.photo_id)",
+    )?;
+    for person in people {
+        person.unedited_photo_count = Some(stmt.query_row([&person.person.id], |r| r.get(0))?);
+    }
+    Ok(())
 }
 
 // ───────────────────────── กลุ่ม ─────────────────────────

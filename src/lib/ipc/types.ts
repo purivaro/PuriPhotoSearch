@@ -651,6 +651,8 @@ export interface PersonSummary extends PersonRef {
   groups: GroupRef[];
   archived: boolean;
   recordVersion: number;
+  /** รูปของคนนี้ (ยืนยันแล้ว + AI จัดให้) ที่ยังไม่ได้แต่งในแอป — มีเฉพาะรายชื่อบนหน้าหลัก */
+  uneditedPhotoCount?: number;
 }
 
 export interface PersonEventCount {

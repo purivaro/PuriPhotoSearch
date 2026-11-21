@@ -1226,11 +1226,17 @@ fn edit_filter_lists_what_is_left_to_edit_for_a_person_and_counts_progress() {
     assert!(lib.call("save_photo_edit", json!({ "photoId": id("c.jpg"), "settings": {} }))["editId"].is_null());
 
     let of_person = |filter: &str| lib.query(json!({ "personIds": [person], "editFilter": filter }));
-    let names_of = |page: &Value| arr(&page["items"]).iter().map(|i| i["filename"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let names_of = |page: &Value| {
+        arr(&page["items"]).iter().map(|i| i["filename"].as_str().unwrap().to_string()).collect::<Vec<_>>()
+    };
     let left = of_person("unedited");
     assert_eq!(names_of(&left), ["a.jpg", "c.jpg"]);
     assert_eq!(left["total"], 2, "จำนวนของรายการที่กรอง (ใช้แบ่งหน้า)");
-    assert_eq!((left["coverage"]["eligiblePhotos"].as_i64(), left["coverage"]["edited"].as_i64()), (Some(3), Some(1)), "แต่งแล้ว 1 จาก 3 รูปของคนนี้");
+    assert_eq!(
+        (left["coverage"]["eligiblePhotos"].as_i64(), left["coverage"]["edited"].as_i64()),
+        (Some(3), Some(1)),
+        "แต่งแล้ว 1 จาก 3 รูปของคนนี้"
+    );
     let done = of_person("edited");
     assert_eq!((names_of(&done), done["total"].as_i64()), (vec!["b.jpg".to_string()], Some(1)));
     assert!(arr(&done["items"])[0]["editId"].is_string());
