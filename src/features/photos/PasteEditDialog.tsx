@@ -25,17 +25,18 @@ export function PasteEditDialog({ open, onOpenChange, selection, count }: PasteE
   const copied = useEditClipboard((s) => s.copied);
   const summary = copied ? describeEdit(copied.settings) : null;
   // ค่าเริ่มต้นแบบ Lightroom: วางแสงและสี ไม่วางการตัด/หมุน (แต่ละรูปมักตัดต่างกัน)
-  const [parts, setParts] = useState<EditParts>({ geometry: false, light: true, color: true, masks: false });
+  const [parts, setParts] = useState<EditParts>({ geometry: false, light: true, color: true, masks: false, retouch: false });
 
   useEffect(() => {
     if (open) {
       // มีแค่การปรับเฉพาะส่วน: ไม่ติ๊กแสง/สีไว้ก่อน (ไม่ล้างแสงสีของรูปปลายทางโดยไม่ตั้งใจ)
-      const onlyMasks = Boolean(summary?.masks) && !summary?.light && !summary?.color;
+      const onlyMasks = (Boolean(summary?.masks) || Boolean(summary?.retouch)) && !summary?.light && !summary?.color;
       setParts({
         geometry: false,
         light: Boolean(summary?.light) || (!summary?.color && !onlyMasks),
         color: Boolean(summary?.color) || (!summary?.light && !onlyMasks),
         masks: Boolean(summary?.masks),
+        retouch: Boolean(summary?.retouch),
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -59,9 +60,10 @@ export function PasteEditDialog({ open, onOpenChange, selection, count }: PasteE
     { key: 'light', label: 'แสง', detail: summary?.light ?? null },
     { key: 'color', label: 'สี', detail: summary?.color ?? null },
     { key: 'masks', label: 'ปรับเฉพาะส่วน', detail: summary?.masks ? `${summary.masks} — ใช้ใบหน้าที่แอปพบในแต่ละรูป` : null },
+    { key: 'retouch', label: 'รีทัชใบหน้า', detail: summary?.retouch ? `${summary.retouch} — ใช้ใบหน้าที่แอปพบในแต่ละรูป` : null },
     { key: 'geometry', label: 'ตัด หมุน และปรับเอียง', detail: summary?.geometry ?? null },
   ];
-  const nothing = !parts.geometry && !parts.light && !parts.color && !parts.masks;
+  const nothing = !parts.geometry && !parts.light && !parts.color && !parts.masks && !parts.retouch;
 
   return (
     <Dialog

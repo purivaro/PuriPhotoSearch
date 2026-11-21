@@ -33,7 +33,7 @@ export function ApplyPresetDialog({ open, onOpenChange, selection, count }: Appl
   }, [open]);
 
   const apply = useMutation({
-    mutationFn: () => call('apply_photo_edits', { selection, settings: { ...IDENTITY, adjust: preset!.adjust }, parts: { geometry: false, light: true, color: true, masks: false } }),
+    mutationFn: () => call('apply_photo_edits', { selection, settings: { ...IDENTITY, adjust: preset!.adjust }, parts: { geometry: false, light: true, color: true, masks: false, retouch: false } }),
     onSuccess: (result) => {
       void qc.invalidateQueries({ queryKey: ['photos'] });
       void qc.invalidateQueries({ queryKey: ['photo'] });

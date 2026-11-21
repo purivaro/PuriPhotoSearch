@@ -175,6 +175,24 @@ fn smooth(y: &[f32], w: usize, h: usize, long: f64, fraction: f64, eps: f64) -> 
     guided(&low, &low, wl, hl, rl, eps, s)
 }
 
+/// ฐานแบบรักษาขอบของความสว่าง `y` (ขนาด w×h) ที่รัศมี `r` พิกเซล — fast guided filter ของ [`smooth`] ที่ค่ารัศมีกำหนดเอง
+/// (รีทัชใบหน้าใช้รัศมีตามขนาดของแต่ละหน้า)
+pub(crate) fn edge_preserving(y: &[f32], w: usize, h: usize, r: usize, eps: f64) -> Vec<f32> {
+    let r = r.max(1);
+    let s = (r / 4).max(1);
+    let (low, wl, hl) = shrink(y, w, h, s);
+    let rl = ((r as f64 / s as f64).round() as usize).max(1);
+    let c = guided(&low, &low, wl, hl, rl, eps, s);
+    let mut out = vec![0f32; w * h];
+    out.par_chunks_mut(w).enumerate().for_each(|(row, line)| {
+        for (col, v) in line.iter_mut().enumerate() {
+            let (a, b) = c.at(col, row);
+            *v = (a * y[row * w + col] as f64 + b) as f32;
+        }
+    });
+    out
+}
+
 /// Texture / Clarity: ความสว่าง + k·(ความสว่าง − ฐาน) · Clarity คูณน้ำหนักช่วงกลาง (0 ที่ดำ/ขาวสุด)
 fn detail(px: &mut [u8], w: usize, h: usize, stride: usize, long: f64, texture: f64, clarity: f64) {
     let y: Vec<f32> = px[..w * h * stride].par_chunks_exact(stride).map(|p| luma(p) as f32).collect();

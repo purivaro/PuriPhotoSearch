@@ -1,5 +1,7 @@
 import type { EditSettings, UnitRect } from '@/lib/ipc/types';
 import { NEUTRAL, isNeutral } from './adjust';
+import { maskIsActive } from './masks';
+import { retouchIsActive } from './retouch';
 
 /**
  * คณิตของหน้าแต่งภาพ — สูตรเดียวกับ `edit::Geometry` ใน Rust (มีเทสต์ค่าเดียวกันทั้งสองฝั่ง)
@@ -13,7 +15,7 @@ export const MAX_STRAIGHTEN = 45;
 export const MIN_CROP = 0.02;
 
 export function isIdentity(s: EditSettings): boolean {
-  return isGeometryIdentity(s) && isNeutral(s.adjust);
+  return isGeometryIdentity(s) && isNeutral(s.adjust) && !(s.masks ?? []).some(maskIsActive) && !retouchIsActive(s.retouch);
 }
 
 /** ไม่ได้ตัด หมุน หรือปรับเอียง */

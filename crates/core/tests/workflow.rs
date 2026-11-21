@@ -1329,6 +1329,111 @@ fn face_scene(fx: u32, fy: u32) -> Vec<u8> {
     bytes
 }
 
+/// ภาพทดสอบ 400×300 แบบ [`face_scene`] แต่ผิวมีลายละเอียด (รูขุมขน) และตาสองข้างสีเข้ม
+fn textured_face(fx: u32, fy: u32) -> Vec<u8> {
+    let img = image::RgbImage::from_fn(400, 300, |x, y| {
+        let (dx, dy) = ((x as f64 - fx as f64) / 30.0, (y as f64 - fy as f64) / 40.0);
+        if dx * dx + dy * dy > 1.0 {
+            return image::Rgb([120, 120, 120]);
+        }
+        let eye =
+            [-11i32, 11].iter().any(|ex| (x as i32 - fx as i32 - ex).pow(2) + (y as i32 - fy as i32 + 12).pow(2) < 12);
+        if eye {
+            return image::Rgb([35, 28, 28]);
+        }
+        let pore = ((x * 7 + y * 13) % 5) as i32 * 4 - 8;
+        image::Rgb([(205 + pore) as u8, (150 + pore) as u8, (125 + pore) as u8])
+    });
+    let mut bytes = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 97).encode_image(&img).unwrap();
+    bytes
+}
+
+#[test]
+fn edit_face_retouch_smooths_and_slims_and_pastes_onto_each_photos_own_faces() {
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-21 รีทัชใบหน้า");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.jpg"), textured_face(200, 120)).unwrap();
+    std::fs::write(root.join("b.jpg"), textured_face(300, 160)).unwrap();
+    lib.import(&root, "single_event", |_| true);
+    let before = tree_state(&root);
+    let (a, b) = (lib.photo_id("a.jpg"), lib.photo_id("b.jpg"));
+    // กรอบใบหน้าเท่าวงรีที่วาด (แบบกรอบของตัววิเคราะห์ใบหน้า: แก้มถึงแก้ม หน้าผากถึงใต้คาง)
+    let face_box = |fx: f64, fy: f64| [(fx - 30.0) / 400.0, (fy - 40.0) / 300.0, 60.0 / 400.0, 80.0 / 300.0];
+    for (id, fx, fy, name) in [(&a, 200.0, 120.0, "คุณเอ"), (&b, 300.0, 160.0, "คุณบี")] {
+        let bx = face_box(fx, fy);
+        lib.call(
+            "create_manual_face",
+            json!({ "requestId": new_id(), "photoId": id, "bbox": { "x": bx[0], "y": bx[1], "w": bx[2], "h": bx[3] }, "newPersonName": name }),
+        );
+    }
+    let image_of = |kind: &str, id: &str| {
+        let a = puri_core::api::asset(&lib.app, &format!("{kind}/{id}")).unwrap();
+        image::load_from_memory(&a.bytes).unwrap().to_rgb8()
+    };
+    let skin_width = |im: &image::RgbImage, y: u32| (0..400).filter(|&x| im.get_pixel(x, y).0[0] > 165).count();
+    let spread = |im: &image::RgbImage, cx: u32, cy: u32| {
+        let v: Vec<f64> = (cy..cy + 10)
+            .flat_map(|y| (cx - 8..cx + 8).map(move |x| (x, y)))
+            .map(|(x, y)| im.get_pixel(x, y).0[1] as f64)
+            .collect();
+        let m = v.iter().sum::<f64>() / v.len() as f64;
+        (v.iter().map(|p| (p - m).powi(2)).sum::<f64>() / v.len() as f64).sqrt()
+    };
+    let retouch = |faces: serde_json::Value, level: f64| json!({ "retouch": { "faces": faces, "smooth": level, "wrinkles": level, "slim": level, "thin": level } });
+
+    // ค่าเกินช่วงถูกปฏิเสธ
+    let err = lib
+        .try_call(
+            "save_photo_edit",
+            json!({ "photoId": a, "settings": retouch(json!([face_box(200.0, 120.0)]), 150.0) }),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "INVALID_INPUT");
+
+    // ผิวเนียน + หน้าเรียว/ผอม: ลายบนแก้มลดลง ความกว้างของหน้าที่ระดับกรามแคบลง ตาและฉากหลังเท่าเดิม
+    let original = image_of("original", &a);
+    lib.call("save_photo_edit", json!({ "photoId": a, "settings": retouch(json!([face_box(200.0, 120.0)]), 80.0) }));
+    let shown = image_of("photo", &a);
+    assert!(spread(&shown, 200, 125) < spread(&original, 200, 125) * 0.7, "ผิวเนียนขึ้น");
+    let jaw = 120 + 28;
+    assert!(
+        skin_width(&shown, jaw) + 3 <= skin_width(&original, jaw),
+        "{} → {}",
+        skin_width(&original, jaw),
+        skin_width(&shown, jaw)
+    );
+    assert!(shown.get_pixel(189, 108).0[0] < 80, "ตาซ้ายยังอยู่ที่เดิมและเข้มเหมือนเดิม");
+    assert!(shown.get_pixel(20, 20).0.iter().zip(original.get_pixel(20, 20).0).all(|(p, q)| p.abs_diff(q) <= 2));
+
+    // สำเนาที่ส่งออกเหมือนที่แสดง
+    let dest = lib.tmp.path().join("ส่งออกรีทัช");
+    std::fs::create_dir_all(&dest).unwrap();
+    let plan = lib
+        .call("preview_export", json!({ "selection": { "kind": "explicit", "photoIds": [a] }, "destination": dest }));
+    lib.call("start_export", json!({ "planId": plan["planId"], "requestId": new_id() }));
+    lib.run_jobs();
+    let out = image::load_from_memory(&std::fs::read(dest.join("a.jpg")).unwrap()).unwrap().to_rgb8();
+    for (x, y) in [(200, 125), (176, jaw), (20, 20)] {
+        let (p, q) = (out.get_pixel(x, y).0, shown.get_pixel(x, y).0);
+        assert!(p.iter().zip(q).all(|(a, b)| a.abs_diff(b) <= 4), "({x},{y}) ส่งออก {p:?} แสดง {q:?}");
+    }
+
+    // วางรีทัชให้อีกรูป: ใช้ใบหน้าของรูปนั้นเอง
+    let settings = lib.call("get_photo_details", json!({ "photoId": a }))["edit"]["settings"].clone();
+    let parts = json!({ "geometry": false, "light": false, "color": false, "masks": false, "retouch": true });
+    let to_b = json!({ "kind": "explicit", "photoIds": [b] });
+    let r = lib.call("apply_photo_edits", json!({ "selection": to_b, "settings": settings, "parts": parts }));
+    assert_eq!(r["updated"].as_i64(), Some(1));
+    let eb = lib.call("get_photo_details", json!({ "photoId": b }))["edit"]["settings"].clone();
+    let fb = eb["retouch"]["faces"][0][0].as_f64().unwrap();
+    assert!((fb - face_box(300.0, 160.0)[0]).abs() < 1e-6, "{fb}");
+    let (ob, sb) = (image_of("original", &b), image_of("photo", &b));
+    assert!(skin_width(&sb, 160 + 28) + 3 <= skin_width(&ob, 160 + 28), "หน้าของ b เรียวลง");
+    assert_eq!(tree_state(&root), before, "รีทัชไม่แตะไฟล์ต้นฉบับ");
+}
+
 #[test]
 fn edit_face_mask_brightens_only_skin_and_pastes_onto_each_photos_own_faces() {
     let lib = Lib::new();

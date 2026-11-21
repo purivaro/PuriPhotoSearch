@@ -441,6 +441,8 @@ export interface EditSettings {
   adjust: EditAdjust;
   /** ปรับเฉพาะส่วน (DECISIONS ข้อ 28) — ทำหลังแสงและสีของทั้งภาพ ตามลำดับ */
   masks?: EditMask[];
+  /** รีทัชใบหน้า (DECISIONS ข้อ 31) */
+  retouch?: Retouch | null;
   /** แต่งจากไฟล์ RAW คู่ — แอปตั้งเองตอนบันทึก */
   fromRaw?: boolean;
 }
@@ -495,6 +497,20 @@ export interface PreviewPointArgs {
   y?: number;
 }
 
+/** รีทัชใบหน้า (DECISIONS ข้อ 31): ทุกใบหน้าที่มีกรอบ · ค่า 0–100 */
+export interface Retouch {
+  /** กรอบ [x, y, w, h] ของแต่ละหน้าบนภาพเดิม */
+  faces: [number, number, number, number][];
+  /** ผิวเนียน */
+  smooth: number;
+  /** ลดริ้วรอย */
+  wrinkles: number;
+  /** หน้าเรียว (กรามถึงคาง) */
+  slim: number;
+  /** หน้าผอม (แก้ม) */
+  thin: number;
+}
+
 /** ส่วนของการแต่งที่จะวางให้รูปอื่น */
 export interface EditParts {
   /** ตัด หมุน ปรับเอียง */
@@ -505,6 +521,8 @@ export interface EditParts {
   color: boolean;
   /** ปรับเฉพาะส่วน — บริเวณใบหน้าใช้ใบหน้าของแต่ละรูปเอง */
   masks: boolean;
+  /** รีทัชใบหน้า — ใช้ใบหน้าของแต่ละรูปเอง */
+  retouch: boolean;
 }
 
 export interface ApplyEditsResult {

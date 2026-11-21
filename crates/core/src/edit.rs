@@ -39,6 +39,9 @@ pub struct EditSettings {
     /// ปรับเฉพาะส่วน (DECISIONS ข้อ 28) — ทำหลังแสงและสีของทั้งภาพ ตามลำดับ
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub masks: Vec<crate::masks::Mask>,
+    /// รีทัชใบหน้า (DECISIONS ข้อ 31): ผิวเนียน ลดริ้วรอย หน้าเรียว หน้าผอม
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retouch: Option<crate::retouch::Retouch>,
     /// แต่งจากไฟล์ RAW คู่ของรูป (DECISIONS ข้อ 26) — แอปตั้งเองตอนบันทึก ไม่ใช่ค่าที่ผู้ใช้ปรับ
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub from_raw: bool,
@@ -53,6 +56,9 @@ impl EditSettings {
     pub fn validate(&self) -> Result<()> {
         self.adjust.validate()?;
         crate::masks::validate(&self.masks)?;
+        if let Some(r) = &self.retouch {
+            r.validate()?;
+        }
         if ![0, 90, 180, 270].contains(&self.rotate) {
             return Err(AppError::invalid("หมุนได้ทีละ 90 องศาเท่านั้น"));
         }
@@ -76,7 +82,12 @@ impl EditSettings {
 
     /// ไม่ได้แต่งอะไรเลย (เก็บแบบนี้ = ลบการแต่ง)
     pub fn is_identity(&self) -> bool {
-        self.is_geometry_identity() && self.adjust.is_neutral() && !self.has_masks()
+        self.is_geometry_identity() && self.adjust.is_neutral() && !self.has_masks() && !self.has_retouch()
+    }
+
+    /// มีรีทัชใบหน้าที่มีผล
+    pub fn has_retouch(&self) -> bool {
+        self.retouch.as_ref().is_some_and(crate::retouch::Retouch::is_active)
     }
 
     /// มีการปรับเฉพาะส่วนที่มีผล
@@ -97,6 +108,7 @@ impl EditSettings {
             && crop(self) == crop(other)
             && self.adjust == other.adjust
             && self.masks == other.masks
+            && self.retouch.as_ref().filter(|r| r.is_active()) == other.retouch.as_ref().filter(|r| r.is_active())
             && self.from_raw == other.from_raw
     }
 }
@@ -254,26 +266,31 @@ pub fn render(img: DynamicImage, s: &EditSettings) -> DynamicImage {
 /// เหมือน [`render`] ตามชนิดของภาพต้นทาง (RAW: `img` เป็นภาพ 8 บิตของโทนตั้งต้น)
 pub fn render_with(img: DynamicImage, s: &EditSettings, profile: crate::adjust::Profile) -> DynamicImage {
     let g = Geometry::new(img.width(), img.height(), s);
-    let framed = render_geometry(img, s);
+    // หน้าเรียว/หน้าผอมทำบนภาพเดิมก่อนตัด/หมุน (DECISIONS ข้อ 31)
+    let framed = render_geometry(crate::retouch::warp_image(img, s.retouch.as_ref()), s);
     let long = g.frame_long(framed.width(), framed.height());
-    with_masks(crate::adjust::apply_profile_in_frame(framed, &s.adjust, profile, long), &g, s)
+    with_local_edits(crate::adjust::apply_profile_in_frame(framed, &s.adjust, profile, long), &g, s)
 }
 
-/// ปรับเฉพาะส่วน (DECISIONS ข้อ 28) บนภาพที่แต่งแล้วทั้งกรอบ — `g` ของภาพเดิมที่ภาพนี้มาจาก
-pub(crate) fn with_masks(img: DynamicImage, g: &Geometry, s: &EditSettings) -> DynamicImage {
-    if !s.has_masks() {
+/// ผิวเนียน/ลดริ้วรอย (DECISIONS ข้อ 31) แล้วปรับเฉพาะส่วน (ข้อ 28) บนภาพที่แต่งแล้วทั้งกรอบ — `g` ของภาพเดิมที่ภาพนี้มาจาก
+pub(crate) fn with_local_edits(img: DynamicImage, g: &Geometry, s: &EditSettings) -> DynamicImage {
+    if !s.has_masks() && !s.has_retouch() {
         return img;
     }
     let (w, h) = (img.width() as usize, img.height() as usize);
+    let edit = |px: &mut [u8], stride: usize| {
+        crate::retouch::smooth_faces(px, w, h, stride, g, s.retouch.as_ref());
+        crate::masks::apply(px, w, h, stride, g, &s.masks);
+    };
     match img {
         // ภาพที่มีส่วนโปร่งใส (PNG): คงช่อง alpha ไว้ ให้ขั้นส่งออกปูพื้นขาวตามเดิม
         DynamicImage::ImageRgba8(mut rgba) => {
-            crate::masks::apply(&mut rgba, w, h, 4, g, &s.masks);
+            edit(&mut rgba, 4);
             DynamicImage::ImageRgba8(rgba)
         }
         other => {
             let mut rgb = other.into_rgb8();
-            crate::masks::apply(&mut rgb, w, h, 3, g, &s.masks);
+            edit(&mut rgb, 3);
             DynamicImage::ImageRgb8(rgb)
         }
     }
@@ -308,7 +325,7 @@ pub(crate) fn render_geometry(img: DynamicImage, s: &EditSettings) -> DynamicIma
 }
 
 /// ค่าของหนึ่งช่องสีที่ resample ได้: 8 บิต (ปัดเป็นจำนวนเต็ม) หรือทศนิยม (ภาพ RAW เชิงเส้น)
-trait Channel: image::Primitive {
+pub(crate) trait Channel: image::Primitive {
     fn get(self) -> f64;
     fn put(v: f64) -> Self;
 }
@@ -501,6 +518,9 @@ pub struct EditParts {
     /// ปรับเฉพาะส่วน (DECISIONS ข้อ 28) — บริเวณใบหน้าใช้ใบหน้าของแต่ละรูปเอง
     #[serde(default)]
     pub masks: bool,
+    /// รีทัชใบหน้า (DECISIONS ข้อ 31) — ใช้ใบหน้าของแต่ละรูปเอง
+    #[serde(default)]
+    pub retouch: bool,
 }
 
 impl EditParts {
@@ -508,6 +528,9 @@ impl EditParts {
     pub fn merge(self, mut base: EditSettings, from: &EditSettings, faces: &[[f64; 4]]) -> EditSettings {
         if self.masks {
             base.masks = from.masks.iter().map(|m| m.on_faces(faces)).collect();
+        }
+        if self.retouch {
+            base.retouch = from.retouch.as_ref().map(|r| r.on_faces(faces));
         }
         if self.geometry {
             (base.rotate, base.straighten, base.crop) = (from.rotate, from.straighten, from.crop);
@@ -552,7 +575,7 @@ pub fn apply_many(
     parts: EditParts,
 ) -> Result<ApplyResult> {
     settings.validate()?;
-    if !(parts.geometry || parts.light || parts.color || parts.masks) {
+    if !(parts.geometry || parts.light || parts.color || parts.masks || parts.retouch) {
         return Err(AppError::invalid("เลือกอย่างน้อยหนึ่งส่วนที่จะวาง"));
     }
     let mut result = ApplyResult { updated: 0, unchanged: 0, not_ready: 0 };
@@ -577,7 +600,7 @@ pub fn apply_many(
             let stored = old.as_ref().map(|o| &o.settings);
             let origin = origin(&tx, &row.photo_id, stored)?;
             let base = origin.current(stored);
-            let faces: Vec<[f64; 4]> = if parts.masks {
+            let faces: Vec<[f64; 4]> = if parts.masks || parts.retouch {
                 crate::faces::for_revision(&tx, &row.revision_id)?
                     .iter()
                     .map(|f| [f.bbox.x, f.bbox.y, f.bbox.w, f.bbox.h])

@@ -13,6 +13,7 @@ use puri_core::adjust::{Adjust, Grading, Levels, Profile, Vignette, Wheel};
 use puri_core::edit::{EditSettings, Geometry, Rect};
 use puri_core::masks::{Area, Mask};
 use puri_core::preview::{render_image, Request, SourceKind};
+use puri_core::retouch::Retouch;
 
 const CASES: u64 = 400;
 const SEED: u64 = 20_261_121;
@@ -205,6 +206,32 @@ fn masks(rng: &mut Rng) -> Vec<Mask> {
         .collect()
 }
 
+/// รีทัชใบหน้า: ใบหน้าเดียวกับ Mask (ภาพมีสีผิวตรงนั้น) หรือกรอบสุ่ม · ระดับสำเร็จรูปหรือค่าสุ่ม
+fn retouch(rng: &mut Rng, masks: &[Mask]) -> Option<Retouch> {
+    if !rng.chance(0.4) {
+        return None;
+    }
+    let mut faces: Vec<[f64; 4]> = masks
+        .iter()
+        .flat_map(|m| match &m.area {
+            Area::Faces { boxes, .. } => boxes.clone(),
+        })
+        .collect();
+    if faces.is_empty() || rng.chance(0.3) {
+        faces = (0..rng.int(1, 2))
+            .map(|_| [rng.range(-0.05, 0.7), rng.range(-0.05, 0.6), rng.range(0.15, 0.6), rng.range(0.2, 0.7)])
+            .collect();
+    }
+    let amount = |rng: &mut Rng| match rng.int(0, 5) {
+        0 | 1 => 0.0,
+        2 => 25.0,
+        3 => 50.0,
+        4 => 80.0,
+        _ => rng.int(1, 100) as f64,
+    };
+    Some(Retouch { faces, smooth: amount(rng), wrinkles: amount(rng), slim: amount(rng), thin: amount(rng) })
+}
+
 /// หมุนทีละ 90° (ตัด/ปรับเอียงต้องสุ่มภาพใหม่ — ตัวอย่างกับไฟล์จึงต่างกันตามวิธีย่อภาพ ไม่ใช่สูตร)
 fn geometry(rng: &mut Rng, s: &mut EditSettings) {
     if rng.chance(0.4) {
@@ -311,6 +338,9 @@ fn features(s: &EditSettings, profile: Profile) -> Vec<&'static str> {
     if s.masks.iter().any(Mask::is_active) {
         f.push("masks");
     }
+    if s.retouch.as_ref().is_some_and(Retouch::is_active) {
+        f.push("retouch");
+    }
     f
 }
 
@@ -325,6 +355,9 @@ fn live_preview_matches_the_saved_image_pixel_for_pixel() {
         let mut s = EditSettings { adjust: adjust(&mut rng), ..Default::default() };
         geometry(&mut rng, &mut s);
         s.masks = masks(&mut rng);
+        // รีทัชใช้ลำดับสุ่มของตัวเอง (ชุดเดิมของค่าอื่นไม่เปลี่ยน)
+        let mut rr = Rng(SEED ^ 0xA5A5_5A5A_u64.wrapping_add(id.wrapping_mul(7919)));
+        s.retouch = retouch(&mut rr, &s.masks);
         let profile = if rng.chance(0.2) { Profile::Raw } else { Profile::Display };
         let (w, h) = (rng.int(16, 64), rng.int(16, 48));
         // ใบหน้าบนภาพต้นทาง (พิกเซล) ตรงกับกรอบของ Mask
