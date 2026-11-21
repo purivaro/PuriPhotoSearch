@@ -751,20 +751,31 @@ pub fn apply_profile_in_frame(img: DynamicImage, a: &Adjust, profile: Profile, l
     if a.is_neutral() {
         return img;
     }
+    let (width, height) = (img.width() as usize, img.height() as usize);
+    if img.color().has_alpha() {
+        let mut rgba = img.to_rgba8();
+        apply_pixels(&mut rgba, width, height, 4, a, profile, long);
+        DynamicImage::ImageRgba8(rgba)
+    } else {
+        let mut rgb = img.into_rgb8();
+        apply_pixels(&mut rgb, width, height, 3, a, profile, long);
+        DynamicImage::ImageRgb8(rgb)
+    }
+}
+
+/// แสงสีทั้งภาพ + Texture/Clarity/Dehaze ในที่ บนพิกเซล `width`×`height` พิกเซลละ `n` ไบต์ (3 = RGB, 4 = RGBA — ช่องที่สี่ไม่แตะ)
+/// · `long` ตาม [`apply_profile_in_frame`] · Vignette คิดตามขนาดนี้ (ภาพนี้คือกรอบที่ตัดแล้วทั้งกรอบ)
+pub fn apply_pixels(raw: &mut [u8], width: usize, height: usize, n: usize, a: &Adjust, profile: Profile, long: f64) {
+    if a.is_neutral() || raw.len() < width * height * n {
+        return;
+    }
     let curves = a.curves_for(profile);
     let vignette = a.vignette.amount != 0.0;
     let only_curves = !a.per_pixel() && !vignette;
-    let (w, h) = (img.width() as f64, img.height() as f64);
-    let width = img.width() as usize;
-    let height = img.height() as usize;
+    let (w, h) = (width as f64, height as f64);
     // ตารางสามช่องที่ปัดเป็น 0–255 แล้ว: กรณีไม่ปรับสีต่อพิกเซล ใช้ตารางตรง ๆ เร็วที่สุด
     let table: [[u8; 256]; 3] = curves.map(|t| t.map(|v| (v * 255.0).round() as u8));
-    let alpha = img.color().has_alpha();
-    let mut rgba = if alpha { img.to_rgba8() } else { image::RgbaImage::new(0, 0) };
-    let mut rgb = if alpha { image::RgbImage::new(0, 0) } else { img.into_rgb8() };
-    let n = if alpha { 4 } else { 3 };
-    let raw: &mut [u8] = if alpha { &mut rgba } else { &mut rgb };
-    for (i, px) in raw.chunks_exact_mut(n).enumerate() {
+    for (i, px) in raw[..width * height * n].chunks_exact_mut(n).enumerate() {
         let v = [px[0], px[1], px[2]];
         let out = if only_curves {
             [table[0][v[0] as usize], table[1][v[1] as usize], table[2][v[2] as usize]]
@@ -781,10 +792,33 @@ pub fn apply_profile_in_frame(img: DynamicImage, a: &Adjust, profile: Profile, l
     if crate::local::is_active(a) {
         crate::local::apply(raw, width, height, n, long, a);
     }
-    if alpha {
-        DynamicImage::ImageRgba8(rgba)
-    } else {
-        DynamicImage::ImageRgb8(rgb)
+}
+
+/// ต้นแบบ (exp/preview-wasm): เหมือน [`apply_pixels`] แต่ขั้นต่อพิกเซลแบ่งแถวให้ทุกแกน (ผลเท่ากันทุกบิต) · Texture/Clarity/Dehaze ยังแกนเดียว
+pub fn apply_pixels_par(raw: &mut [u8], width: usize, height: usize, n: usize, a: &Adjust, profile: Profile, long: f64) {
+    use rayon::prelude::*;
+    if a.is_neutral() || raw.len() < width * height * n {
+        return;
+    }
+    let curves = a.curves_for(profile);
+    let vignette = a.vignette.amount != 0.0;
+    let only_curves = !a.per_pixel() && !vignette;
+    let (w, h) = (width as f64, height as f64);
+    let table: [[u8; 256]; 3] = curves.map(|t| t.map(|v| (v * 255.0).round() as u8));
+    raw[..width * height * n].par_chunks_exact_mut(width * n).enumerate().for_each(|(row, line)| {
+        for (col, px) in line.chunks_exact_mut(n).enumerate() {
+            let v = [px[0], px[1], px[2]];
+            let out = if only_curves {
+                [table[0][v[0] as usize], table[1][v[1] as usize], table[2][v[2] as usize]]
+            } else {
+                let t = if vignette { a.vignette.weight(col as f64 + 0.5, row as f64 + 0.5, w, h) } else { 0.0 };
+                a.pixel_at(&curves, v, t)
+            };
+            px[..3].copy_from_slice(&out);
+        }
+    });
+    if crate::local::is_active(a) {
+        crate::local::apply(raw, width, height, n, long, a);
     }
 }
 

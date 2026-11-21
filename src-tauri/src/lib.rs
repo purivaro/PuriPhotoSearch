@@ -47,6 +47,8 @@ macro_rules! domain_commands {
                 pick_preset,
                 restart_app,
                 e2e_report,
+                bench_preview_source,
+                bench_preview_render,
                 updater::update_status,
                 updater::update_check,
                 updater::update_install
@@ -205,6 +207,46 @@ async fn pick_folder(app: tauri::AppHandle, title: String) -> Option<String> {
 #[tauri::command]
 fn restart_app(app: tauri::AppHandle) {
     app.restart();
+}
+
+/// ต้นแบบวัดความเร็วตัวอย่างสด (exp/preview-wasm): รับภาพต้นทาง RGBA เก็บไว้ในหน่วยความจำ — header `x-w` `x-h`
+#[tauri::command]
+fn bench_preview_source(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("ต้องส่งเป็น bytes".into()) };
+    let num = |k: &str| request.headers().get(k).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u32>().ok());
+    let (Some(w), Some(h)) = (num("x-w"), num("x-h")) else { return Err("ไม่มีขนาดภาพ".into()) };
+    *bench::SOURCE.lock().unwrap_or_else(|e| e.into_inner()) = Some((bytes.clone(), w, h));
+    Ok(())
+}
+
+/// ต้นแบบ: คิดตัวอย่างสดด้วยสูตร Rust แล้วส่งพิกเซล RGBA กลับเป็น bytes · `parallel` = ขั้นต่อพิกเซลใช้ทุกแกน
+#[tauri::command]
+fn bench_preview_render(job: String, parallel: bool) -> Result<tauri::ipc::Response, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Job {
+        settings: puri_core::edit::EditSettings,
+        profile: String,
+        source_w: u32,
+        source_h: u32,
+    }
+    let job: Job = serde_json::from_str(&job).map_err(|e| e.to_string())?;
+    let (mut px, w, h) = bench::SOURCE.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or("ยังไม่มีภาพต้นทาง")?;
+    let profile = if job.profile == "raw" { puri_core::adjust::Profile::Raw } else { puri_core::adjust::Profile::Display };
+    let g = puri_core::edit::Geometry::new(job.source_w, job.source_h, &job.settings);
+    let long = g.frame_long(w, h);
+    let (wu, hu) = (w as usize, h as usize);
+    if parallel {
+        puri_core::adjust::apply_pixels_par(&mut px, wu, hu, 4, &job.settings.adjust, profile, long);
+    } else {
+        puri_core::adjust::apply_pixels(&mut px, wu, hu, 4, &job.settings.adjust, profile, long);
+    }
+    puri_core::masks::apply(&mut px, wu, hu, 4, &g, &job.settings.masks);
+    Ok(tauri::ipc::Response::new(px))
+}
+
+mod bench {
+    pub static SOURCE: std::sync::Mutex<Option<(Vec<u8>, u32, u32)>> = std::sync::Mutex::new(None);
 }
 
 /// รับรายงานจากสคริปต์ทดสอบ end-to-end (debug build เท่านั้น; release ไม่ทำอะไร)
