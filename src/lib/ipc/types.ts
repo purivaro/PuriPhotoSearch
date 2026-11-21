@@ -353,6 +353,16 @@ export interface EditAdjust {
   levelsBlue: Levels;
   grading: Grading;
   vignette: Vignette;
+  /** ความคมแบบ Lightroom (ไม่มีในค่าที่บันทึกก่อนรุ่นนี้ = ไม่ทำ) */
+  sharpen?: Sharpen;
+}
+
+/** ความคม: amount 0–150 (0 = ไม่ทำ) · radius 0.5–3 พิกเซลของภาพเต็ม · detail/masking 0–100 */
+export interface Sharpen {
+  amount: number;
+  radius: number;
+  detail: number;
+  masking: number;
 }
 
 /** Levels แบบ Photoshop: ค่าเข้า (จุดดำ แกมมา จุดขาว) → ค่าออก (ดำ ขาว) 0–255 · แกมมา 0.1–9.99 */

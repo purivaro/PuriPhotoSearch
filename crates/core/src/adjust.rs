@@ -59,6 +59,41 @@ pub struct Adjust {
     pub grading: Grading,
     /// ขอบภาพมืด/สว่างลง คิดตามกรอบหลังตัด
     pub vignette: Vignette,
+    /// ความคมแบบ Lightroom (DECISIONS ข้อ 36) — ทำเป็นขั้นสุดท้าย
+    pub sharpen: Sharpen,
+}
+
+/// ความคมแบบ Lightroom: Amount 0–150 (0 = ไม่ทำ) · Radius 0.5–3 พิกเซลของภาพเต็ม · Detail 0–100 (ต่ำ = กันขอบเกินมาก
+/// คมเฉพาะรายละเอียดเล็ก) · Masking 0–100 (สูง = คมเฉพาะขอบ พื้นเรียบและผิวไม่คม) — ค่าเริ่มต้นของ RAW ใน Lightroom = 40 / 1.0 / 25 / 0
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Sharpen {
+    pub amount: f64,
+    pub radius: f64,
+    pub detail: f64,
+    pub masking: f64,
+}
+
+impl Default for Sharpen {
+    fn default() -> Self {
+        Sharpen { amount: 0.0, radius: 1.0, detail: 25.0, masking: 0.0 }
+    }
+}
+
+impl Sharpen {
+    pub fn is_active(&self) -> bool {
+        self.amount > 0.0
+    }
+
+    fn is_valid(&self) -> bool {
+        let pct = |v: f64| v.is_finite() && (0.0..=100.0).contains(&v);
+        self.amount.is_finite()
+            && (0.0..=150.0).contains(&self.amount)
+            && self.radius.is_finite()
+            && (0.5..=3.0).contains(&self.radius)
+            && pct(self.detail)
+            && pct(self.masking)
+    }
 }
 
 /// Levels: ค่าเข้า (จุดดำ แกมมา จุดขาว) → ค่าออก (ดำ ขาว) ทุกค่า 0–255 ยกเว้นแกมมา (0.1–9.99, 1 = ไม่ปรับ)
@@ -277,6 +312,7 @@ impl Adjust {
             && self.levels_all().iter().all(|l| l.is_identity())
             && !self.grading.is_active()
             && self.vignette.amount == 0.0
+            && !self.sharpen.is_active()
     }
 
     fn levels_all(&self) -> [Levels; 4] {
@@ -324,7 +360,8 @@ impl Adjust {
             && splits_ok
             && self.levels_all().iter().all(Levels::is_valid)
             && self.grading.is_valid()
-            && self.vignette.is_valid();
+            && self.vignette.is_valid()
+            && self.sharpen.is_valid();
         if ok {
             Ok(())
         } else {
