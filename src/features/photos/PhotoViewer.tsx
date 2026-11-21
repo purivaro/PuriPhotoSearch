@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
-import { ArrowLeft, ChevronLeft, ChevronRight, ClipboardPaste, Copy, EllipsisVertical, ExternalLink, FolderOpen, Image as ImageIcon, Minus, PanelRight, Plus, ScanFace, Palette, SlidersHorizontal, Sparkles, Undo2, Upload, X } from 'lucide-react';
-import { useViewer, type ViewerLocationState } from '@/app/navigation';
+import { ArrowLeft, Ban, ChevronLeft, ChevronRight, ClipboardPaste, Copy, EllipsisVertical, ExternalLink, Flag, FolderOpen, Image as ImageIcon, Minus, PanelRight, Plus, ScanFace, Palette, SlidersHorizontal, Sparkles, Undo2, Upload, X } from 'lucide-react';
+import { useViewer, viewerPhotoIdNow, type ViewerLocationState } from '@/app/navigation';
 import { Button, IconButton } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
 import { ErrorState, LoadingBlock } from '@/components/ui/Feedback';
@@ -12,10 +12,11 @@ import { ExportDialog } from '@/features/export/ExportDialog';
 import { cn } from '@/lib/cn';
 import { errorMessage, formatCount } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
-import type { Id, PhotoDetails } from '@/lib/ipc/types';
+import type { Id, PhotoDetails, PhotoFlag } from '@/lib/ipc/types';
 import { qk } from '@/lib/queries';
 import { useEditClipboard } from '@/stores/editClipboard';
 import { PasteEditDialog } from './PasteEditDialog';
+import { FLAG_LABEL, flagForKey, useSetPhotoFlags } from './PhotoFlags';
 import { GenerateDialog } from '@/features/assistant/GenerateDialog';
 import { useAssistant } from '@/stores/assistant';
 import { useUi } from '@/stores/ui';
@@ -140,6 +141,30 @@ export function PhotoViewer() {
     enabled: editing && Boolean(nextId),
   });
 
+  // คัดก่อนแต่ง (DECISIONS ข้อ 33): P เลือก · X ไม่เอา แล้วไปรูปถัดไปเอง · U ล้าง — เห็นผลทันที บันทึกตามหลัง
+  const setFlags = useSetPhotoFlags();
+  // คัดรูปที่อยู่ใน URL ตอนกดจริง: กด P แล้ว X ติดกันเร็ว ๆ — URL เปลี่ยนเป็นรูปถัดไปแล้วแต่ React อาจยังวาดรูปเดิม
+  // ถ้าใช้ state ของรอบที่วาดอยู่ X จะไปทับรูปก่อนหน้า (e2e จับได้) · คัดได้แม้รายละเอียดของรูปยังโหลดไม่เสร็จ
+  const mutateFlags = useRef(setFlags.mutate);
+  mutateFlags.current = setFlags.mutate;
+  const sessionNow = viewer.session;
+  const applyFlag = useCallback(
+    (flag: PhotoFlag | null, advance: boolean) => {
+      const id = viewerPhotoIdNow();
+      if (!id) return;
+      const current = qc.getQueryData<PhotoDetails>(qk.photo(id));
+      if (current) qc.setQueryData(qk.photo(id), { ...current, flag });
+      mutateFlags.current({ selection: { kind: 'explicit', photoIds: [id] }, flag });
+      const name = current?.filename ?? 'รูปนี้';
+      toast.success(flag ? `${FLAG_LABEL[flag]} ${name}` : `ล้างการคัด ${name}`, { id: 'photo-flags' });
+      const ids = sessionNow.current.ids;
+      const at = ids.indexOf(id);
+      const next = at >= 0 ? ids[at + 1] : undefined;
+      if (advance && next) goTo(next);
+    },
+    [qc, goTo, sessionNow],
+  );
+
   const close = useCallback(() => {
     if (state?.pushed) navigate(-1);
     else navigate({ pathname: state?.backgroundLocation.pathname ?? '/home', search: state?.backgroundLocation.search ?? '' }, { replace: true });
@@ -150,6 +175,12 @@ export function PhotoViewer() {
     const onKey = (event: KeyboardEvent) => {
       if (isTypingTarget(event.target) || overlayOpen()) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const flag = flagForKey(event);
+      if (flag !== undefined) {
+        event.preventDefault();
+        applyFlag(flag, flag !== null);
+        return;
+      }
       switch (event.key) {
         case 'ArrowLeft':
           event.preventDefault();
@@ -182,7 +213,7 @@ export function PhotoViewer() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [goTo, previousId, nextId, close, drawMode]);
+  }, [goTo, previousId, nextId, close, drawMode, applyFlag]);
 
   const reveal = useMutation({
     mutationFn: () => call('reveal_photo', { photoId }),
@@ -226,6 +257,31 @@ export function PhotoViewer() {
             </IconButton>
           </div>
         )}
+
+        <div className="flex items-center gap-1" role="group" aria-label="คัดรูป">
+          <IconButton
+            label={data?.flag === 'pick' ? 'เลือกไว้แล้ว — กดอีกครั้งเพื่อล้าง (U)' : 'เลือกรูปนี้ (P)'}
+            size="sm"
+            disabled={!data}
+            aria-pressed={data?.flag === 'pick'}
+            onClick={() => applyFlag(data?.flag === 'pick' ? null : 'pick', false)}
+            data-testid="viewer-flag-pick"
+            className={cn('border', data?.flag === 'pick' ? 'border-ok bg-ok text-white hover:bg-ok hover:text-white' : 'border-line-strong')}
+          >
+            <Flag className="size-4" fill={data?.flag === 'pick' ? 'currentColor' : 'none'} aria-hidden />
+          </IconButton>
+          <IconButton
+            label={data?.flag === 'reject' ? 'ไม่เอาแล้ว — กดอีกครั้งเพื่อล้าง (U)' : 'ไม่เอารูปนี้ (X) — ไฟล์ไม่ถูกลบ'}
+            size="sm"
+            disabled={!data}
+            aria-pressed={data?.flag === 'reject'}
+            onClick={() => applyFlag(data?.flag === 'reject' ? null : 'reject', false)}
+            data-testid="viewer-flag-reject"
+            className={cn('border', data?.flag === 'reject' ? 'border-ink bg-ink text-surface hover:bg-ink hover:text-surface' : 'border-line-strong')}
+          >
+            <Ban className="size-4" aria-hidden />
+          </IconButton>
+        </div>
 
         <div data-tauri-drag-region className="min-w-2 flex-1" />
 
@@ -371,6 +427,19 @@ export function PhotoViewer() {
               onSelectFace={setSelectedFaceId}
               onZoomChange={setZoom}
             />
+            {data?.flag && (
+              // สถานะการคัดของรูปนี้ เห็นได้ทันทีระหว่างไล่คัด (DECISIONS ข้อ 33)
+              <span
+                data-testid="viewer-flag-state"
+                className={cn(
+                  'pointer-events-none absolute top-3 left-3 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[13px] font-semibold text-white shadow-card',
+                  data.flag === 'pick' ? 'bg-ok' : 'bg-black/70',
+                )}
+              >
+                {data.flag === 'pick' ? <Flag className="size-3.5" fill="currentColor" aria-hidden /> : <Ban className="size-3.5" aria-hidden />}
+                {data.flag === 'pick' ? 'เลือกไว้' : 'ไม่เอา'}
+              </span>
+            )}
             {previousId && (
               <button
                 type="button"

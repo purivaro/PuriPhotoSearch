@@ -130,6 +130,15 @@ export function useViewerOpen(): boolean {
   return useRealLocation().pathname.startsWith('/photos/');
 }
 
+/**
+ * รูปที่ตัวดูภาพเปิดอยู่ตาม URL ณ ตอนนี้ — router เปลี่ยน URL ทันทีแต่ React วาดรูปใหม่ตามหลัง (transition)
+ * แป้นลัดที่กดถี่ ๆ (คัดรูป P/X) จึงต้องอ่านจากที่นี่ ไม่ใช่จาก state ของรอบที่วาดอยู่
+ */
+export function viewerPhotoIdNow(): string | null {
+  const id = window.location.hash.match(/^#\/photos\/([^/?#]+)/)?.[1];
+  return id ? decodeURIComponent(id) : null;
+}
+
 /** ตำแหน่งที่ใช้ตัดสินเมนูที่เลือกและหน้าพื้นหลัง: ถ้าเปิดตัวดูภาพอยู่ให้ใช้หน้าที่มา */
 export function useBackgroundLocation(): Location {
   const location = useLocation();

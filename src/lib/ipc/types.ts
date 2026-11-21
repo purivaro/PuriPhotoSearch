@@ -257,9 +257,14 @@ export interface SearchParams {
   rejectedPersonId?: Id;
   /** การแต่งในแอป (DECISIONS ข้อ 32): any = ทั้งหมด, edited = แต่งแล้ว, unedited = ยังไม่แต่ง */
   editFilter?: EditFilter;
+  /** การคัด (DECISIONS ข้อ 33): any = ทั้งหมด, picked = เลือกไว้, unflagged = ยังไม่คัด, rejected = ไม่เอา */
+  flagFilter?: FlagFilter;
 }
 
 export type EditFilter = 'any' | 'edited' | 'unedited';
+export type FlagFilter = 'any' | 'picked' | 'unflagged' | 'rejected';
+/** การคัดของรูป: pick = เลือก, reject = ไม่เอา (ไม่ลบไฟล์) */
+export type PhotoFlag = 'pick' | 'reject';
 
 export interface PersonRef {
   id: Id;
@@ -298,6 +303,8 @@ export interface PhotoResult {
   raw: boolean;
   /** ชื่อไฟล์ RAW คู่ของรูปนี้ (null = ไม่มีคู่) */
   rawPair: string | null;
+  /** การคัด (null = ยังไม่คัด) */
+  flag: PhotoFlag | null;
 }
 
 /** สี่เหลี่ยมเป็นสัดส่วน 0–1 */
@@ -562,8 +569,11 @@ export interface Coverage {
   facesAnalyzed: number;
   /** รูปที่ยังไม่ได้วิเคราะห์ใบหน้า — ผลค้นตามคนอาจยังไม่ครบ */
   facesPending: number;
-  /** รูปที่แต่งในแอปแล้ว — ตัวเลขทั้งชุดนี้นับก่อนกรองการแต่ง ("แต่งแล้ว X จาก eligiblePhotos") */
+  /** รูปที่แต่งในแอปแล้ว — ตัวเลขทั้งชุดนี้นับก่อนกรองการแต่งและการคัด ("แต่งแล้ว X จาก eligiblePhotos") */
   edited: number;
+  /** รูปที่เลือกไว้ / ไม่เอา */
+  picked: number;
+  rejected: number;
 }
 
 export interface PhotoPage {
@@ -1192,6 +1202,8 @@ export interface Commands {
   get_review_faces: [{ kind: 'person' | 'cluster'; id: Id; eventId?: Id; reviewRevision: number }, ReviewGroupFaces];
   /** "ไม่ใช่บุคคลนี้" สำหรับข้อเสนอของ AI: จำคู่ ใบหน้า–บุคคล ไว้ไม่เสนอซ้ำ ใบหน้ายังอยู่ให้เลือกคนอื่น */
   reject_suggestions: [{ faceIds: Id[]; personId: Id }, { dataRevision: number }];
+  /** คัดก่อนแต่ง: flag null = ล้างกลับเป็นยังไม่คัด */
+  set_photo_flags: [{ selection: SelectionSpec; flag: PhotoFlag | null }, { updated: number }];
   /** ย้อน "ไม่ใช่บุคคลนี้": ใบหน้ากลับไปให้ AI จัดได้ตามเดิม */
   restore_suggestions: [{ faceIds: Id[]; personId: Id }, { dataRevision: number }];
 }

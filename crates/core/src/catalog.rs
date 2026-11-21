@@ -336,6 +336,8 @@ pub struct SearchParams {
     pub rejected_person_id: Option<String>,
     /// การแต่งในแอป (DECISIONS ข้อ 32): any = ทั้งหมด, edited = แต่งแล้ว, unedited = ยังไม่แต่ง
     pub edit_filter: Option<String>,
+    /// การคัด (DECISIONS ข้อ 33): any = ทั้งหมด, picked = เลือกไว้, unflagged = ยังไม่คัด, rejected = ไม่เอา
+    pub flag_filter: Option<String>,
 }
 
 /// บุคคลที่อยู่ในรูปตามที่ AI จัดให้ พร้อมใบหน้าที่เป็นเหตุ (ใช้แจ้งว่า "ไม่ใช่คนนี้")
@@ -371,6 +373,8 @@ pub struct PhotoResult {
     pub raw: bool,
     /// ชื่อไฟล์ RAW คู่ของรูปนี้ (DECISIONS ข้อ 26) — None = ไม่มีคู่
     pub raw_pair: Option<String>,
+    /// การคัด (DECISIONS ข้อ 33): "pick" = เลือก, "reject" = ไม่เอา, None = ยังไม่คัด
+    pub flag: Option<String>,
 }
 
 /// รูปที่มีคู่ RAW (DECISIONS ข้อ 26): สิ่งที่หน้าแต่งภาพต้องรู้
@@ -412,6 +416,9 @@ pub struct Coverage {
     pub faces_pending: i64,
     /// รูปที่แต่งในแอปแล้ว (ไม่นับตัวกรองการแต่ง — ใช้บอกความคืบหน้า "แต่งแล้ว X จาก Y")
     pub edited: i64,
+    /// รูปที่เลือกไว้ / ไม่เอา (ไม่นับตัวกรองการแต่งและการคัด — DECISIONS ข้อ 33)
+    pub picked: i64,
+    pub rejected: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -448,11 +455,12 @@ const PHOTO_FROM: &str = "FROM photos p
   JOIN events e ON e.id = ep.event_id
   LEFT JOIN photo_edits pe ON pe.photo_id = p.id
   LEFT JOIN photo_raw_pairs rp ON rp.photo_id = p.id
+  LEFT JOIN photo_picks pk ON pk.photo_id = p.id
   WHERE p.catalog_state = 'active' AND e.catalog_state = 'active'";
 
 const PHOTO_COLS: &str = "p.id, r.id, l.filename, e.id, e.title, r.taken_at_local, r.date_source, r.width, r.height, \
                           r.thumbnail_status, l.available, l.os_path, r.size, e.event_date, r.decode_error, pe.edit_id, \
-                          rp.filename";
+                          rp.filename, pk.flag";
 
 fn photo_from_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoResult> {
     let filename: String = r.get(2)?;
@@ -474,6 +482,7 @@ fn photo_from_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoResult> {
         rejected_faces: vec![],
         edit_id: r.get(15)?,
         raw_pair: r.get(16)?,
+        flag: r.get(17)?,
     })
 }
 
@@ -599,15 +608,24 @@ fn build_filter(p: &SearchParams) -> Result<Filter> {
     Ok(f)
 }
 
-/// ตัวกรองการแต่ง แยกจาก `build_filter` เพื่อให้นับ "แต่งแล้ว X จาก Y" ของทั้งขอบเขตได้ขณะกรองอยู่
-fn edit_filter_sql(p: &SearchParams) -> Result<&'static str> {
+/// ตัวกรองการแต่งและการคัด แยกจาก `build_filter` เพื่อให้นับ "แต่งแล้ว X จาก Y" "เลือกไว้ X" ของทั้งขอบเขตได้ขณะกรองอยู่
+fn progress_filter_sql(p: &SearchParams) -> Result<String> {
     // `pe` = photo_edits ใน PHOTO_FROM: มีแถว = แต่งแล้ว (ค่าที่เท่ากับไม่ได้แต่งถูกลบแถวทิ้งตอนบันทึก)
-    Ok(match p.edit_filter.as_deref().unwrap_or("any") {
+    let edits = match p.edit_filter.as_deref().unwrap_or("any") {
         "any" => "",
         "edited" => " AND pe.edit_id IS NOT NULL",
         "unedited" => " AND pe.edit_id IS NULL",
         _ => return Err(AppError::invalid("ตัวกรองการแต่งไม่ถูกต้อง")),
-    })
+    };
+    // `pk` = photo_picks: ไม่มีแถว = ยังไม่คัด
+    let flags = match p.flag_filter.as_deref().unwrap_or("any") {
+        "any" => "",
+        "picked" => " AND pk.flag = 'pick'",
+        "unflagged" => " AND pk.flag IS NULL",
+        "rejected" => " AND pk.flag = 'reject'",
+        _ => return Err(AppError::invalid("ตัวกรองการคัดไม่ถูกต้อง")),
+    };
+    Ok(format!("{edits}{flags}"))
 }
 
 fn order_sql(sort: Option<&str>) -> Result<&'static str> {
@@ -676,17 +694,17 @@ fn attach_suggested(conn: &Connection, items: &mut [PhotoResult]) -> Result<()> 
 
 pub fn query_photos(conn: &Connection, p: &SearchParams) -> Result<PhotoPage> {
     let f = build_filter(p)?;
-    let edits = edit_filter_sql(p)?;
+    let progress = progress_filter_sql(p)?;
     let order = order_sql(p.sort.as_deref())?;
     let limit = p.limit.unwrap_or(100).clamp(1, 200);
     let offset: i64 = p.cursor.as_deref().and_then(|c| c.parse().ok()).filter(|o| *o >= 0).unwrap_or(0);
 
-    // ตัวเลขของขอบเขตนับก่อนกรองการแต่ง: บอกได้ว่า "แต่งแล้ว X จาก Y" ขณะดูเฉพาะรูปที่ยังไม่แต่ง
+    // ตัวเลขของขอบเขตนับก่อนกรองการแต่ง/การคัด: บอกได้ว่า "แต่งแล้ว X จาก Y" ขณะดูเฉพาะรูปที่ยังไม่แต่ง
     let coverage_sql = format!(
         "SELECT COUNT(*), COALESCE(SUM(r.thumbnail_status = 'ready'), 0), COALESCE(SUM(r.thumbnail_status = 'pending'), 0),
            COALESCE(SUM(r.thumbnail_status = 'failed'), 0), COALESCE(SUM(EXISTS (SELECT 1 {CONFIRMED_ON_PHOTO})), 0),
            COALESCE(SUM(r.face_status = 'done'), 0), COALESCE(SUM(r.face_status = 'not_analyzed'), 0),
-           COALESCE(SUM(pe.edit_id IS NOT NULL), 0)
+           COALESCE(SUM(pe.edit_id IS NOT NULL), 0), COALESCE(SUM(pk.flag = 'pick'), 0), COALESCE(SUM(pk.flag = 'reject'), 0)
          {PHOTO_FROM}{}",
         f.sql
     );
@@ -700,6 +718,8 @@ pub fn query_photos(conn: &Connection, p: &SearchParams) -> Result<PhotoPage> {
             faces_analyzed: r.get(5)?,
             faces_pending: r.get(6)?,
             edited: r.get(7)?,
+            picked: r.get(8)?,
+            rejected: r.get(9)?,
         })
     })?;
 
@@ -707,7 +727,7 @@ pub fn query_photos(conn: &Connection, p: &SearchParams) -> Result<PhotoPage> {
     args.push(Value::Integer(limit));
     args.push(Value::Integer(offset));
     let sql = format!(
-        "SELECT {PHOTO_COLS} {PHOTO_FROM}{}{edits} ORDER BY {order} LIMIT ?{} OFFSET ?{}",
+        "SELECT {PHOTO_COLS} {PHOTO_FROM}{}{progress} ORDER BY {order} LIMIT ?{} OFFSET ?{}",
         f.sql,
         args.len() - 1,
         args.len()
@@ -729,10 +749,15 @@ pub fn query_photos(conn: &Connection, p: &SearchParams) -> Result<PhotoPage> {
         }
     }
 
-    let total = match p.edit_filter.as_deref() {
-        Some("edited") => coverage.edited,
-        Some("unedited") => coverage.eligible_photos - coverage.edited,
-        _ => coverage.eligible_photos,
+    // จำนวนของรายการ (หลังกรองการแต่ง/การคัด) — ใช้แบ่งหน้า
+    let total = if progress.is_empty() {
+        coverage.eligible_photos
+    } else {
+        conn.query_row(
+            &format!("SELECT COUNT(*) {PHOTO_FROM}{}{progress}", f.sql),
+            params_from_iter(f.args.iter()),
+            |r| r.get(0),
+        )?
     };
     let next = offset + items.len() as i64;
     Ok(PhotoPage {
@@ -759,7 +784,7 @@ pub fn create_selection(app: &App, p: &SearchParams) -> Result<SelectionSnapshot
         crate::review::ensure_matches(app)?;
     }
     let f = build_filter(p)?;
-    let edits = edit_filter_sql(p)?;
+    let progress = progress_filter_sql(p)?;
     let order = order_sql(p.sort.as_deref())?;
     let mut conn = app.db();
     let tx = conn.transaction()?;
@@ -779,7 +804,7 @@ pub fn create_selection(app: &App, p: &SearchParams) -> Result<SelectionSnapshot
     args.push(Value::Text(token.clone()));
     let sql = format!(
         "INSERT INTO selection_items(token, ord, photo_id, revision_id)
-         SELECT ?{}, ROW_NUMBER() OVER (ORDER BY {order}), p.id, r.id {PHOTO_FROM}{}{edits}",
+         SELECT ?{}, ROW_NUMBER() OVER (ORDER BY {order}), p.id, r.id {PHOTO_FROM}{}{progress}",
         args.len(),
         f.sql
     );

@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
+import { formatCount } from '@/lib/format';
 import { useViewer } from '@/app/navigation';
 import { ErrorState, LoadingBlock } from '@/components/ui/Feedback';
 import { ExportDialog } from '@/features/export/ExportDialog';
@@ -8,9 +9,10 @@ import { ApplyPresetDialog } from './ApplyPresetDialog';
 import { GenerateDialog } from '@/features/assistant/GenerateDialog';
 import { MatchStyleDialog } from '@/features/assistant/MatchStyleDialog';
 import { PasteEditDialog } from './PasteEditDialog';
-import type { Coverage, PhotoResult } from '@/lib/ipc/types';
+import type { Coverage, PhotoFlag, PhotoResult } from '@/lib/ipc/types';
 import { usePhotoList, type PhotoQuery } from '@/lib/queries';
 import { PhotoGrid } from './PhotoGrid';
+import { FLAG_LABEL, useSetPhotoFlags } from './PhotoFlags';
 import { SelectionBar } from './SelectionBar';
 import { ThumbSizeSlider } from './ThumbSizeSlider';
 import { EMPTY_SELECTION, isSelected, selectionCount, toSelectionSpec, type Selection } from './selection';
@@ -63,6 +65,16 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
   const [matching, setMatching] = useState(false);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
+  // คัดรูปที่เลือก (คีย์ P / X / U ใน grid หรือเมนูในแถบเลือก) — ที่เลือกไว้ยังอยู่ ส่งออกต่อได้
+  const setFlags = useSetPhotoFlags();
+  const flagSelected = (flag: PhotoFlag | null) => {
+    const count = selectionCount(selectionRef.current);
+    if (count === 0) return;
+    setFlags.mutate(
+      { selection: toSelectionSpec(selectionRef.current), flag },
+      { onSuccess: () => toast.success(flag ? `${FLAG_LABEL[flag]} ${formatCount(count)} รูปแล้ว` : `ล้างการคัด ${formatCount(count)} รูปแล้ว`, { id: 'photo-flags' }) },
+    );
+  };
 
   const lastKey = useRef(selectionKey);
   useEffect(() => {
@@ -164,6 +176,7 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
         }}
         showEvent={showEvent}
         total={list.total}
+        onFlag={flagSelected}
       />
       {list.isError && <ErrorState compact error={list.error} title="โหลดรูปเพิ่มไม่สำเร็จ" onRetry={() => void list.fetchNextPage()} />}
       <SelectionBar
@@ -178,6 +191,7 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
         onApplyPreset={() => setApplyingPreset(true)}
         onGenerate={() => setGenerating(true)}
         onMatchStyle={() => setMatching(true)}
+        onFlag={flagSelected}
         actions={selectionActions?.({
           photos: selection.kind === 'explicit' ? list.items.filter((p) => selection.ids.has(p.id)) : null,
           clear: () => setSelection(EMPTY_SELECTION),

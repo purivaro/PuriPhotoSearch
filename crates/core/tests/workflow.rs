@@ -1199,6 +1199,83 @@ fn edit_crop_and_rotate_keep_faces_names_and_the_original_file() {
 }
 
 #[test]
+fn pick_and_reject_filter_count_and_select_without_touching_files() {
+    // คัดก่อนแต่ง (DECISIONS ข้อ 33): เลือก/ไม่เอาแบบ Lightroom เป็นข้อมูลของคลัง ไฟล์ไม่ถูกแตะ
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-21 คัดก่อนแต่ง");
+    std::fs::create_dir_all(&root).unwrap();
+    for name in ["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg"] {
+        std::fs::write(root.join(name), jpeg_with_exif(400, 300, 1, "2026:11:21 09:00:00")).unwrap();
+    }
+    lib.import(&root, "single_event", |_| true);
+    let before = tree_state(&root);
+    let id = |name: &str| lib.photo_id(name);
+    let flag = |names: &[&str], flag: Value| {
+        let ids: Vec<String> = names.iter().map(|n| id(n)).collect();
+        lib.call("set_photo_flags", json!({ "selection": { "kind": "explicit", "photoIds": ids }, "flag": flag }))
+            ["updated"]
+            .as_i64()
+            .unwrap()
+    };
+    assert_eq!(flag(&["a.jpg", "b.jpg"], json!("pick")), 2);
+    assert_eq!(flag(&["c.jpg"], json!("reject")), 1);
+    assert_eq!(flag(&["a.jpg"], json!("pick")), 0, "ค่าเดิมไม่นับว่าเปลี่ยน");
+
+    let names = |filter: &str| lib.filenames(json!({ "flagFilter": filter }));
+    assert_eq!(names("picked"), ["a.jpg", "b.jpg"]);
+    assert_eq!(names("unflagged"), ["d.jpg", "e.jpg"]);
+    assert_eq!(names("rejected"), ["c.jpg"]);
+    let all = lib.query(json!({}));
+    assert_eq!((all["coverage"]["picked"].as_i64(), all["coverage"]["rejected"].as_i64()), (Some(2), Some(1)));
+    let flag_of = |name: &str| arr(&all["items"]).iter().find(|i| i["filename"] == name).unwrap()["flag"].clone();
+    assert_eq!((flag_of("a.jpg"), flag_of("c.jpg"), flag_of("d.jpg")), (json!("pick"), json!("reject"), Value::Null));
+
+    // แต่งเฉพาะรูปที่เลือก: ตัวกรองการคัดใช้ร่วมกับตัวกรองการแต่ง · ตัวเลขของขอบเขตนับก่อนกรอง
+    lib.call("save_photo_edit", json!({ "photoId": id("b.jpg"), "settings": { "rotate": 90 } }));
+    let left = lib.query(json!({ "flagFilter": "picked", "editFilter": "unedited" }));
+    assert_eq!((names_in(&left), left["total"].as_i64()), (vec!["a.jpg".to_string()], Some(1)));
+    assert_eq!((left["coverage"]["eligiblePhotos"].as_i64(), left["coverage"]["picked"].as_i64()), (Some(5), Some(2)));
+
+    // เลือกผลทั้งหมดขณะกรอง แล้วคัดทั้งชุด (ผ่าน snapshot)
+    let snapshot = lib.call(
+        "create_selection",
+        json!({ "personIds": [], "personMode": "all", "eventIds": [], "faceFilter": "any", "sort": "filename", "limit": 10, "flagFilter": "unflagged" }),
+    );
+    assert_eq!(snapshot["count"], 2);
+    let flagged = lib.call(
+        "set_photo_flags",
+        json!({ "selection": { "kind": "snapshot", "selectionToken": snapshot["selectionToken"] }, "flag": "reject" }),
+    );
+    assert_eq!(flagged["updated"], 2);
+    assert_eq!(names("rejected"), ["c.jpg", "d.jpg", "e.jpg"]);
+
+    // เปลี่ยนใจ: ไม่เอา → เลือก · ล้างกลับเป็นยังไม่คัด
+    assert_eq!(flag(&["c.jpg"], json!("pick")), 1);
+    assert_eq!(flag(&["a.jpg"], Value::Null), 1);
+    assert_eq!(names("picked"), ["b.jpg", "c.jpg"]);
+    assert_eq!(names("unflagged"), ["a.jpg"]);
+
+    // ค่าที่ผิดถูกปฏิเสธ
+    let bad = |args: Value| lib.try_call("set_photo_flags", args).unwrap_err().code;
+    assert_eq!(
+        bad(json!({ "selection": { "kind": "explicit", "photoIds": [id("a.jpg")] }, "flag": "maybe" })),
+        "INVALID_INPUT"
+    );
+    assert_eq!(bad(json!({ "selection": { "kind": "explicit", "photoIds": [] }, "flag": "pick" })), "INVALID_INPUT");
+    assert_eq!(
+        lib.try_call("query_photos", json!({ "personIds": [], "personMode": "all", "eventIds": [], "faceFilter": "any", "sort": "filename", "limit": 10, "flagFilter": "best" }))
+            .unwrap_err()
+            .code,
+        "INVALID_INPUT"
+    );
+    assert_eq!(tree_state(&root), before, "คัดรูป (รวม \"ไม่เอา\") ไม่แตะไฟล์");
+}
+
+fn names_in(page: &Value) -> Vec<String> {
+    arr(&page["items"]).iter().map(|i| i["filename"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
 fn edit_filter_lists_what_is_left_to_edit_for_a_person_and_counts_progress() {
     // แต่งตามคน (DECISIONS ข้อ 32): รูปของคนนี้ที่ยังไม่แต่ง · แต่งแล้ว X จาก Y · เลือกผลทั้งหมดได้เฉพาะที่กรองอยู่
     let lib = Lib::new();

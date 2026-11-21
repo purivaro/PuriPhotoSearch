@@ -94,7 +94,7 @@ impl PhotoTools {
         vec![
             ToolSpec {
                 name: "search_photos",
-                description: "Search the photo library. Returns one line per photo: id | filename | event | date taken | people | edited. \
+                description: "Search the photo library. Returns one line per photo: id | filename | event | date taken | people | edited | flag (picked/rejected by the user). \
                     Combine filters freely; people are matched by name (a photo must contain every person given).",
                 input_schema: schema(
                     json!({
@@ -104,6 +104,7 @@ impl PhotoTools {
                         "from": { "type": "string", "description": "Taken on or after, YYYY-MM-DD" },
                         "to": { "type": "string", "description": "Taken on or before, YYYY-MM-DD" },
                         "edited": { "type": "string", "enum": ["edited", "unedited"], "description": "Only photos already edited in the app, or only those not edited yet" },
+                        "flag": { "type": "string", "enum": ["picked", "unflagged", "rejected"], "description": "Only photos the user picked, has not culled yet, or rejected" },
                         "limit": { "type": "integer", "minimum": 1, "maximum": MAX_LIST },
                     }),
                     &[],
@@ -321,13 +322,18 @@ fn merge(base: &mut Value, patch: &Value) {
 fn line_of(p: &catalog::PhotoResult) -> String {
     let people = p.confirmed_people.iter().map(|x| x.display_name.as_str()).collect::<Vec<_>>().join(", ");
     format!(
-        "{} | {} | {} | {} | {} | {}",
+        "{} | {} | {} | {} | {} | {} | {}",
         p.id,
         p.filename,
         p.event_title,
         p.taken_at.as_deref().unwrap_or("-"),
         if people.is_empty() { "-" } else { &people },
-        if p.edit_id.is_some() { "edited" } else { "-" }
+        if p.edit_id.is_some() { "edited" } else { "-" },
+        match p.flag.as_deref() {
+            Some("pick") => "picked",
+            Some("reject") => "rejected",
+            _ => "-",
+        }
     )
 }
 
@@ -374,11 +380,12 @@ impl PhotoTools {
             sort: Some("taken_desc".into()),
             limit: Some(args.get("limit").and_then(Value::as_i64).unwrap_or(30).clamp(1, MAX_LIST)),
             edit_filter: str_arg(args, "edited").map(str::to_string),
+            flag_filter: str_arg(args, "flag").map(str::to_string),
             ..Default::default()
         };
         let page = catalog::query_photos(&conn, &params).map_err(|e| e.message)?;
         let mut text = format!(
-            "{} photos match; showing {}.\nid | filename | event | taken | people | edited\n",
+            "{} photos match; showing {}.\nid | filename | event | taken | people | edited | flag\n",
             page.total,
             page.items.len()
         );

@@ -144,6 +144,7 @@ domain_commands!(
     restore_suggestions,
     preview_white_balance,
     preview_auto_light,
+    set_photo_flags,
 );
 
 /// เปิด native file picker สำหรับไฟล์รูป (ลายน้ำ); คืน path ที่ผู้ใช้เลือกเอง (หรือ None เมื่อยกเลิก)
