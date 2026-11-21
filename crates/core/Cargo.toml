@@ -9,6 +9,8 @@ publish.workspace = true
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 jpeg-decoder = { version = "0.3.2", default-features = false }
 kamadak-exif = "0.6.2"
+# ไฟล์ RAW จากกล้อง (DECISIONS ข้อ 25) — pure Rust, LGPL-2.1 (repo นี้เปิด source จึงสร้างใหม่กับ rawler ที่แก้เองได้)
+rawler = "0.8.0"
 libc = "0.2.191"
 rusqlite = { version = "0.43.0", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }

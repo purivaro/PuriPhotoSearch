@@ -24,7 +24,7 @@ debug build ที่ตั้ง `PURI_DATA_DIR` จะใช้โฟลเด
 |---|---|---|
 | คลัง | `meta` | `library_id`, `name`, `created_at`, `data_revision` |
 | แหล่งรูป | `sources` | โฟลเดอร์ที่ผู้ใช้เลือก (หนึ่งแถวต่อ path), โหมดนำเข้า, ความตั้งใจติดตาม/วิเคราะห์ |
-| | `event_source_bindings` | กิจกรรม ↔ ขอบเขตโฟลเดอร์; `recursive = 0` คือ "รูปที่วางตรงโฟลเดอร์แม่" |
+| | `event_source_bindings` | กิจกรรม ↔ ขอบเขตโฟลเดอร์; `recursive = 0` คือ "รูปที่วางตรงโฟลเดอร์แม่" · `include_raw` (v9) = นำไฟล์ RAW เข้าด้วย ([DECISIONS.md](DECISIONS.md) ข้อ 25) |
 | กิจกรรม | `events` | ชื่อ, วันกิจกรรม (ISO ค.ศ.) + ที่มา, ปก, หมายเหตุ, `record_version` |
 | รูป | `photos` | file instance หนึ่งตำแหน่ง; ชี้ `current_revision_id` |
 | | `photo_locations` | ตำแหน่งที่ใช้งานอยู่ (หนึ่งต่อรูป), ชื่อไฟล์ + คีย์ค้นหา, `available` |

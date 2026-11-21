@@ -1965,3 +1965,114 @@ fn ipc_contract_matches_typescript_command_table() {
     assert!(puri_core::api::asset(&lib.app, "photo/../../etc/passwd").is_err());
     assert!(puri_core::api::asset(&lib.app, "photo//etc/passwd").is_err());
 }
+
+/// ไฟล์ RAW (DECISIONS ข้อ 25): โฟลเดอร์แบบที่ช่างภาพใช้ — JPEG ที่ export ไว้ในโฟลเดอร์งาน + RAW ในโฟลเดอร์ย่อย
+/// นำเข้าเฉพาะเมื่อเลือกรวม RAW · ภาพย่อ ตัวดูภาพ ใบหน้า แต่ง และส่งออกเป็น JPEG ได้ครบ · ไฟล์ RAW ไม่ถูกแตะ
+#[test]
+fn raw_files_are_imported_on_request_developed_edited_and_exported_as_jpeg() {
+    let lib = Lib::with_ai();
+    assert_eq!(lib.install_model()["state"], "completed");
+    let root = lib.photos().join("2026-11-21 งานถ่าย RAW");
+    std::fs::create_dir_all(root.join("raw")).unwrap();
+    write_jpeg(&root.join("A001.jpg"), 60);
+    // ฉากในแสงเชิงเส้น: สีส้มกลางภาพ (ตัววิเคราะห์จำลองอ่านสีแดงกลางภาพเป็น "บุคคล")
+    let scene = |shade: f32| {
+        puri_core::raw::Linear::from_fn(96, 64, move |x, _| {
+            image::Rgb([0.30 * shade, 0.12 * shade, (0.02 + 0.3 * x as f32 / 95.0) * shade])
+        })
+    };
+    std::fs::write(root.join("raw/A001.dng"), puri_core::raw::test_dng(&scene(1.0), 6, "2026:11:21 10:20:30")).unwrap();
+    std::fs::write(root.join("raw/A002.dng"), puri_core::raw::test_dng(&scene(0.5), 1, "2026:11:21 10:21:00")).unwrap();
+    let before = tree_state(&root);
+
+    // ตรวจรายการ: RAW นับแยก ไม่รวมใน photoCount · ไม่เลือกรวม RAW = นำเข้าเฉพาะ JPEG
+    let preview = lib.preview(&root);
+    assert_eq!((preview["single"]["photoCount"].as_i64(), preview["single"]["rawCount"].as_i64()), (Some(1), Some(2)));
+    lib.import(&root, "single_event", |_| true);
+    assert_eq!(lib.filenames(json!({})), vec!["A001.jpg"]);
+
+    // เพิ่มโฟลเดอร์เดิมอีกครั้งพร้อมเลือกรวม RAW → กิจกรรมเดิมได้ RAW เพิ่ม (ตรวจรูปใหม่ครั้งต่อไปก็ยังรวม)
+    let preview = lib.preview(&root);
+    assert_eq!(preview["single"]["rawNewCount"].as_i64(), Some(2));
+    let drafts = drafts_of(&preview, "single_event", |_| true);
+    let result = lib.call(
+        "commit_import",
+        json!({ "previewId": preview["previewId"], "requestId": new_id(), "mode": "single_event", "drafts": drafts,
+                "analyzeFaces": true, "watch": true, "includeRaw": true }),
+    );
+    assert_eq!(result["reusedEvents"], 1);
+    lib.run_jobs();
+    assert_eq!(lib.filenames(json!({})), vec!["A001.dng", "A001.jpg", "A002.dng"]);
+    let event = result["eventIds"][0].as_str().unwrap().to_string();
+    lib.call("rescan_event", json!({ "eventId": event }));
+    lib.run_jobs();
+    assert_eq!(lib.filenames(json!({})).len(), 3, "ตรวจรูปใหม่ไม่ซ้ำ ไม่หาย");
+
+    // ข้อมูลรูป: ขนาดหลังหมุนตามไฟล์ (orientation 6) · วันถ่ายจาก RAW · เป็น RAW
+    let raw_id = lib.photo_id("A001.dng");
+    let details = lib.call("get_photo_details", json!({ "photoId": raw_id }));
+    assert_eq!((details["width"].as_i64(), details["height"].as_i64()), (Some(64), Some(96)), "{details}");
+    assert_eq!(details["takenAt"], "2026-11-21T10:20:30");
+    assert_eq!((details["raw"].as_bool(), details["thumbStatus"].as_str()), (Some(true), Some("ready")));
+    assert_eq!(lib.call("get_photo_details", json!({ "photoId": lib.photo_id("A001.jpg") }))["raw"], false);
+    assert!(!arr(&details["faces"]).is_empty(), "วิเคราะห์ใบหน้าจากภาพที่ล้างแล้ว: {details}");
+
+    // UI เปิดไฟล์ RAW ไม่ได้: ภาพย่อ "ต้นฉบับ" และครอปใบหน้าเป็น JPEG ที่ล้างแล้ว ตั้งตรง
+    let asset = |path: String| puri_core::api::asset(&lib.app, &path).unwrap();
+    for kind in ["thumb", "original", "photo"] {
+        let a = asset(format!("{kind}/{raw_id}"));
+        assert_eq!(a.mime, "image/jpeg", "{kind}");
+        let img = image::load_from_memory(&a.bytes).unwrap();
+        assert_eq!((img.width(), img.height()), (64, 96), "{kind}");
+    }
+    let face = arr(&details["faces"])[0]["id"].as_str().unwrap().to_string();
+    assert!(asset(format!("face/{face}")).bytes.starts_with(&[0xFF, 0xD8]));
+
+    // แต่ง RAW: ค่าแสง +1 ทำในแสงของฉาก (ส่วนสว่างไม่ขาดเหมือนภาพทั่วไป) + ตัดครึ่งบน
+    let mean = |bytes: &[u8]| {
+        let img = image::load_from_memory(bytes).unwrap().to_rgb8();
+        img.pixels().map(|p| p.0[1] as f64).sum::<f64>() / (img.width() * img.height()) as f64
+    };
+    let plain = mean(&asset(format!("original/{raw_id}")).bytes);
+    lib.call(
+        "save_photo_edit",
+        json!({ "photoId": raw_id, "settings": { "crop": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 0.5 }, "adjust": { "exposure": 1.0 } } }),
+    );
+    let edited = asset(format!("photo/{raw_id}")).bytes;
+    let img = image::load_from_memory(&edited).unwrap();
+    assert_eq!((img.width(), img.height()), (64, 48));
+    assert!(mean(&edited) > plain + 20.0, "สว่างขึ้น: {plain} → {}", mean(&edited));
+
+    // ส่งออก "ขนาดเดิม": RAW เป็น JPEG เสมอ (ชื่อ .jpg) ตามที่แต่ง พร้อมวันถ่าย · ไม่ชนกับ A001.jpg ที่มีอยู่
+    let dest = lib.tmp.path().join("ส่งออก RAW");
+    std::fs::create_dir_all(&dest).unwrap();
+    let selection = json!({ "kind": "explicit", "photoIds": [raw_id, lib.photo_id("A002.dng")] });
+    let plan = lib.call(
+        "preview_export",
+        json!({ "selection": selection, "destination": dest, "resize": { "mode": "original" } }),
+    );
+    let names: Vec<&str> = arr(&plan["sampleNames"]).iter().map(|s| s["output"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["A001.jpg", "A002.jpg"], "{plan}");
+    let job = lib.call("start_export", json!({ "planId": plan["planId"], "requestId": new_id() }));
+    lib.run_jobs();
+    let report = lib.call("get_export_report", json!({ "jobId": job["id"] }));
+    assert_eq!((report["copied"].as_i64(), report["failed"].as_i64()), (Some(2), Some(0)), "{report}");
+    let out = std::fs::read(dest.join("A001.jpg")).unwrap();
+    let img = image::load_from_memory(&out).unwrap();
+    assert_eq!((img.width(), img.height()), (64, 48), "ตามที่แต่ง");
+    let exif = exif::Reader::new().read_from_container(&mut std::io::Cursor::new(&out)).unwrap();
+    assert_eq!(
+        exif.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY).unwrap().display_value().to_string(),
+        "2026-11-21 10:20:30"
+    );
+    assert_eq!(exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY).unwrap().value.get_uint(0), Some(1));
+    let other = image::load_from_memory(&std::fs::read(dest.join("A002.jpg")).unwrap()).unwrap();
+    assert_eq!((other.width(), other.height()), (96, 64));
+
+    // ย่อไฟล์ต้นฉบับ: RAW ไม่อยู่ในแผน (เฉพาะ JPEG)
+    let shrink =
+        lib.call("preview_shrink", json!({ "selection": selection, "resize": { "mode": "long_edge", "px": 2048 } }));
+    assert_eq!((shrink["plannedCount"].as_i64(), shrink["notJpeg"].as_i64()), (Some(0), Some(2)), "{shrink}");
+
+    assert_eq!(tree_state(&root), before, "ไฟล์ RAW และ JPEG ต้นฉบับไม่ถูกแตะ");
+}

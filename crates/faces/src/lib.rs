@@ -246,7 +246,18 @@ fn exif_orientation(bytes: &[u8]) -> u8 {
 }
 
 /// ถอดรหัสรูปสำหรับวิเคราะห์ใบหน้า: JPEG ถอดแบบย่อระหว่างถอด แล้วย่อให้ด้านยาวเท่ากับที่รุ่น Python ใช้
+/// · RAW: โทนตั้งต้นที่แอปล้างจากข้อมูลเซนเซอร์ (ตั้งตรงแล้ว) ภาพเดียวกับภาพย่อและตัวดูภาพ
 pub fn prepare(bytes: &[u8]) -> Result<Prepared> {
+    if puri_core::raw::is_raw_bytes(bytes) {
+        let info = puri_core::raw::info(bytes).map_err(|e| e.message)?;
+        let img = puri_core::media::decode_upright(bytes, MAX_IMAGE_DIM).map_err(|e| e.message)?;
+        let img = if img.width().max(img.height()) > MAX_IMAGE_DIM {
+            img.resize(MAX_IMAGE_DIM, MAX_IMAGE_DIM, FilterType::Triangle)
+        } else {
+            img
+        };
+        return Ok(Prepared { image: img.to_rgb8(), full_width: info.width, full_height: info.height });
+    }
     let orientation = exif_orientation(bytes);
     let mut decoded: Option<(DynamicImage, u32, u32)> = None;
     if bytes.starts_with(&[0xFF, 0xD8]) {

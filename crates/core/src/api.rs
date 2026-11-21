@@ -427,6 +427,8 @@ struct Capabilities {
     schema_version: i64,
     platform: &'static str,
     image_formats: &'static [&'static str],
+    /// ไฟล์ RAW ที่อ่านได้ (นำเข้าเมื่อเลือกรวม RAW ตอนเพิ่มโฟลเดอร์)
+    raw_formats: &'static [&'static str],
     face_analysis: ai::FaceAnalysisStatus,
     folder_picker: &'static str,
     library_path: String,
@@ -447,6 +449,7 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
             schema_version: db::latest_version(),
             platform: std::env::consts::OS,
             image_formats: media::SUPPORTED_EXTS,
+            raw_formats: crate::raw::EXTS,
             face_analysis: ai::status(app)?,
             folder_watch: Availability {
                 available: false,

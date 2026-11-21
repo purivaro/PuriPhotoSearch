@@ -20,11 +20,24 @@ export function allDrafts(preview: ImportPreview): EventDraft[] {
   return [preview.single, ...preview.children, ...(preview.rootLoose ? [preview.rootLoose] : [])];
 }
 
-/** เลือกแถวนี้ได้หรือไม่: อ่านไม่ได้เลือกไม่ได้; งานที่อยู่ในคลังแล้วเลือกได้เมื่อมีรูปใหม่ให้ตรวจ */
-export function isSelectable(draft: EventDraft): boolean {
+/** รูปใหม่ของแถวนี้ (รวมไฟล์ RAW เมื่อเลือกรวม RAW) */
+export function newOf(draft: EventDraft, includeRaw: boolean): number {
+  return draft.newCount + (includeRaw ? draft.rawNewCount : 0);
+}
+
+/** เลือกแถวนี้ได้หรือไม่: อ่านไม่ได้เลือกไม่ได้; งานที่อยู่ในคลังแล้วเลือกได้เมื่อมีรูปใหม่ให้ตรวจ (หรือเลือกรวม RAW ที่ยังไม่ได้นำเข้า) */
+export function isSelectable(draft: EventDraft, includeRaw = false): boolean {
   if (!draft.readable) return false;
-  if (draft.existingEventId) return draft.newCount > 0;
+  if (draft.existingEventId) return newOf(draft, includeRaw) > 0;
   return true;
+}
+
+/**
+ * ค่าเริ่มต้นของ "รวมไฟล์ RAW" (DECISIONS ข้อ 25): เปิดเมื่อโฟลเดอร์มีแต่ RAW (ถ่าย RAW อย่างเดียว) ·
+ * มีทั้ง JPEG และ RAW = ปิดไว้ก่อน เพราะ JPEG มักเป็นไฟล์ที่ export มาจาก RAW เดียวกัน รวมแล้วรูปจะซ้ำ
+ */
+export function rawDefault(preview: ImportPreview): boolean {
+  return preview.single.rawCount > 0 && preview.single.photoCount === 0;
 }
 
 export function initialEdits(preview: ImportPreview): DraftEdits {
@@ -54,18 +67,18 @@ export interface ImportSummary {
   emptySelected: number;
 }
 
-export function summarize(drafts: EventDraft[], edits: DraftEdits): ImportSummary {
+export function summarize(drafts: EventDraft[], edits: DraftEdits, includeRaw = false): ImportSummary {
   const summary: ImportSummary = { eventCount: 0, newPhotos: 0, existingPhotos: 0, unselectedPhotos: 0, missingTitles: 0, emptySelected: 0 };
   for (const draft of drafts) {
     const edit = edits[draft.draftId];
-    if (edit?.selected && isSelectable(draft)) {
+    if (edit?.selected && isSelectable(draft, includeRaw)) {
       summary.eventCount += 1;
-      summary.newPhotos += draft.newCount;
-      summary.existingPhotos += draft.existingCount;
+      summary.newPhotos += newOf(draft, includeRaw);
+      summary.existingPhotos += draft.existingCount + (includeRaw ? draft.rawCount - draft.rawNewCount : 0);
       if (!edit.title.trim()) summary.missingTitles += 1;
-      if (draft.photoCount === 0) summary.emptySelected += 1;
-    } else if (isSelectable(draft)) {
-      summary.unselectedPhotos += draft.newCount;
+      if (draft.photoCount === 0 && !(includeRaw && draft.rawCount > 0)) summary.emptySelected += 1;
+    } else if (isSelectable(draft, includeRaw)) {
+      summary.unselectedPhotos += newOf(draft, includeRaw);
     }
   }
   return summary;
@@ -75,13 +88,14 @@ export function buildCommit(
   preview: ImportPreview,
   mode: SourceMode,
   edits: DraftEdits,
-  options: { requestId: Id; analyzeFaces: boolean; watch: boolean },
+  options: { requestId: Id; analyzeFaces: boolean; watch: boolean; includeRaw?: boolean },
 ): CommitImportArgs {
+  const includeRaw = options.includeRaw ?? false;
   const drafts = draftsForMode(preview, mode)
-    .filter((draft) => edits[draft.draftId]?.selected && isSelectable(draft))
+    .filter((draft) => edits[draft.draftId]?.selected && isSelectable(draft, includeRaw))
     .map((draft) => {
       const edit = edits[draft.draftId] as DraftEdit;
       return { draftId: draft.draftId, title: edit.title.trim(), eventDate: edit.eventDate };
     });
-  return { previewId: preview.previewId, requestId: options.requestId, mode, drafts, analyzeFaces: options.analyzeFaces, watch: options.watch };
+  return { previewId: preview.previewId, requestId: options.requestId, mode, drafts, analyzeFaces: options.analyzeFaces, watch: options.watch, includeRaw };
 }

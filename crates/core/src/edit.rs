@@ -181,11 +181,16 @@ fn bounds(pts: &[(f64, f64); 4]) -> (f64, f64, f64, f64) {
 
 /// ภาพที่แต่งจากภาพเดิมที่หมุนตาม EXIF แล้ว (ขนาดใดก็ได้ — พิกัดเป็นสัดส่วน)
 pub fn render(img: DynamicImage, s: &EditSettings) -> DynamicImage {
-    crate::adjust::apply(render_geometry(img, s), &s.adjust)
+    render_with(img, s, crate::adjust::Profile::Display)
 }
 
-/// ตัด หมุน ปรับเอียง
-fn render_geometry(img: DynamicImage, s: &EditSettings) -> DynamicImage {
+/// เหมือน [`render`] ตามชนิดของภาพต้นทาง (RAW: `img` เป็นภาพ 8 บิตของโทนตั้งต้น)
+pub fn render_with(img: DynamicImage, s: &EditSettings, profile: crate::adjust::Profile) -> DynamicImage {
+    crate::adjust::apply_profile(render_geometry(img, s), &s.adjust, profile)
+}
+
+/// ตัด หมุน ปรับเอียง (ภาพ 8 บิต หรือภาพ RAW แบบทศนิยม)
+pub(crate) fn render_geometry(img: DynamicImage, s: &EditSettings) -> DynamicImage {
     if s.is_geometry_identity() {
         return img;
     }
@@ -207,21 +212,49 @@ fn render_geometry(img: DynamicImage, s: &EditSettings) -> DynamicImage {
     match img {
         DynamicImage::ImageRgb8(src) => DynamicImage::ImageRgb8(resample(&src, &g, ow, oh)),
         DynamicImage::ImageLuma8(src) => DynamicImage::ImageLuma8(resample(&src, &g, ow, oh)),
+        DynamicImage::ImageRgb32F(src) => DynamicImage::ImageRgb32F(resample(&src, &g, ow, oh)),
         other => DynamicImage::ImageRgba8(resample(&other.to_rgba8(), &g, ow, oh)),
     }
 }
 
+/// ค่าของหนึ่งช่องสีที่ resample ได้: 8 บิต (ปัดเป็นจำนวนเต็ม) หรือทศนิยม (ภาพ RAW เชิงเส้น)
+trait Channel: image::Primitive {
+    fn get(self) -> f64;
+    fn put(v: f64) -> Self;
+}
+
+impl Channel for u8 {
+    fn get(self) -> f64 {
+        self as f64
+    }
+    fn put(v: f64) -> u8 {
+        v.round() as u8
+    }
+}
+
+impl Channel for f32 {
+    fn get(self) -> f64 {
+        self as f64
+    }
+    fn put(v: f64) -> f32 {
+        v as f32
+    }
+}
+
 /// ทุกพิกเซลของภาพที่แต่งย้อนไปหาจุดบนภาพหลังหมุน แล้วผสมสี่พิกเซลรอบ ๆ (bilinear)
-fn resample<P: Pixel<Subpixel = u8>>(
-    src: &ImageBuffer<P, Vec<u8>>,
+fn resample<P: Pixel>(
+    src: &ImageBuffer<P, Vec<P::Subpixel>>,
     g: &Geometry,
     ow: u32,
     oh: u32,
-) -> ImageBuffer<P, Vec<u8>> {
+) -> ImageBuffer<P, Vec<P::Subpixel>>
+where
+    P::Subpixel: Channel,
+{
     let n = P::CHANNEL_COUNT as usize;
     let (sw, sh) = (src.width() as usize, src.height() as usize);
     let raw = src.as_raw();
-    let mut out = vec![0u8; ow as usize * oh as usize * n];
+    let mut out = vec![<P::Subpixel as Channel>::put(0.0); ow as usize * oh as usize * n];
     for (j, row) in out.chunks_exact_mut(ow as usize * n).enumerate() {
         let b = (j as f64 + 0.5) / oh as f64;
         for (i, px) in row.chunks_exact_mut(n).enumerate() {
@@ -231,11 +264,11 @@ fn resample<P: Pixel<Subpixel = u8>>(
             let (x0, y0) = (x.floor() as usize, y.floor() as usize);
             let (x1, y1) = ((x0 + 1).min(sw - 1), (y0 + 1).min(sh - 1));
             let (fx, fy) = (x - x0 as f64, y - y0 as f64);
-            let at = |xx: usize, yy: usize, c: usize| raw[(yy * sw + xx) * n + c] as f64;
+            let at = |xx: usize, yy: usize, c: usize| raw[(yy * sw + xx) * n + c].get();
             for (c, value) in px.iter_mut().enumerate() {
                 let top = at(x0, y0, c) * (1.0 - fx) + at(x1, y0, c) * fx;
                 let bottom = at(x0, y1, c) * (1.0 - fx) + at(x1, y1, c) * fx;
-                *value = (top * (1.0 - fy) + bottom * fy).round() as u8;
+                *value = Channel::put(top * (1.0 - fy) + bottom * fy);
             }
         }
     }
@@ -286,13 +319,28 @@ pub(crate) fn cache_path(cache_dir: &Path, photo_id: &str, edit_id: &str, kind: 
 }
 
 /// ภาพที่แต่งย่อให้ด้านยาวไม่เกิน `max_edge` เป็น JPEG — ถอดรหัสต้นฉบับเท่าที่ต้องใช้
-/// (`bytes` เป็นต้นฉบับ หรือภาพย่อของแอปซึ่งหมุนตั้งตรงแล้ว ก็ได้)
-pub(crate) fn preview_jpeg(bytes: &[u8], s: &EditSettings, max_edge: u32, quality: u8) -> Result<Vec<u8>> {
-    media::encode_jpeg(&render_small(bytes, s, max_edge)?, quality)
+/// (`bytes` เป็นต้นฉบับ หรือภาพย่อของแอปซึ่งหมุนตั้งตรงแล้ว ก็ได้ — ภาพย่อของรูป RAW ใช้ `profile` = Raw)
+pub(crate) fn preview_jpeg(
+    bytes: &[u8],
+    s: &EditSettings,
+    max_edge: u32,
+    quality: u8,
+    profile: crate::adjust::Profile,
+) -> Result<Vec<u8>> {
+    media::encode_jpeg(&render_small(bytes, s, max_edge, profile)?, quality)
 }
 
 /// ภาพที่แต่งย่อให้ด้านยาวไม่เกิน `max_edge` — ถอดรหัสต้นฉบับเท่าที่ต้องใช้ (ถอดเผื่อส่วนที่ถูกตัดออก)
-pub(crate) fn render_small(bytes: &[u8], s: &EditSettings, max_edge: u32) -> Result<DynamicImage> {
+/// · ไฟล์ RAW ล้างจากข้อมูลเซนเซอร์ (`profile` ใช้กับภาพ 8 บิตเท่านั้น)
+pub(crate) fn render_small(
+    bytes: &[u8],
+    s: &EditSettings,
+    max_edge: u32,
+    profile: crate::adjust::Profile,
+) -> Result<DynamicImage> {
+    if crate::raw::is_raw_bytes(bytes) {
+        return Ok(DynamicImage::ImageRgb8(crate::raw::render(bytes, s, max_edge)?));
+    }
     let need = match media::upright_dimensions(bytes) {
         Some((w, h)) if w > 0 && h > 0 => {
             let (ow, oh) = Geometry::new(w, h, s).output_size();
@@ -301,7 +349,7 @@ pub(crate) fn render_small(bytes: &[u8], s: &EditSettings, max_edge: u32) -> Res
         }
         _ => u32::MAX,
     };
-    let img = render(media::decode_upright(bytes, need)?, s);
+    let img = render_with(media::decode_upright(bytes, need)?, s, profile);
     Ok(if img.width().max(img.height()) > max_edge { img.thumbnail(max_edge, max_edge) } else { img })
 }
 

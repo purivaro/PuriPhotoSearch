@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NEUTRAL, applyToPixels, autoAdjust, curves, isNeutral, pixel, pixelAt, vignetteWeight, type Adjust } from './adjust';
+import { NEUTRAL, applyToPixels, autoAdjust, curves, isNeutral, neutralize, pixel, pixelAt, rawTone, rawToneInverse, vignetteWeight, type Adjust } from './adjust';
 
 // ค่าเดียวกับ adjust::tests::sample ใน Rust
 const sample: Adjust = { ...NEUTRAL, exposure: 0.5, contrast: 30, highlights: -40, shadows: 50, whites: 10, blacks: -10, temperature: 20, tint: -10, vibrance: 25, saturation: 10 };
@@ -127,5 +127,35 @@ describe('แสงและสี (สูตรเดียวกับ Rust)',
     applyToPixels(more, sampleFull);
     expect([...more.slice(0, 3)]).toEqual(pixel(sampleFull, full, 10, 20, 30));
     expect([...more.slice(4, 7)]).toEqual(pixel(sampleFull, full, 200, 130, 80));
+  });
+});
+
+describe('สูตรของ RAW (สูตรเดียวกับ Rust)', () => {
+  it('ได้ค่าเดียวกับ adjust::tests::raw_profile_matches_the_ui_formula (RAW_EXPECTED)', () => {
+    const t = curves(sample, 'raw');
+    expect([pixel(sample, t, 10, 20, 30), pixel(sample, t, 120, 90, 200), pixel(sample, t, 240, 230, 220)]).toEqual([
+      [11, 35, 53],
+      [154, 117, 236],
+      [255, 244, 228],
+    ]);
+  });
+
+  it('เส้นโค้งโทนตั้งต้นตรงกับ Rust และถอดกลับได้ · ไม่แต่ง = ภาพเดิมทุกระดับ', () => {
+    expect(rawTone(0)).toBe(0);
+    expect(rawTone(1)).toBeCloseTo(0.993, 9);
+    expect(rawTone(0.125)).toBeCloseTo(0.558, 9);
+    expect(rawTone(2)).toBe(1);
+    for (const v of [0.01, 0.3, 0.6, 0.95]) expect(rawTone(rawToneInverse(v))).toBeCloseTo(v, 9);
+    const [, g] = curves(NEUTRAL, 'raw');
+    g.forEach((v, i) => expect(Math.round(v * 255)).toBe(i));
+  });
+
+  it('ค่าแสง +1 ของ RAW ไม่ตัดส่วนสว่างทิ้งเหมือนภาพทั่วไป · หลอดดูดสีถอดกลับเป็นแสงเชิงเส้นก่อน', () => {
+    const up = { ...NEUTRAL, exposure: 1 };
+    const level = (t: Float64Array, i: number) => Math.round(t[i]! * 255);
+    expect(level(curves(up)[1], 200)).toBe(255);
+    expect(level(curves(up, 'raw')[1], 230)).toBeLessThan(255);
+    // จุดสีเทาที่ออกอุ่นในภาพโทนตั้งต้น → ปรับให้เย็นลง
+    expect(neutralize(200, 180, 160, 'raw').temperature).toBeLessThan(0);
   });
 });

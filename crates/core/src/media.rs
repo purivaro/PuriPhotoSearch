@@ -7,13 +7,10 @@ use sha2::{Digest, Sha256};
 use std::io::Cursor;
 use std::path::Path;
 
-/// ชนิดไฟล์ที่ build นี้ถอดรหัสได้จริง
+/// ชนิดไฟล์ที่ build นี้ถอดรหัสได้จริง (ไม่รวม RAW — ดู [`crate::raw::EXTS`])
 pub const SUPPORTED_EXTS: &[&str] = &["jpg", "jpeg", "png"];
 /// ชนิดไฟล์ภาพที่รู้จักแต่ยังไม่รองรับ — รายงานให้ผู้ใช้เห็น ไม่ทำให้หายเงียบ ๆ
-const KNOWN_IMAGE_EXTS: &[&str] = &[
-    "heic", "heif", "tif", "tiff", "webp", "bmp", "gif", "avif", "arw", "cr2", "cr3", "nef", "nrw", "orf", "raf",
-    "rw2", "pef", "srw", "dng", "raw",
-];
+const KNOWN_IMAGE_EXTS: &[&str] = &["heic", "heif", "tif", "tiff", "webp", "bmp", "gif", "avif", "raw"];
 
 pub const THUMB_EDGE: u32 = 512;
 /// เพดานขนาดไฟล์และจำนวนพิกเซล กันไฟล์ผิดปกติทำ RAM เต็ม (Blueprint 9.3)
@@ -23,6 +20,8 @@ const MAX_PIXELS: u64 = 250_000_000;
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum FileKind {
     Supported,
+    /// ไฟล์ RAW จากกล้อง: อ่านได้ แต่นำเข้าเฉพาะกิจกรรมที่เลือกให้รวม RAW (DECISIONS ข้อ 25)
+    Raw,
     UnsupportedImage,
     Other,
 }
@@ -31,6 +30,8 @@ pub fn classify(path: &Path) -> (FileKind, String) {
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     let kind = if SUPPORTED_EXTS.contains(&ext.as_str()) {
         FileKind::Supported
+    } else if crate::raw::is_raw_ext(&ext) {
+        FileKind::Raw
     } else if KNOWN_IMAGE_EXTS.contains(&ext.as_str()) {
         FileKind::UnsupportedImage
     } else {
@@ -95,7 +96,7 @@ pub fn read_exif(bytes: &[u8]) -> ExifInfo {
 }
 
 /// `2026:11:18 10:20:30` → `2026-11-18T10:20:30`; ค่าที่ไม่ใช่วันเวลาจริง (เช่น 0000:00:00) ถือว่าไม่ทราบ
-fn parse_exif_datetime(s: &str) -> Option<String> {
+pub(crate) fn parse_exif_datetime(s: &str) -> Option<String> {
     let b = s.as_bytes();
     if b.len() < 19 {
         return None;
@@ -199,6 +200,12 @@ pub(crate) fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 /// ขั้น "เตรียมข้อมูลรูป": hash เนื้อหา, EXIF, ขนาด และภาพย่อที่หมุนถูกทิศ
 pub fn process(bytes: &[u8]) -> Result<Processed> {
     let sha256 = crate::util::hex(&Sha256::digest(bytes));
+    if crate::raw::is_raw_bytes(bytes) {
+        // RAW: ภาพย่อเป็นโทนตั้งต้นที่ล้างจากข้อมูลเซนเซอร์ (ไม่ใช่ภาพ JPEG ที่กล้องฝังไว้) ให้ตรงกับตัวดูภาพและหน้าแต่งภาพ
+        let (img, info) = crate::raw::base_image(bytes, THUMB_EDGE)?;
+        let thumbnail_jpeg = encode_jpeg(&DynamicImage::ImageRgb8(img), 82)?;
+        return Ok(Processed { sha256, width: info.width, height: info.height, exif: info.exif, thumbnail_jpeg });
+    }
     let exif = read_exif(bytes);
     let (img, (raw_w, raw_h)) = match decode_jpeg_scaled(bytes, THUMB_EDGE) {
         Some(scaled) => scaled,
@@ -217,6 +224,9 @@ pub fn process(bytes: &[u8]) -> Result<Processed> {
 }
 
 pub fn thumbnail_only(bytes: &[u8], edge: u32) -> Result<Vec<u8>> {
+    if crate::raw::is_raw_bytes(bytes) {
+        return encode_jpeg(&DynamicImage::ImageRgb8(crate::raw::base_image(bytes, edge)?.0), 80);
+    }
     let exif = read_exif(bytes);
     let mut thumb = decode(bytes)?.thumbnail(edge, edge);
     orient(&mut thumb, exif.orientation);
@@ -245,6 +255,16 @@ pub fn face_crops(bytes: &[u8], bboxes: &[(f64, f64, f64, f64)], already_upright
     if bboxes.is_empty() {
         return Ok(vec![]);
     }
+    if crate::raw::is_raw_bytes(bytes) {
+        // RAW: ล้างเท่าที่ใบหน้าเล็กสุดต้องใช้ (ภาพที่ได้ตั้งตรงแล้ว)
+        let info = crate::raw::info(bytes)?;
+        let (fw, fh) = (info.width as f64, info.height as f64);
+        let smallest = bboxes.iter().map(|b| crop_square(*b, fw, fh).2).fold(f64::MAX, f64::min).max(1.0);
+        let wanted = (FACE_CROP_EDGE as f64 / smallest).min(1.0);
+        let edge = (fw.max(fh) * wanted).ceil() as u32;
+        let img = DynamicImage::ImageRgb8(crate::raw::base_image(bytes, edge.max(FACE_CROP_EDGE))?.0);
+        return crop_faces(&img, bboxes);
+    }
     let orientation = if already_upright { 1 } else { read_exif(bytes).orientation };
     let scaled = jpeg_dimensions(bytes).and_then(|(raw_w, raw_h)| {
         let (fw, fh) = if orientation >= 5 { (raw_h, raw_w) } else { (raw_w, raw_h) };
@@ -260,6 +280,11 @@ pub fn face_crops(bytes: &[u8], bboxes: &[(f64, f64, f64, f64)], already_upright
         None => decode(bytes)?,
     };
     orient(&mut img, orientation);
+    crop_faces(&img, bboxes)
+}
+
+/// ครอปใบหน้าจากภาพที่ตั้งตรงแล้ว
+fn crop_faces(img: &DynamicImage, bboxes: &[(f64, f64, f64, f64)]) -> Result<Vec<Vec<u8>>> {
     let (iw, ih) = (img.width() as f64, img.height() as f64);
     bboxes
         .iter()
@@ -387,17 +412,28 @@ pub fn export_jpeg(
     watermark: Option<&Watermark>,
     edit: Option<&crate::edit::EditSettings>,
 ) -> Result<Vec<u8>> {
+    // RAW: ล้างภาพเสมอ (แต่งหรือไม่ก็ตาม) · EXIF สร้างใหม่จากข้อมูลในไฟล์ RAW
+    let raw = if crate::raw::is_raw_bytes(bytes) { Some(crate::raw::info(bytes)?) } else { None };
+    let plain = crate::edit::EditSettings::default();
+    let edit = edit.or(raw.as_ref().map(|_| &plain));
     let orientation = if edit.is_some() { 1 } else { read_exif(bytes).orientation };
-    let mut meta = metadata_segments(bytes);
+    let mut meta = match &raw {
+        Some(info) => vec![info.exif_app1()],
+        None => metadata_segments(bytes),
+    };
     // ขนาดเต็มของภาพที่จะส่งออก (ก่อนย่อ) และอัตราส่วนกับด้านยาวของต้นฉบับ
     let edited = edit.and_then(|e| {
-        let (w, h) = upright_dimensions(bytes)?;
+        let (w, h) = match &raw {
+            Some(info) => (info.width, info.height),
+            None => upright_dimensions(bytes)?,
+        };
         let (ow, oh) = crate::edit::Geometry::new(w, h, e).output_size();
         Some((e, (ow, oh), w.max(h) as f64 / ow.max(oh) as f64))
     });
     // ถอดรหัสให้ภาพที่จะส่งออกมีด้านยาวอย่างน้อย `want` (รูปที่แต่ง: ถอดเผื่อส่วนที่ถูกตัดออก)
     let source = |want: u32| -> Result<DynamicImage> {
         match edited {
+            Some((e, _, _)) if raw.is_some() => Ok(DynamicImage::ImageRgb8(crate::raw::render(bytes, e, want)?)),
             Some((e, _, ratio)) => {
                 Ok(crate::edit::render(decode_upright(bytes, (want as f64 * ratio).ceil() as u32)?, e))
             }
@@ -495,13 +531,20 @@ pub fn export_jpeg(
 
 /// ขนาดภาพหลังหมุนตาม EXIF จากหัวไฟล์ (ไม่ถอดรหัสภาพ)
 pub(crate) fn upright_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if crate::raw::is_raw_bytes(bytes) {
+        return crate::raw::info(bytes).ok().map(|i| (i.width, i.height));
+    }
     let (w, h) = jpeg_dimensions(bytes)
         .or_else(|| ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok())?;
     Some(if read_exif(bytes).orientation >= 5 { (h, w) } else { (w, h) })
 }
 
 /// ถอดรหัสให้ด้านยาวอย่างน้อย `min_edge` (หรือเต็มขนาดถ้าภาพเล็กกว่า) แล้วหมุนตาม EXIF
-pub(crate) fn decode_upright(bytes: &[u8], min_edge: u32) -> Result<DynamicImage> {
+/// · RAW: โทนตั้งต้น ด้านยาวเท่า `min_edge` (ภาพที่ล้างแล้วตั้งตรงเสมอ)
+pub fn decode_upright(bytes: &[u8], min_edge: u32) -> Result<DynamicImage> {
+    if crate::raw::is_raw_bytes(bytes) {
+        return Ok(DynamicImage::ImageRgb8(crate::raw::base_image(bytes, min_edge)?.0));
+    }
     let orientation = read_exif(bytes).orientation;
     let mut img = decode_for_export(bytes, min_edge)?;
     orient(&mut img, orientation);

@@ -66,6 +66,8 @@ export interface Capabilities {
   platform: string;
   /** นามสกุลไฟล์ที่ build นี้ถอดรหัสได้จริง เช่น ["jpg","jpeg","png"] */
   imageFormats: string[];
+  /** นามสกุลไฟล์ RAW ที่อ่านได้ (นำเข้าเมื่อเลือก “รวมไฟล์ RAW” ตอนเพิ่มโฟลเดอร์) */
+  rawFormats: string[];
   faceAnalysis: FaceAnalysisStatus;
   /** ติดตามรูปใหม่ในโฟลเดอร์ที่เชื่อมแล้วโดยอัตโนมัติ — false ในชุดงานนี้: ต้องกด "ตรวจรูปใหม่" เอง */
   folderWatch: {
@@ -124,6 +126,9 @@ export interface EventDraft {
   existingCount: number;
   /** ไฟล์ภาพชนิดที่ build นี้ยังไม่รองรับ */
   unsupportedCount: number;
+  /** ไฟล์ RAW (ไม่รวมใน `photoCount` — นำเข้าเมื่อเลือกรวม RAW) และที่ยังไม่อยู่ในคลัง */
+  rawCount: number;
+  rawNewCount: number;
   readable: boolean;
   unreadableReason: string | null;
   /** มีกิจกรรมที่ผูกกับโฟลเดอร์นี้อยู่แล้ว */
@@ -161,6 +166,8 @@ export interface CommitImportArgs {
   /** เก็บความตั้งใจไว้ใช้เมื่อมีตัววิเคราะห์ใบหน้า */
   analyzeFaces: boolean;
   watch: boolean;
+  /** นำไฟล์ RAW เข้าด้วย (จำไว้กับกิจกรรม ใช้ทุกครั้งที่ตรวจรูปใหม่) */
+  includeRaw?: boolean;
 }
 
 export interface ImportCommitResult {
@@ -274,6 +281,8 @@ export interface PhotoResult {
   rejectedFaces: Id[];
   /** รหัสการแต่งล่าสุด (null = ไม่ได้แต่ง) — ใช้เป็นรุ่นของภาพย่อ */
   editId: Id | null;
+  /** ไฟล์ RAW จากกล้อง — หน้าแต่งภาพใช้สูตรของ RAW */
+  raw: boolean;
 }
 
 /** สี่เหลี่ยมเป็นสัดส่วน 0–1 */

@@ -322,42 +322,52 @@ impl Adjust {
         }
     }
 
-    /// ตารางของขั้นที่แยกต่อช่องสีได้: [แดง, เขียว, น้ำเงิน][ค่าเข้า 0–255] → ค่าออก 0–1
+    /// ตารางของขั้นที่แยกต่อช่องสีได้: [แดง, เขียว, น้ำเงิน][ค่าเข้า 0–255] → ค่าออก 0–1 (ภาพทั่วไป)
     pub fn curves(&self) -> [[f64; 256]; 3] {
-        let gains = [
-            1.0 + 0.25 * self.temperature / 100.0,
-            1.0 - 0.2 * self.tint / 100.0,
-            1.0 - 0.25 * self.temperature / 100.0,
-        ];
-        let light = 2f64.powf(self.exposure);
-        let black = -0.1 * self.blacks / 100.0;
-        let white = 1.0 - 0.1 * self.whites / 100.0;
-        let master = Spline::new(&self.curve);
-        let channel = [Spline::new(&self.curve_red), Spline::new(&self.curve_green), Spline::new(&self.curve_blue)];
-        let channel_levels = [self.levels_red, self.levels_green, self.levels_blue];
-        let splits = self.parametric_split.unwrap_or(DEFAULT_SPLITS).map(|v| v / 100.0);
-        let mut out = [[0.0; 256]; 3];
-        for (c, table) in out.iter_mut().enumerate() {
-            for (i, value) in table.iter_mut().enumerate() {
-                // สมดุลแสงขาวและค่าแสงทำในแสงเชิงเส้น
-                let linear = to_linear(i as f64 / 255.0) * gains[c] * light;
-                let mut x = to_srgb(linear.clamp(0.0, 1.0));
-                x = ((x - black) / (white - black)).clamp(0.0, 1.0);
-                // เงา/ส่วนสว่าง: ยกหรือกดช่วงมืด/สว่าง ปลายสองข้างไม่ขยับ (น้ำหนักสูงสุดที่ 1/3 และ 2/3)
-                x += 0.25 * self.shadows / 100.0 * 6.75 * x * (1.0 - x) * (1.0 - x);
-                x += 0.25 * self.highlights / 100.0 * 6.75 * x * x * (1.0 - x);
-                x = x.clamp(0.0, 1.0);
-                let k = self.contrast / 100.0;
-                x = if k >= 0.0 { x + k * (x * x * (3.0 - 2.0 * x) - x) } else { 0.5 + (x - 0.5) * (1.0 + 0.5 * k) };
-                x = parametric(x.clamp(0.0, 1.0), &self.parametric, &splits);
-                x = self.levels.eval(x);
-                x = master.eval(x);
-                x = channel_levels[c].eval(x);
-                x = channel[c].eval(x);
-                *value = x.clamp(0.0, 1.0);
-            }
+        self.curves_for(Profile::Display)
+    }
+
+    /// เหมือน [`Self::curves`] ตามชนิดของภาพต้นทาง — RAW: ค่าเข้าเป็นภาพ 8 บิตของโทนตั้งต้น ถอดกลับเป็นแสงเชิงเส้นก่อน
+    /// (ไม่ปรับอะไร = ได้ค่าเดิมทุกระดับ)
+    pub fn curves_for(&self, profile: Profile) -> [[f64; 256]; 3] {
+        let chain = self.chain();
+        let decoded: [f64; 256] = std::array::from_fn(|i| match profile {
+            Profile::Display => to_linear(i as f64 / 255.0),
+            Profile::Raw => raw_tone_inverse(i as f64 / 255.0),
+        });
+        std::array::from_fn(|c| std::array::from_fn(|i| chain.eval(self, c, decoded[i], profile)))
+    }
+
+    /// ตารางของ RAW ที่ค่าเข้าเป็นแสงเชิงเส้น 0–[`crate::raw::HEADROOM`] (ภาพที่ล้างแล้ว ทศนิยม): [`LINEAR_LUT`] ค่าต่อช่อง
+    /// เรียงตามรากที่สองของค่าเข้า (ละเอียดในเงา) — อ่านด้วย [`linear_lut_at`]
+    pub fn linear_lut(&self) -> [Vec<f64>; 3] {
+        let chain = self.chain();
+        let h = f64::from(crate::raw::HEADROOM);
+        std::array::from_fn(|c| {
+            (0..LINEAR_LUT)
+                .map(|i| {
+                    let s = i as f64 / (LINEAR_LUT - 1) as f64;
+                    chain.eval(self, c, s * s * h, Profile::Raw)
+                })
+                .collect()
+        })
+    }
+
+    /// ค่าที่เตรียมไว้ของขั้นที่แยกต่อช่องได้
+    fn chain(&self) -> Chain {
+        Chain {
+            gains: [
+                1.0 + 0.25 * self.temperature / 100.0,
+                1.0 - 0.2 * self.tint / 100.0,
+                1.0 - 0.25 * self.temperature / 100.0,
+            ],
+            light: 2f64.powf(self.exposure),
+            black: -0.1 * self.blacks / 100.0,
+            white: 1.0 - 0.1 * self.whites / 100.0,
+            master: Spline::new(&self.curve),
+            channel: [Spline::new(&self.curve_red), Spline::new(&self.curve_green), Spline::new(&self.curve_blue)],
+            splits: self.parametric_split.unwrap_or(DEFAULT_SPLITS).map(|v| v / 100.0),
         }
-        out
     }
 
     /// ขั้นต่อพิกเซล (ค่า 0–1 หลังผ่านตาราง): HSL ต่อช่วงสี แล้วความสด/ความอิ่มสี
@@ -410,6 +420,151 @@ impl Adjust {
         }
         out.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
     }
+}
+
+/// ชนิดของภาพต้นทางของการแต่ง
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Profile {
+    /// ภาพทั่วไป (JPEG/PNG): ค่า sRGB ที่กล้องหรือโปรแกรมอื่นทำโทนมาแล้ว
+    #[default]
+    Display,
+    /// RAW: แสงเชิงเส้นจากเซนเซอร์ — ค่าแสงและสมดุลแสงขาวทำก่อนเส้นโค้งโทนตั้งต้น [`raw_tone`] (แบบโปรแกรมแต่ง RAW)
+    /// ส่วนสว่างจึงม้วนเข้าหาสีขาวแทนการตัดเมื่อเพิ่มค่าแสง
+    Raw,
+}
+
+/// ขั้นที่แยกต่อช่องได้ (ค่าที่เตรียมไว้)
+struct Chain {
+    gains: [f64; 3],
+    light: f64,
+    black: f64,
+    white: f64,
+    master: Spline,
+    channel: [Spline; 3],
+    splits: [f64; 3],
+}
+
+impl Chain {
+    /// แสงเชิงเส้นของช่อง `c` → ค่าออก 0–1
+    fn eval(&self, a: &Adjust, c: usize, linear: f64, profile: Profile) -> f64 {
+        // สมดุลแสงขาวและค่าแสงทำในแสงเชิงเส้น
+        let linear = linear * self.gains[c] * self.light;
+        let mut x = match profile {
+            Profile::Display => to_srgb(linear.clamp(0.0, 1.0)),
+            Profile::Raw => raw_tone(linear),
+        };
+        x = ((x - self.black) / (self.white - self.black)).clamp(0.0, 1.0);
+        // เงา/ส่วนสว่าง: ยกหรือกดช่วงมืด/สว่าง ปลายสองข้างไม่ขยับ (น้ำหนักสูงสุดที่ 1/3 และ 2/3)
+        x += 0.25 * a.shadows / 100.0 * 6.75 * x * (1.0 - x) * (1.0 - x);
+        x += 0.25 * a.highlights / 100.0 * 6.75 * x * x * (1.0 - x);
+        x = x.clamp(0.0, 1.0);
+        let k = a.contrast / 100.0;
+        x = if k >= 0.0 { x + k * (x * x * (3.0 - 2.0 * x) - x) } else { 0.5 + (x - 0.5) * (1.0 + 0.5 * k) };
+        x = parametric(x.clamp(0.0, 1.0), &a.parametric, &self.splits);
+        x = a.levels.eval(x);
+        x = self.master.eval(x);
+        x = [a.levels_red, a.levels_green, a.levels_blue][c].eval(x);
+        x = self.channel[c].eval(x);
+        x.clamp(0.0, 1.0)
+    }
+}
+
+/// เส้นโค้งโทนตั้งต้นของ RAW: (log2 ของแสงเชิงเส้นเทียบระดับขาวของเซนเซอร์, ค่าที่แสดงแบบ sRGB)
+/// วัดจากภาพ JPEG ที่กล้องฝังไว้ในไฟล์ RAW จริง (Sony ILCE-7CM2 30 ไฟล์ + Panasonic DC-S5 49 ไฟล์ — ค่ากลางของสองกล้อง
+/// · TEST_REPORT หมวด RAW) RAW จึงเปิดมาได้โทนใกล้ภาพที่กล้องแสดง · เหนือระดับขาว 1 stop (ถึงได้เมื่อเพิ่มค่าแสง) ค่อย ๆ ขาวสุด
+/// สูตรเดียวกับ `RAW_TONE` ใน adjust.ts
+pub const RAW_TONE: [[f64; 2]; 15] = [
+    [-10.0, 0.012],
+    [-9.0, 0.018],
+    [-8.0, 0.028],
+    [-7.0, 0.054],
+    [-6.0, 0.107],
+    [-5.0, 0.210],
+    [-4.0, 0.356],
+    [-3.0, 0.558],
+    [-2.5, 0.660],
+    [-2.0, 0.756],
+    [-1.5, 0.842],
+    [-1.0, 0.909],
+    [-0.5, 0.958],
+    [0.0, 0.993],
+    [1.0, 1.0],
+];
+
+fn raw_tone_spline() -> &'static Spline {
+    static SPLINE: std::sync::OnceLock<Spline> = std::sync::OnceLock::new();
+    SPLINE.get_or_init(|| {
+        Spline::from_xy(RAW_TONE.iter().map(|p| p[0]).collect(), RAW_TONE.iter().map(|p| p[1]).collect())
+    })
+}
+
+/// โทนตั้งต้นของ RAW: แสงเชิงเส้น (1 = ระดับขาวของเซนเซอร์) → ค่าที่แสดง 0–1 · ต่ำกว่า 2⁻¹⁰ ลดลงเป็นเส้นตรงถึงดำ
+pub fn raw_tone(x: f64) -> f64 {
+    if x.is_nan() || x <= 0.0 {
+        return 0.0;
+    }
+    let l = x.log2();
+    if l <= RAW_TONE[0][0] {
+        RAW_TONE[0][1] * x / RAW_TONE[0][0].exp2()
+    } else if l >= RAW_TONE[RAW_TONE.len() - 1][0] {
+        1.0
+    } else {
+        raw_tone_spline().eval(l)
+    }
+}
+
+/// ย้อน [`raw_tone`]: ค่าที่แสดง → แสงเชิงเส้น (ค้นแบบแบ่งครึ่ง — เส้นโค้งเพิ่มตลอด) · 1 = ขาวสุดของช่วงที่เก็บไว้
+pub fn raw_tone_inverse(v: f64) -> f64 {
+    let h = f64::from(crate::raw::HEADROOM);
+    if v <= 0.0 {
+        return 0.0;
+    }
+    if v >= 1.0 {
+        return h;
+    }
+    let (mut lo, mut hi) = (0.0, h);
+    for _ in 0..60 {
+        let mid = (lo + hi) / 2.0;
+        if raw_tone(mid) < v {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo + hi) / 2.0
+}
+
+/// จำนวนค่าต่อช่องของ [`Adjust::linear_lut`]
+pub const LINEAR_LUT: usize = 4096;
+
+/// อ่านตารางจาก [`Adjust::linear_lut`] ที่แสงเชิงเส้น `x` (ประมาณค่าระหว่างช่อง)
+pub fn linear_lut_at(table: &[f64], x: f32) -> f64 {
+    let s = (x / crate::raw::HEADROOM).clamp(0.0, 1.0).sqrt() as f64 * (LINEAR_LUT - 1) as f64;
+    let i = (s as usize).min(LINEAR_LUT - 2);
+    let t = s - i as f64;
+    table[i] * (1.0 - t) + table[i + 1] * t
+}
+
+/// ปรับแสงและสีภาพ RAW ที่ล้างแล้ว (แสงเชิงเส้น ตั้งตรง ตัด/หมุนแล้ว) → ภาพ 8 บิต — โทนตั้งต้นของ RAW อยู่ในขั้นนี้เสมอ
+/// (ไม่ได้แต่งก็ต้องผ่าน)
+pub fn apply_linear(img: &image::Rgb32FImage, a: &Adjust) -> image::RgbImage {
+    let lut = a.linear_lut();
+    let vignette = a.vignette.amount != 0.0;
+    let per_pixel = a.per_pixel();
+    let (w, h) = (img.width() as f64, img.height() as f64);
+    let width = img.width() as usize;
+    let mut out = image::RgbImage::new(img.width(), img.height());
+    for (i, (src, dst)) in img.pixels().zip(out.pixels_mut()).enumerate() {
+        let mapped =
+            [linear_lut_at(&lut[0], src.0[0]), linear_lut_at(&lut[1], src.0[1]), linear_lut_at(&lut[2], src.0[2])];
+        let mut v = if per_pixel { a.color(mapped) } else { mapped };
+        if vignette {
+            let t = a.vignette.weight((i % width) as f64 + 0.5, (i / width) as f64 + 0.5, w, h);
+            v = a.vignette.apply(v, t);
+        }
+        dst.0 = v.map(|x| (x.clamp(0.0, 1.0) * 255.0).round() as u8);
+    }
+    out
 }
 
 /// Parametric curve: สี่ช่วงตามจุดแบ่ง ยก/กดแต่ละช่วงด้วยน้ำหนักรูประฆัง ปลายสองข้างไม่ขยับ
@@ -485,12 +640,16 @@ struct Spline {
 }
 
 impl Spline {
+    /// จุดของเส้นโค้งโทนในหน่วย 0–255 · เส้นตรงหรือน้อยกว่าสองจุด = ไม่ปรับ
     fn new(points: &[[f64; 2]]) -> Spline {
         if points.len() < 2 || curve_is_identity(points) {
             return Spline { xs: vec![], ys: vec![], ms: vec![] };
         }
-        let xs: Vec<f64> = points.iter().map(|p| p[0] / 255.0).collect();
-        let ys: Vec<f64> = points.iter().map(|p| p[1] / 255.0).collect();
+        Spline::from_xy(points.iter().map(|p| p[0] / 255.0).collect(), points.iter().map(|p| p[1] / 255.0).collect())
+    }
+
+    /// จุดใดก็ได้ (ค่า x เพิ่มขึ้น) อย่างน้อยสองจุด
+    fn from_xy(xs: Vec<f64>, ys: Vec<f64>) -> Spline {
         let n = xs.len();
         let d: Vec<f64> = (0..n - 1).map(|k| (ys[k + 1] - ys[k]) / (xs[k + 1] - xs[k])).collect();
         let mut ms = vec![0.0; n];
@@ -554,12 +713,18 @@ fn to_srgb(v: f64) -> f64 {
     }
 }
 
-/// ปรับแสงและสีทั้งภาพ
+/// ปรับแสงและสีทั้งภาพ (ภาพทั่วไป)
 pub fn apply(img: DynamicImage, a: &Adjust) -> DynamicImage {
+    apply_profile(img, a, Profile::Display)
+}
+
+/// ปรับแสงและสีภาพ 8 บิตตามชนิดของภาพต้นทาง — RAW: ภาพ 8 บิตของโทนตั้งต้น (ภาพย่อหรือภาพของตัวดูภาพ) แบบเดียวกับตัวอย่างสด
+/// ในหน้าแต่งภาพ · ไม่ได้แต่ง = ภาพเดิมทั้งสองชนิด
+pub fn apply_profile(img: DynamicImage, a: &Adjust, profile: Profile) -> DynamicImage {
     if a.is_neutral() {
         return img;
     }
-    let curves = a.curves();
+    let curves = a.curves_for(profile);
     let vignette = a.vignette.amount != 0.0;
     let only_curves = !a.per_pixel() && !vignette;
     let (w, h) = (img.width() as f64, img.height() as f64);
@@ -751,4 +916,59 @@ mod tests {
 
     /// ค่าอ้างอิงของ `sample_full` (ใส่ค่าเดียวกันใน adjust.test.ts)
     const FULL_EXPECTED: [[u8; 3]; 3] = [[20, 37, 53], [255, 190, 135], [77, 179, 116]];
+
+    #[test]
+    fn raw_tone_matches_the_camera_curve_and_round_trips() {
+        assert_eq!(raw_tone(0.0), 0.0);
+        assert!((raw_tone(1.0) - 0.993).abs() < 1e-9 && raw_tone(2.0) == 1.0);
+        assert!((raw_tone(0.125) - 0.558).abs() < 1e-9, "เทากลาง 3 stop ใต้ระดับขาว");
+        let mut last = -1.0;
+        for i in 0..=2000 {
+            let v = raw_tone(i as f64 / 1000.0);
+            assert!(v >= last, "เพิ่มตลอด");
+            last = v;
+        }
+        // ไม่ปรับอะไร = ภาพ 8 บิตของโทนตั้งต้นเหมือนเดิมทุกระดับ (ถอดกลับเป็นแสงเชิงเส้นแล้วทำโทนซ้ำ)
+        let c = Adjust::default().curves_for(Profile::Raw);
+        for (i, v) in c[1].iter().enumerate() {
+            assert_eq!((v * 255.0).round() as usize, i);
+        }
+    }
+
+    #[test]
+    fn raw_exposure_works_on_scene_light_so_highlights_roll_off() {
+        let up = Adjust { exposure: 1.0, ..Default::default() };
+        let (display, raw) = (up.curves(), up.curves_for(Profile::Raw));
+        let level = |t: &[f64; 256], i: usize| (t[i] * 255.0).round() as u8;
+        // ภาพทั่วไป: ค่าแสง +1 ทำให้ส่วนที่สว่างกว่า ~190 ขาวสุดหมด · RAW: ยังไล่น้ำหนักได้
+        assert_eq!(level(&display[1], 200), 255);
+        assert!(
+            level(&raw[1], 200) < 254 && level(&raw[1], 230) < 255,
+            "{} {}",
+            level(&raw[1], 200),
+            level(&raw[1], 230)
+        );
+        assert!(level(&raw[1], 120) > 150, "ช่วงกลางสว่างขึ้นราวหนึ่ง stop");
+        // ภาพที่ล้างแล้ว (ทศนิยม) กับภาพ 8 บิตของโทนตั้งต้นให้ผลใกล้กันเมื่อแต่งชุดเดียวกัน
+        let a = sample();
+        let lut = a.linear_lut();
+        let eight = a.curves_for(Profile::Raw);
+        for x in [0.003f32, 0.02, 0.09, 0.3, 0.8] {
+            let t = (raw_tone(x as f64) * 255.0).round() as usize;
+            let from_linear = linear_lut_at(&lut[1], x);
+            assert!((from_linear - eight[1][t]).abs() * 255.0 <= 2.5, "x {x}: {from_linear} vs {}", eight[1][t]);
+        }
+    }
+
+    /// ค่าอ้างอิงของ `sample` ด้วยสูตรของ RAW (ใส่ค่าเดียวกันใน adjust.test.ts)
+    const RAW_EXPECTED: [[u8; 3]; 3] = [[11, 35, 53], [154, 117, 236], [255, 244, 228]];
+
+    #[test]
+    fn raw_profile_matches_the_ui_formula() {
+        let a = sample();
+        let c = a.curves_for(Profile::Raw);
+        let got: Vec<[u8; 3]> =
+            [[10, 20, 30], [120, 90, 200], [240, 230, 220]].iter().map(|v| a.pixel(&c, *v)).collect();
+        assert_eq!(got, RAW_EXPECTED.to_vec());
+    }
 }

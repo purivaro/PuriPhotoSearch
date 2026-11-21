@@ -117,6 +117,15 @@ export function PhotoGrid({ items, label, selection, onSelectionChange, onOpen, 
                   </span>
                 )}
                 <PeopleBadge photo={photo} />
+                {photo.raw && (
+                  <span
+                    title="ไฟล์ RAW จากกล้อง — แต่งจากข้อมูลเซนเซอร์ ส่งออกเป็น JPEG"
+                    data-testid="photo-card-raw"
+                    className="absolute top-1.5 right-1.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-bold tracking-wide text-white"
+                  >
+                    RAW
+                  </span>
+                )}
               </button>
               <button
                 type="button"

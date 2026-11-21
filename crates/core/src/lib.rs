@@ -22,6 +22,7 @@ pub mod media;
 pub mod people;
 pub mod platform;
 pub mod preset;
+pub mod raw;
 pub mod relink;
 pub mod review;
 pub mod setup;
