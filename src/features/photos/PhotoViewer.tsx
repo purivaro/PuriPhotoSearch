@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
-import { ArrowLeft, ChevronLeft, ChevronRight, ClipboardPaste, Copy, EllipsisVertical, ExternalLink, FolderOpen, Image as ImageIcon, Minus, PanelRight, Plus, ScanFace, SlidersHorizontal, Sparkles, Undo2, Upload, X } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, ClipboardPaste, Copy, EllipsisVertical, ExternalLink, FolderOpen, Image as ImageIcon, Minus, PanelRight, Plus, ScanFace, Palette, SlidersHorizontal, Sparkles, Undo2, Upload, X } from 'lucide-react';
 import { useViewer, type ViewerLocationState } from '@/app/navigation';
 import { Button, IconButton } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
@@ -17,6 +17,8 @@ import { qk } from '@/lib/queries';
 import { useEditClipboard } from '@/stores/editClipboard';
 import { PasteEditDialog } from './PasteEditDialog';
 import { GenerateDialog } from '@/features/assistant/GenerateDialog';
+import { useAssistant } from '@/stores/assistant';
+import { useUi } from '@/stores/ui';
 import { PhotoEditor } from './PhotoEditor';
 import { ViewerInspector } from './ViewerInspector';
 import { ViewerStage, type ViewerStageHandle } from './ViewerStage';
@@ -290,6 +292,18 @@ export function PhotoViewer() {
             </MenuItem>
             <MenuItem icon={<Sparkles />} onSelect={() => setGenerating(true)}>
               สร้างภาพด้วย AI…
+            </MenuItem>
+            <MenuItem
+              icon={<Palette />}
+              disabled={!data}
+              onSelect={() => {
+                if (!data) return;
+                useAssistant.getState().setReference({ reference: { kind: 'photo', photoId }, label: data.filename });
+                useUi.getState().setAssistantOpen(true);
+                toast.success('ตั้งเป็นภาพตัวอย่างในผู้ช่วย AI แล้ว — บอก AI ได้เลยว่าจะให้แต่งรูปไหนตามภาพนี้');
+              }}
+            >
+              ใช้เป็นภาพตัวอย่างในผู้ช่วย AI
             </MenuItem>
             {data?.edit && (
               <MenuItem icon={<Undo2 />} onSelect={() => setConfirmRevert(true)} data-testid="viewer-revert">

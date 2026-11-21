@@ -386,7 +386,12 @@ export interface AiStartArgs {
   messages: { role: 'user' | 'assistant'; text: string }[];
   context?: string | null;
   tools: boolean;
+  /** ภาพตัวอย่างสไตล์ของรอบนี้ */
+  reference?: AiReference | null;
 }
+
+/** ภาพตัวอย่าง: รูปในคลัง (ตามที่แต่งไว้) หรือไฟล์ภาพ JPEG/PNG จากที่อื่นในเครื่อง */
+export type AiReference = { kind: 'photo'; photoId: Id } | { kind: 'file'; path: string };
 
 export type AiEvent =
   | { kind: 'started'; model: string | null }
@@ -1024,7 +1029,9 @@ export interface Commands {
   ai_cancel: [{ turnId: Id }, null];
   /** คืนจำนวนรูปที่ย้อน */
   ai_undo: [{ turnId: Id }, number];
-  ai_generate: [{ selection: SelectionSpec; prompt: string; template?: string | null }, { turnId: Id }];
+  ai_generate: [{ selection: SelectionSpec; prompt: string; template?: string | null; styleReference?: AiReference | null }, { turnId: Id }];
+  /** รูปในชุดที่เลือก (รหัส + ชื่อไฟล์) */
+  selection_photos: [{ selection: SelectionSpec; limit?: number }, { total: number; items: { id: Id; filename: string }[] }];
   ai_generate_info: [Record<string, never>, { outputRoot: string; maxPhotos: number }];
   list_watermarks: [Record<string, never>, WatermarkInfo[]];
   add_watermark: [{ path: string }, WatermarkInfo];

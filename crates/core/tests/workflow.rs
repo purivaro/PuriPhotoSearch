@@ -1543,6 +1543,111 @@ fn ai_generated_images_are_saved_tidily_and_remember_where_they_came_from() {
 }
 
 #[test]
+fn ai_matches_photos_to_a_reference_look() {
+    use puri_core::assistant::{look, Reference};
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-21 ภาพตัวอย่าง");
+    std::fs::create_dir_all(&root).unwrap();
+    // ภาพคล้ายภาพถ่าย: ส่วนบนสีต่าง ๆ (ต่างกันเล็กน้อยแต่ละภาพ) ส่วนล่างเป็นสีเทาไล่ความสว่าง (เหมือนผนัง/เสื้อขาว)
+    let photo = |shift: u8| {
+        let img = image::RgbImage::from_fn(320, 240, |x, y| {
+            let (t, s) = (x as f64 / 319.0, y as f64 / 239.0);
+            if y >= 150 {
+                let g = (20.0 + 225.0 * t) as u8;
+                return image::Rgb([g, g, g]);
+            }
+            image::Rgb([
+                (30.0 + 190.0 * t) as u8,
+                ((40.0 + 150.0 * s) as u8).wrapping_add(shift),
+                (60.0 + 120.0 * (1.0 - t) * s) as u8,
+            ])
+        });
+        let mut out = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92).encode_image(&img).unwrap();
+        out
+    };
+    for (name, shift) in [("ref.jpg", 0u8), ("a.jpg", 20), ("b.jpg", 35)] {
+        std::fs::write(root.join(name), photo(shift)).unwrap();
+    }
+    lib.import(&root, "single_event", |_| true);
+    let (r, a) = (lib.photo_id("ref.jpg"), lib.photo_id("a.jpg"));
+    // ภาพตัวอย่าง: สว่าง อุ่น สีจาง เงาออกฟ้า (แต่งในแอป)
+    let film = json!({ "exposure": 0.6, "temperature": 35, "saturation": -25, "grading": { "shadows": { "hue": 200, "sat": 35, "lum": 0 } } });
+    lib.call("save_photo_edit", json!({ "photoId": r, "settings": { "adjust": film } }));
+    let measure = |id: &str| {
+        let asset = puri_core::api::asset(&lib.app, &format!("photo/{id}")).unwrap();
+        look::measure(&image::load_from_memory(&asset.bytes).unwrap().thumbnail(256, 256).to_rgb8())
+    };
+    let reference = measure(&r);
+    let warmth = |l: &look::Look| l.cast.map(|c| c.1).unwrap_or(0.0);
+    let gap = |l: &look::Look| {
+        (l.l[2] - reference.l[2]).abs() + (warmth(l) - warmth(&reference)).abs() + (l.chroma - reference.chroma).abs()
+    };
+    let before = gap(&measure(&a));
+
+    let (tools, turn) =
+        puri_core::assistant::test_tools_with(&lib.app, Some(Reference::Photo { photo_id: r.clone() })).unwrap();
+    let text = |out: &puri_core::assistant::mcp::ToolOutput| {
+        out.content.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")
+    };
+    let names: Vec<&str> = tools.tools().iter().map(|t| t.name).collect();
+    assert!(names.contains(&"view_reference") && names.contains(&"compare_to_reference"));
+    let seen = tools.call("view_reference", json!({ "size": 256 }));
+    assert_eq!(seen.content[0]["type"], "image");
+    assert!(
+        text(&seen).contains("Reference image “ref.jpg”") && text(&seen).contains("Measured look"),
+        "{}",
+        text(&seen)
+    );
+
+    // ค่าที่เสนอ (เป็น JSON ท้ายข้อความ) ใช้กับ edit_photo ได้ตรง ๆ และทำให้ลุคใกล้ภาพตัวอย่างมาก
+    let suggested = |id: &str| {
+        let compared = text(&tools.call("compare_to_reference", json!({ "photo_id": id })));
+        assert!(compared.contains("Distance to the reference"), "{compared}");
+        serde_json::from_str::<serde_json::Value>(&compared[compared.rfind("): ").unwrap() + 3..]).unwrap()
+    };
+    let patch = suggested(&a);
+    assert!(patch["exposure"].as_f64().unwrap() > 0.2 && patch["temperature"].as_f64().unwrap() > 5.0, "{patch}");
+    let out = tools.call("edit_photo", json!({ "photo_id": a, "adjust": patch }));
+    assert!(!out.is_error, "{}", text(&out));
+    let after = gap(&measure(&a));
+    assert!(after < before / 3.0, "ห่างจากภาพตัวอย่าง ก่อน {before:.1} หลัง {after:.1}");
+    // ถามซ้ำหลังใส่ค่าแล้วได้ค่าเดิม (เดิมเสนอส่วนเพิ่มบนภาพที่แต่งแล้ว จึงสะสมแรงขึ้นทุกรอบ)
+    assert_eq!(suggested(&a), patch);
+    // ย้อนได้เหมือนการแก้อื่นของ AI
+    assert_eq!(lib.call("ai_undo", json!({ "turnId": turn })), json!(1));
+    assert!(lib.call("get_photo_details", json!({ "photoId": a }))["edit"].is_null());
+
+    // ภาพตัวอย่างเป็นไฟล์จากที่อื่นได้ (PNG) · ไฟล์ที่ไม่ใช่ภาพ/ไม่มีอยู่ ถูกปฏิเสธพร้อมเหตุผล
+    let png = lib.photos().join("look.png");
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(64, 48, |x, _| image::Rgb([200, 120 + x as u8, 60])))
+        .save(&png)
+        .unwrap();
+    let (tools, _) =
+        puri_core::assistant::test_tools_with(&lib.app, Some(Reference::File { path: png.to_string_lossy().into() }))
+            .unwrap();
+    assert!(text(&tools.call("view_reference", json!({}))).contains("“look.png”"));
+    // ไม่รู้ค่าที่แต่งของภาพตัวอย่าง: ค้นหาจากตัวเลขของภาพ และบอกว่าคอนทราสต์/ความอิ่มสีขึ้นกับเนื้อหา
+    let measured = text(&tools.call("compare_to_reference", json!({ "photo_id": a })));
+    assert!(measured.contains("depend on the subject") && !measured.contains("was edited in the app"), "{measured}");
+    let (tools, _) = puri_core::assistant::test_tools_with(
+        &lib.app,
+        Some(Reference::File { path: lib.photos().join("gone.png").to_string_lossy().into() }),
+    )
+    .unwrap();
+    assert!(tools.call("view_reference", json!({})).is_error);
+    let err = lib
+        .try_call("ai_start", json!({ "provider": "claude", "messages": [{ "role": "user", "text": "แต่งตามนี้" }], "reference": { "kind": "file", "path": "/nope/x.gif" } }))
+        .unwrap_err();
+    assert_eq!(err.code, "UNSUPPORTED_FORMAT");
+
+    // รูปที่เลือก → รหัสและชื่อไฟล์ (ให้หน้าต่างแสดงให้เลือกภาพตัวอย่าง)
+    let sel = lib.call("selection_photos", json!({ "selection": { "kind": "explicit", "photoIds": [r, a] } }));
+    assert_eq!(sel["total"], 2);
+    assert_eq!(sel["items"][0]["filename"], "ref.jpg");
+}
+
+#[test]
 fn t27b_export_refuses_source_changed_since_import_and_cancel_keeps_finished_copies() {
     let lib = Lib::new();
     let (root, dest) = export_fixture(&lib);

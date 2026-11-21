@@ -3,13 +3,14 @@
 //! อ่านคลัง (ค้นรูป กิจกรรม บุคคล preset) · ดูรูป (ส่งภาพย่อให้ AI) · แต่งรูป/ใช้ preset/ย้อนการแต่ง (ไม่แตะไฟล์ต้นฉบับ
 //! และทุกการแก้ของรอบนี้ย้อนได้ด้วยปุ่มเดียว) · แสดงรูปให้ผู้ใช้เห็นในแชต · **ไม่มี**เครื่องมือลบ ย้าย ย่อไฟล์ หรือส่งออก
 
+use super::look::{self, Look};
 use super::mcp::{ToolHost, ToolOutput, ToolSpec};
-use super::{Event, Turn};
+use super::{reference_image, Event, Reference, Turn};
 use crate::catalog::{self, DateFilter, SearchParams};
 use crate::edit::{self, EditSettings};
 use crate::{people, App};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 const MAX_LIST: i64 = 100;
 const MAX_EDIT_PHOTOS: usize = 300;
@@ -18,6 +19,40 @@ const MAX_SHOW: usize = 60;
 pub struct PhotoTools {
     pub app: Arc<App>,
     pub turn: Arc<Turn>,
+    /// ภาพตัวอย่างของรอบนี้ (ถ้ามี) — ลุคที่วัดแล้วเก็บไว้ใช้ซ้ำทั้งรอบ
+    reference: Option<Reference>,
+    reference_info: OnceLock<std::result::Result<RefInfo, String>>,
+}
+
+/// ภาพตัวอย่างที่วัดแล้ว
+#[derive(Clone)]
+struct RefInfo {
+    look: Look,
+    name: String,
+    /// ค่าแสงสีที่แต่งไว้ในแอป เมื่อภาพตัวอย่างเป็นรูปในคลังที่แต่งแล้ว
+    style: Option<crate::adjust::Adjust>,
+}
+
+impl PhotoTools {
+    pub fn new(app: Arc<App>, turn: Arc<Turn>, reference: Option<Reference>) -> Self {
+        PhotoTools { app, turn, reference, reference_info: OnceLock::new() }
+    }
+
+    fn reference_info(&self) -> std::result::Result<RefInfo, String> {
+        self.reference_info
+            .get_or_init(|| {
+                let reference = self.reference.as_ref().ok_or("This turn has no reference image")?;
+                let (img, name) = reference_image(&self.app, reference, 256).map_err(|e| e.message)?;
+                let style = match reference {
+                    Reference::Photo { photo_id } => { edit::load(&self.app.db(), photo_id).map_err(|e| e.message)? }
+                        .map(|s| s.settings.adjust)
+                        .filter(|a| !a.is_neutral()),
+                    Reference::File { .. } => None,
+                };
+                Ok(RefInfo { look: look::measure(&img.thumbnail(256, 256).to_rgb8()), name, style })
+            })
+            .clone()
+    }
 }
 
 fn schema(properties: Value, required: &[&str]) -> Value {
@@ -26,6 +61,36 @@ fn schema(properties: Value, required: &[&str]) -> Value {
 
 impl ToolHost for PhotoTools {
     fn tools(&self) -> Vec<ToolSpec> {
+        let mut list = self.base_tools();
+        if self.reference.is_some() {
+            list.push(ToolSpec {
+                name: "view_reference",
+                description: "Look at the reference image the user chose for this turn (the style/look they want), with its measured look \
+                    (brightness percentiles, overall color cast, chroma, shadow and highlight tints).",
+                input_schema: schema(json!({ "size": { "type": "integer", "minimum": 256, "maximum": 1280 } }), &[]),
+                read_only: true,
+            });
+            list.push(ToolSpec {
+                name: "compare_to_reference",
+                description: "Measure a photo against the reference image and get a suggested `adjust` (absolute values, computed \
+                    with the app's own editing formulas from the photo before these values, keeping its other settings) that brings its \
+                    brightness, contrast, white balance, saturation and shadow/highlight tints close to the reference, with the distance \
+                    to the reference now and with the suggestion. Apply it with edit_photo, then check by eye. Asking again after applying \
+                    returns the same values (it does not step further).",
+                input_schema: schema(json!({ "photo_id": { "type": "string" } }), &["photo_id"]),
+                read_only: true,
+            });
+        }
+        list
+    }
+
+    fn call(&self, name: &str, args: Value) -> ToolOutput {
+        self.dispatch(name, args)
+    }
+}
+
+impl PhotoTools {
+    fn base_tools(&self) -> Vec<ToolSpec> {
         vec![
             ToolSpec {
                 name: "search_photos",
@@ -146,7 +211,7 @@ impl ToolHost for PhotoTools {
         ]
     }
 
-    fn call(&self, name: &str, args: Value) -> ToolOutput {
+    fn dispatch(&self, name: &str, args: Value) -> ToolOutput {
         let id = self.turn.next_tool_id();
         self.turn.push(Event::Tool { id, name: name.to_string(), summary: summarize(name, &args) });
         let out = match name {
@@ -162,6 +227,8 @@ impl ToolHost for PhotoTools {
             "apply_preset" => self.apply_preset(&args),
             "save_preset" => self.save_preset(&args),
             "show_photos" => self.show_photos(&args),
+            "view_reference" => self.view_reference(&args),
+            "compare_to_reference" => self.compare_to_reference(&args),
             _ => Err("Unknown tool".into()),
         };
         let out = out.unwrap_or_else(ToolOutput::error);
@@ -515,6 +582,79 @@ impl PhotoTools {
         let title = str_arg(args, "title").unwrap_or("").to_string();
         self.turn.push(Event::Photos { title, photo_ids: ids.clone() });
         Ok(ToolOutput::text(format!("Shown {} photos to the user.", ids.len())))
+    }
+}
+
+impl PhotoTools {
+    fn view_reference(&self, args: &Value) -> Result<ToolOutput, String> {
+        let reference = self.reference.as_ref().ok_or("This turn has no reference image")?;
+        let size = args.get("size").and_then(Value::as_u64).unwrap_or(768).clamp(256, 1280) as u32;
+        let (img, name) = reference_image(&self.app, reference, size).map_err(|e| e.message)?;
+        let small = img.thumbnail(size, size);
+        let jpeg = crate::media::encode_jpeg(&small, 82).map_err(|e| e.message)?;
+        let info = self.reference_info()?;
+        let style = match &info.style {
+            Some(a) => format!(
+                "\nThis reference is a library photo edited in the app with these light and color settings: {}. \
+                 compare_to_reference copies them and adapts only exposure and white balance to each photo.",
+                look::compact(a)
+            ),
+            None => String::new(),
+        };
+        Ok(ToolOutput {
+            content: vec![
+                json!({ "type": "image", "data": base64(&jpeg), "mimeType": "image/jpeg" }),
+                json!({ "type": "text", "text": format!("Reference image “{name}”, {}×{} px shown.\nMeasured look: {}{style}", small.width(), small.height(), look::describe(&info.look)) }),
+            ],
+            is_error: false,
+        })
+    }
+
+    fn compare_to_reference(&self, args: &Value) -> Result<ToolOutput, String> {
+        let id = str_arg(args, "photo_id").ok_or("photo_id is required")?;
+        let RefInfo { look: reference, name, style } = self.reference_info()?;
+        let current =
+            { edit::load(&self.app.db(), id).map_err(|e| e.message)? }.map(|s| s.settings).unwrap_or_default();
+        // คิดจากรูปหลังตัด/หมุนแต่ก่อนปรับแสงสี: ค่าที่เสนอเป็นค่าจริง เรียกซ้ำหลังใส่แล้วได้คำตอบเดิม (ไม่สะสม)
+        let bytes = crate::assets::source_or_plain_thumb(&self.app, id).map_err(|e| e.message)?;
+        let geometry_only = EditSettings { adjust: Default::default(), ..current.clone() };
+        let base = edit::render_small(&bytes, &geometry_only, 256).map_err(|e| e.message)?;
+        let s = look::suggest(&base, &current.adjust, &reference, style.as_ref());
+        let (gap_now, gap_after) = (look::distance(&s.now, &reference), look::distance(&s.after, &reference));
+        let mut notes = String::new();
+        if s.copied {
+            notes.push_str(
+                "\nThe reference was edited in the app, so the suggestion is its light and color settings (replacing this photo's own) \
+                 with exposure and white balance adapted to this photo.",
+            );
+        } else {
+            notes.push_str(
+                "\nContrast and saturation are matched from measured numbers, which depend on the subject (a colorful subject gets \
+                 less saturation, a plain one more) — follow the reference's style by eye when they disagree.",
+            );
+        }
+        if !s.white_balance {
+            notes.push_str(
+                "\nWhite balance was not measured: this photo has too few truly gray areas (white/gray walls, white cloth) to read \
+                 it from — judge warmth and tint by eye.",
+            );
+        }
+        if gap_after >= gap_now - 0.5 {
+            notes.push_str(
+                "\nThe suggestion would not bring this photo closer than it is now; keep the current values.",
+            );
+        }
+        Ok(ToolOutput::text(format!(
+            "Reference “{name}”: {}\nThis photo as it looks now: {}\nWith the suggested adjust it would measure: {}\n\
+             Distance to the reference (lower is closer): now {gap_now:.1}, with the suggestion {gap_after:.1}.{notes}\n\
+             The suggestion is computed from this photo before these values are applied, so asking again after applying it returns \
+             the same values — use the distance to check, not to step further.\n\
+             Suggested adjust for edit_photo (absolute values for this photo; a starting point — judge by eye and refine): {}",
+            look::describe(&reference),
+            look::describe(&s.now),
+            look::describe(&s.after),
+            look::patch(&s)
+        )))
     }
 }
 

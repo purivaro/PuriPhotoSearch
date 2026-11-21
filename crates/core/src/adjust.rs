@@ -461,7 +461,7 @@ fn rgb_to_hsl(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
     (h * 60.0, s, l)
 }
 
-fn hsl_to_rgb(h: f64, s: f64, l: f64) -> [f64; 3] {
+pub(crate) fn hsl_to_rgb(h: f64, s: f64, l: f64) -> [f64; 3] {
     let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
     let hp = h / 60.0;
     let x = c * (1.0 - (hp.rem_euclid(2.0) - 1.0).abs());

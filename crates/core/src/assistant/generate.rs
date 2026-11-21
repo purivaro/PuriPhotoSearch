@@ -6,7 +6,7 @@
 //! - ที่มา (รูปต้นทาง prompt AI ที่ใช้ วันที่) ผูกกับไฟล์ด้วย SHA-256 ในตาราง `ai_images` · ไฟล์ต้นฉบับไม่ถูกแตะ
 
 use super::detect::{self, Provider};
-use super::{execute, scratch_dir, Event, Turn};
+use super::{execute, reference_image, scratch_dir, Event, Reference, Turn};
 use crate::error::{AppError, Result};
 use crate::export::SelectionSpec;
 use crate::{util, App};
@@ -30,6 +30,9 @@ pub struct GenerateArgs {
     /// ชื่อแม่แบบที่เลือก (ถ้ามี) — เก็บไว้เป็นที่มา
     #[serde(default)]
     pub template: Option<String>,
+    /// ภาพตัวอย่างสไตล์: สร้างภาพใหม่ของแต่ละรูปในสไตล์ของภาพนี้ (คำสั่งเป็นคำอธิบายเพิ่ม ไม่บังคับ)
+    #[serde(default)]
+    pub style_reference: Option<Reference>,
 }
 
 /// ที่มาของภาพที่ AI สร้าง (แสดงในตัวดูภาพ)
@@ -136,7 +139,7 @@ fn safe_name(name: &str) -> String {
 /// เริ่มสร้างภาพในเบื้องหลัง — คืนรหัสรอบ (อ่านความคืบหน้าด้วย `ai_events`)
 pub fn start(app: &App, args: GenerateArgs) -> Result<String> {
     let prompt = args.prompt.trim().to_string();
-    if prompt.is_empty() {
+    if prompt.is_empty() && args.style_reference.is_none() {
         return Err(AppError::invalid("พิมพ์สิ่งที่อยากให้ AI สร้างก่อน"));
     }
     if prompt.chars().count() > MAX_PROMPT {
@@ -145,9 +148,22 @@ pub fn start(app: &App, args: GenerateArgs) -> Result<String> {
     let sources = load_sources(app, &args.selection)?;
     let me = app.me.upgrade().ok_or_else(|| AppError::invalid("แอปกำลังปิด"))?;
     let (id, turn) = super::register(app);
-    let template = args.template.clone();
+    // อ่านภาพตัวอย่างสไตล์ได้จริงก่อนเริ่ม
+    let style = match &args.style_reference {
+        Some(r) => Some((r.clone(), reference_image(app, r, 64)?.1)),
+        None => None,
+    };
+    let template = match &style {
+        Some((_, name)) => Some(format!("ตามภาพตัวอย่าง “{name}”")),
+        None => args.template.clone(),
+    };
+    let prompt = if prompt.is_empty() {
+        "ทำให้เป็นสไตล์เดียวกับภาพตัวอย่าง".to_string()
+    } else {
+        prompt
+    };
     std::thread::spawn(move || {
-        let result = run(&me, &turn, &sources, &prompt, template.as_deref());
+        let result = run(&me, &turn, &sources, &prompt, template.as_deref(), style.as_ref().map(|(r, _)| r));
         let stopped = turn.cancel.load(Ordering::Relaxed);
         turn.push(Event::Finished {
             ok: result.is_ok() && !stopped,
@@ -160,7 +176,17 @@ pub fn start(app: &App, args: GenerateArgs) -> Result<String> {
     Ok(id)
 }
 
-fn generation_prompt(prompt: &str) -> String {
+fn generation_prompt(prompt: &str, styled: bool) -> String {
+    if styled {
+        return format!(
+            "Use your image generation tool to create exactly one new image. The FIRST attached image is a style reference; the SECOND \
+             attached image is the photo to re-create. Re-create the second image in the style of the first: its color palette, light, \
+             rendering technique and mood. Keep the composition, people and subjects of the second image recognizable and do not copy \
+             people or objects from the first. Extra request from the user: {prompt}\n\n\
+             Do not add any text, letters, logos or watermarks unless the request asks for them. Do not run shell commands and do not read \
+             or write files. When the image is done, reply with one short sentence."
+        );
+    }
     format!(
         "Use your image generation tool to create exactly one new image from the attached photo, following this request:\n\n{prompt}\n\n\
          Keep the people recognizable and respectful unless the request says otherwise. Do not add any text, letters, logos or watermarks unless the \
@@ -202,12 +228,26 @@ fn run(
     sources: &[Source],
     prompt: &str,
     template: Option<&str>,
+    style: Option<&Reference>,
 ) -> std::result::Result<(), String> {
     let provider = Provider::Codex;
     let path = detect::locate(provider)
         .ok_or("ไม่พบ Codex ของ ChatGPT ในเครื่องนี้ — ติดตั้งแอป ChatGPT หรือ Codex CLI แล้วล็อกอินก่อน")?;
     let work = scratch_dir(app).map_err(|e| e.message)?.join(format!("generate-{}", util::new_id()));
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    // ภาพตัวอย่างสไตล์: เตรียมครั้งเดียว ส่งเป็นภาพแรกทุกครั้ง
+    let style_file = match style {
+        Some(r) => {
+            let (img, _) = reference_image(app, r, INPUT_EDGE).map_err(|e| e.message)?;
+            let img =
+                if img.width().max(img.height()) > INPUT_EDGE { img.thumbnail(INPUT_EDGE, INPUT_EDGE) } else { img };
+            let file = work.join("style.jpg");
+            std::fs::write(&file, crate::media::encode_jpeg(&img, 90).map_err(|e| e.message)?)
+                .map_err(|e| e.to_string())?;
+            Some(file)
+        }
+        None => None,
+    };
     let mut made = 0;
     let mut failed = vec![];
     // โฟลเดอร์ปลายทาง → (ชื่อกิจกรรม, วันที่, ไฟล์ที่สร้างในรอบนี้)
@@ -237,6 +277,7 @@ fn run(
             ]
             .iter()
             .map(|s| s.to_string())
+            .chain(style_file.iter().map(|f| format!("--image={}", f.to_string_lossy())))
             .chain([
                 format!("--image={}", input.to_string_lossy()),
                 "-C".into(),
@@ -244,7 +285,16 @@ fn run(
                 "-".into(),
             ])
             .collect();
-            let parser = execute(provider, &path, &argv, generation_prompt(prompt), &work, turn, None, false)?;
+            let parser = execute(
+                provider,
+                &path,
+                &argv,
+                generation_prompt(prompt, style_file.is_some()),
+                &work,
+                turn,
+                None,
+                false,
+            )?;
             let image = parser.thread_id.as_deref().and_then(generated_image).ok_or_else(|| {
                 let said = parser.text.trim();
                 if said.is_empty() {
@@ -428,6 +478,7 @@ mod tests {
     fn folder_names_are_safe_everywhere() {
         assert_eq!(safe_name("งาน/บุญ: กฐิน*2569?"), "งาน บุญ กฐิน 2569");
         assert_eq!(safe_name("  ...  "), "ภาพ");
-        assert!(generation_prompt("สีน้ำ").contains("สีน้ำ"));
+        assert!(generation_prompt("สีน้ำ", false).contains("สีน้ำ"));
+        assert!(generation_prompt("อุ่น ๆ", true).contains("FIRST attached image is a style reference"));
     }
 }

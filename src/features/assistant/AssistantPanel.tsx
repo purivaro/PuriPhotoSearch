@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ArrowUp, Check, ChevronRight, Copy, ImageIcon, RotateCcw, Sparkles, Square, SquarePen, TriangleAlert, Wrench, X } from 'lucide-react';
+import { ArrowUp, Check, ChevronRight, Copy, ImageIcon, Palette, RotateCcw, Sparkles, Square, SquarePen, TriangleAlert, Wrench, X } from 'lucide-react';
 import { useRealLocation, useViewer } from '@/app/navigation';
 import { Button, IconButton } from '@/components/ui/Button';
 import { InlineNotice, Spinner } from '@/components/ui/Feedback';
@@ -35,6 +35,8 @@ const TOOL_LABELS: Record<string, string> = {
   save_preset: 'บันทึก preset',
   show_photos: 'แสดงรูป',
   generate_image: 'สร้างภาพ',
+  view_reference: 'ดูภาพตัวอย่าง',
+  compare_to_reference: 'เทียบกับภาพตัวอย่าง',
 };
 
 const SUGGESTIONS = [
@@ -47,7 +49,7 @@ const SUGGESTIONS = [
 export function AssistantPanel() {
   const qc = useQueryClient();
   const close = () => useUi.getState().setAssistantOpen(false);
-  const { provider, tools, messages, running, setProvider, setTools, send, stop, clear } = useAssistant();
+  const { provider, tools, messages, running, setProvider, setTools, send, stop, clear, reference, setReference } = useAssistant();
   const status = useQuery({ queryKey: ['ai-status'], queryFn: () => call('ai_status', {}), staleTime: 60_000 });
   const cli = status.data?.find((s) => s.provider === provider);
   const location = useRealLocation();
@@ -118,6 +120,22 @@ export function AssistantPanel() {
       </div>
 
       <div className="shrink-0 space-y-2 border-t border-line px-4 pt-3 pb-4">
+        {reference && (
+          <div className="flex items-center gap-2 rounded-lg bg-brand-soft px-2 py-1.5 text-[12.5px]" data-testid="assistant-reference">
+            {reference.reference.kind === 'photo' ? (
+              <img src={assetUrl('thumb', reference.reference.photoId)} alt="" className="size-7 shrink-0 rounded object-cover" />
+            ) : (
+              <Palette className="size-4 shrink-0 text-action" aria-hidden />
+            )}
+            <span className="min-w-0 flex-1 truncate text-ink">
+              ภาพตัวอย่าง: <span className="font-semibold">{reference.label}</span>
+              {!tools && <span className="text-muted"> (ใช้เมื่อเปิดเครื่องมือของแอป)</span>}
+            </span>
+            <IconButton label="เอาภาพตัวอย่างออก" size="sm" className="size-6" onClick={() => setReference(null)} disabled={Boolean(running)}>
+              <X className="size-3.5" aria-hidden />
+            </IconButton>
+          </div>
+        )}
         {openPhoto.data && (
           <p className="flex items-center gap-1.5 truncate text-[12.5px] text-muted" data-testid="assistant-context">
             <ImageIcon className="size-3.5 shrink-0" aria-hidden />
