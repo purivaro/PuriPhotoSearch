@@ -163,6 +163,12 @@ impl Geometry {
         Geometry { w, h, quarter: s.rotate, cos, sin, scale, crop: s.crop.unwrap_or(FULL) }
     }
 
+    /// ด้านยาวของกรอบก่อนตัด เป็นพิกเซลของภาพที่แต่งขนาด `width`×`height` — รัศมีของ Texture/Clarity/Dehaze และขอบเผื่อของ
+    /// Mask คิดจากค่านี้ ตัดภาพแล้วผลไม่เปลี่ยน (ตัวอย่างสดคิดแบบเดียวกัน: `renderPixels`)
+    pub fn frame_long(&self, width: u32, height: u32) -> f64 {
+        (width as f64 / self.crop.w).max(height as f64 / self.crop.h)
+    }
+
     /// ขนาดของภาพที่แต่ง (พิกเซล)
     pub fn output_size(&self) -> (u32, u32) {
         let px = |v: f64| (v.round() as u32).max(1);
@@ -248,7 +254,9 @@ pub fn render(img: DynamicImage, s: &EditSettings) -> DynamicImage {
 /// เหมือน [`render`] ตามชนิดของภาพต้นทาง (RAW: `img` เป็นภาพ 8 บิตของโทนตั้งต้น)
 pub fn render_with(img: DynamicImage, s: &EditSettings, profile: crate::adjust::Profile) -> DynamicImage {
     let g = Geometry::new(img.width(), img.height(), s);
-    with_masks(crate::adjust::apply_profile(render_geometry(img, s), &s.adjust, profile), &g, s)
+    let framed = render_geometry(img, s);
+    let long = g.frame_long(framed.width(), framed.height());
+    with_masks(crate::adjust::apply_profile_in_frame(framed, &s.adjust, profile, long), &g, s)
 }
 
 /// ปรับเฉพาะส่วน (DECISIONS ข้อ 28) บนภาพที่แต่งแล้วทั้งกรอบ — `g` ของภาพเดิมที่ภาพนี้มาจาก
@@ -680,6 +688,21 @@ mod tests {
 
     fn settings(rotate: u16, straighten: f64, crop: Option<Rect>) -> EditSettings {
         EditSettings { rotate, straighten, crop, ..Default::default() }
+    }
+
+    #[test]
+    fn texture_on_a_cropped_photo_uses_the_whole_frame_like_the_live_preview() {
+        // ตัดครึ่งซ้ายของภาพ 96×32 → ภาพที่แต่ง 48×32 · ตัวอย่างสดคิดรัศมีจากด้านยาวของทั้งกรอบ (96) ไฟล์ที่บันทึกต้องเหมือนกัน
+        // (เทสต์สุ่ม tests/preview_parity.rs จับได้ว่าเคยใช้ด้านยาวของส่วนที่ตัด ผลจึงต่างกันเมื่อตัดภาพ)
+        let img = DynamicImage::ImageRgb8(image::RgbImage::from_raw(96, 32, crate::local::test_image(96, 32)).unwrap());
+        let mut s = settings(0, 0.0, Some(Rect { x: 0.0, y: 0.0, w: 0.5, h: 1.0 }));
+        s.adjust = crate::adjust::Adjust { texture: 80.0, clarity: 60.0, dehaze: 30.0, ..Default::default() };
+        let out = render_with(img.clone(), &s, crate::adjust::Profile::Display).into_rgb8();
+        assert_eq!(out.dimensions(), (48, 32));
+        let mut want = render_geometry(img, &s).into_rgb8();
+        crate::local::apply(&mut want, 48, 32, 3, 96.0, &s.adjust);
+        assert_eq!(out, want);
+        assert_eq!(Geometry::new(96, 32, &s).frame_long(48, 32), 96.0);
     }
 
     fn close(a: (f64, f64), b: (f64, f64)) -> bool {

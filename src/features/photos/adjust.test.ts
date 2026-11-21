@@ -34,6 +34,38 @@ const samplePro: Adjust = {
   vignette: { amount: -40, midpoint: 40, feather: 60, roundness: 20 },
 };
 
+// ค่าเดียวกับ adjust::tests::HSL_EXPECTED ใน Rust: ชุดที่เทสต์สุ่ม (preview_parity.rs) เคยจับได้ — การวน hue ด้วย
+// ((x % m) + m) % m ปัดเศษเพิ่ม และ hue ที่ตกที่ 360° พอดี · [hue, sat, lum] ทั้ง 8 ช่วง, พิกเซลเข้า, พิกเซลออก
+const HSL_EXPECTED: [[number[], number[], number[]], [number, number, number], [number, number, number]][] = [
+  [
+    [
+      [100, 0, 0, 100, 100, -73, 0, -100],
+      [72, 100, 0, 100, 0, 0, 67, 0],
+      [0, 0, 18, -100, 65, 0, 0, -100],
+    ],
+    [218, 47, 41],
+    [255, 129, 4],
+  ],
+  [
+    [
+      [0, 92.089, -100, 100, -89, -100, -100, 26],
+      [-93, 0, 0, 100, -18, 72, -64, 100],
+      [0, 0, -22, -100, -100, 0, 100, 0],
+    ],
+    [204, 21, 143],
+    [225, 0, 131],
+  ],
+  [
+    [
+      [-100, 0, -100, 100, 0, 100, -64, -44],
+      [-48, 0, 0, -21, 13, 0, 0, -87],
+      [0, 39, 0, 0, -83, 0, 44, -8],
+    ],
+    [246, 117, 74],
+    [229, 116, 116],
+  ],
+];
+
 describe('แสงและสี (สูตรเดียวกับ Rust)', () => {
   it('ได้ค่าเดียวกับ adjust::tests::matches_the_ui_formula ทุกพิกเซล', () => {
     const t = curves(sample);
@@ -46,6 +78,13 @@ describe('แสงและสี (สูตรเดียวกับ Rust)',
       [255, 190, 135],
       [77, 179, 116],
     ]);
+  });
+
+  it('hue ที่วนรอบ 360° ได้ค่าเดียวกับ Rust ทุกบิต (HSL_EXPECTED)', () => {
+    for (const [[hue, sat, lum], input, want] of HSL_EXPECTED) {
+      const a: Adjust = { ...NEUTRAL, hue, sat, lum };
+      expect(pixel(a, curves(a), ...input), `${input}`).toEqual(want);
+    }
   });
 
   it('Levels + Color Grading + Vignette ได้ค่าเดียวกับ Rust (PRO_EXPECTED)', () => {

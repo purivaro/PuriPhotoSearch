@@ -1,5 +1,5 @@
 import type { EditMask, EditSettings, MaskArea, UnitRect } from '@/lib/ipc/types';
-import { applyToPixels, isNeutral } from './adjust';
+import { VIGNETTE_NEUTRAL, applyToPixels, isNeutral } from './adjust';
 import { fromFrame, toFrame } from './editGeometry';
 import { applyLocal, hasLocal } from './local';
 
@@ -23,6 +23,9 @@ const TONE_MIN_SAMPLES = 12;
 const TONE_NEAR = 10;
 const TONE_FAR = 20;
 export const MAX_MASKS = 10;
+
+/** x² แบบคูณตรง ๆ (ผลเท่ากับ powi(2) ของ Rust ทุกบิต — `x ** 2` ของ JavaScript ไม่รับประกัน) */
+const sq = (x: number) => x * x;
 
 const smoothstep = (a: number, b: number, x: number) => {
   const t = Math.min(Math.max((x - a) / (b - a), 0), 1);
@@ -54,7 +57,7 @@ function ovalOf(b: [number, number, number, number]): Oval {
 /** ระยะจากศูนย์กลางเทียบกับรัศมี (1 = ขอบวงรี) */
 function ovalDistance(o: Oval, u: number, v: number): number {
   const ry = v < o.c[1] ? o.up : o.down;
-  return Math.sqrt(((u - o.c[0]) / o.rx) ** 2 + ((v - o.c[1]) / ry) ** 2);
+  return Math.sqrt(sq((u - o.c[0]) / o.rx) + sq((v - o.c[1]) / ry));
 }
 
 /** มุมทั้งสี่ของกรอบที่ครอบวงรีที่ระยะ k */
@@ -73,7 +76,7 @@ function ovalCorners(o: Oval, k: number): [number, number][] {
 function toneMatch(tone: [number, number] | null, r: number, g: number, b: number): number {
   if (!tone) return 1;
   const [cb, cr] = chroma(r, g, b);
-  return 1 - smoothstep(TONE_NEAR, TONE_FAR, Math.sqrt((cb - tone[0]) ** 2 + (cr - tone[1]) ** 2));
+  return 1 - smoothstep(TONE_NEAR, TONE_FAR, Math.sqrt(sq(cb - tone[0]) + sq(cr - tone[1])));
 }
 
 /** น้ำหนักของบริเวณที่จุด (u, v) บนภาพเดิม สำหรับพิกเซลสี rgb (ก่อนกลับด้าน/ความแรง) · tones = สีผิวของแต่ละหน้า */
@@ -176,7 +179,8 @@ export function applyMasks(px: Uint8ClampedArray, c: MaskCanvas, masks: EditMask
     if (!show) {
       adjusted = new Uint8ClampedArray(rw * rh * 4);
       for (let y = 0; y < rh; y += 1) adjusted.set(px.subarray(((y0 + y) * c.width + x0) * 4, ((y0 + y) * c.width + x1) * 4), y * rw * 4);
-      applyToPixels(adjusted, { ...mask.adjust, texture: 0, clarity: 0, dehaze: 0 }, undefined, 'display');
+      // Vignette เป็นของกรอบภาพทั้งภาพ ไม่ใช่ของบริเวณ — ไม่ใช้ในบริเวณ (เหมือน masks.rs)
+      applyToPixels(adjusted, { ...mask.adjust, texture: 0, clarity: 0, dehaze: 0, vignette: VIGNETTE_NEUTRAL }, undefined, 'display');
       if (hasLocal(mask.adjust)) applyLocal(adjusted, rw, rh, 4, long, mask.adjust);
     }
     const amount = mask.amount / 100;

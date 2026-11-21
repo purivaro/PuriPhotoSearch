@@ -41,6 +41,9 @@ e2e/update-published.sh   # หลังออกรุ่น: แอปรุ�
 ```
 
 - ทุกพฤติกรรมที่แตะข้อมูลต้องมีเทสต์ใน `crates/core/tests/` ที่ใช้ไฟล์จริงและวัดผลจริง
+- **แก้สูตรแต่งภาพ (adjust/local/masks/editGeometry) ต้องแก้ทั้ง Rust และ TS** — `crates/core/tests/preview_parity.rs` สุ่มค่าการแต่ง
+  400 ชุดแล้วให้ vitest คิดด้วยโค้ดตัวอย่างสด (`renderPixels`) เทียบทีละพิกเซล (ต้อง `pnpm install` ก่อน `cargo test`) ·
+  ดูชุดที่ไม่ตรง: `PURI_PARITY_ONLY=<ids> PURI_PARITY_DUMP=<ไฟล์>` · ลองมากขึ้น: `PURI_PARITY_N=20000 PURI_PARITY_TOLERANCE=0` (DECISIONS ข้อ 29)
 - อัปเดต `docs/IMPLEMENTATION_STATUS.md` และ `docs/TEST_REPORT.md` ด้วยสิ่งที่รันจริง; สิ่งที่ไม่ได้รันให้เขียนว่าไม่ได้รัน
 - UI: ภาษาไทย, ไม่ใช้ `alert/confirm/prompt`, ทุกหน้ามี loading / empty / error ที่ลองใหม่ได้, ไม่ hardcode จำนวนหรือชื่อ
 - commit เป็นชุดที่ review ได้บน branch แล้วเปิด Draft PR; ไม่ commit ภาพ screenshot (อยู่ใน `screenshots/` ซึ่ง gitignore)

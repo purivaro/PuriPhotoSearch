@@ -31,16 +31,19 @@ const EXPECTED: [[number, number, number], number[][]][] = [
   [[0, 0, 40], [[17, 50, 27], [58, 192, 47], [67, 192, 110], [183, 67, 198], [101, 52, 235]]],
   [[0, 0, -30], [[57, 80, 67], [91, 192, 84], [100, 192, 135], [189, 96, 203], [125, 83, 232]]],
   [[40, -30, 0], [[29, 59, 39], [68, 190, 58], [79, 191, 119], [186, 79, 201], [110, 63, 234]]],
+  // ค่าสุดขอบที่เทสต์สุ่มของ Rust (tests/preview_parity.rs) เคยจับได้ว่าต่าง 2 ระดับ
+  [[33, 100, -100], [[114, 122, 125], [150, 204, 151], [147, 196, 173], [197, 136, 210], [160, 129, 228]]],
+  [[100, -58, 100], [[0, 28, 0], [33, 187, 18], [42, 190, 90], [180, 47, 196], [85, 30, 237]]],
 ];
 
 describe('Texture / Clarity / Dehaze (DECISIONS ข้อ 27)', () => {
-  it('ได้ค่าเดียวกับ Rust (ต่างได้ไม่เกิน 1 ระดับจากการปัดทศนิยม)', () => {
+  it('ได้ค่าเดียวกับ Rust ทุกค่า (คิดด้วย f64 แล้วเก็บ f32 ที่จุดเดียวกัน)', () => {
     for (const [[texture, clarity, dehaze], expected] of EXPECTED) {
       const px = testImage(48, 32);
       applyLocal(px, 48, 32, 4, 48, { ...NEUTRAL, texture, clarity, dehaze });
       SAMPLES.forEach(([x, y], k) => {
         const i = (y * 48 + x) * 4;
-        for (let c = 0; c < 3; c += 1) expect(Math.abs(px[i + c]! - expected[k]![c]!), `${texture}/${clarity}/${dehaze} @${x},${y}`).toBeLessThanOrEqual(1);
+        expect([px[i], px[i + 1], px[i + 2]], `${texture}/${clarity}/${dehaze} @${x},${y}`).toEqual(expected[k]);
         expect(px[i + 3]).toBe(255);
       });
     }
