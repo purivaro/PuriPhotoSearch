@@ -1312,6 +1312,100 @@ fn edit_paste_to_many_photos_replaces_only_the_chosen_parts() {
     assert_eq!(tree_state(&root), before, "วางการแต่งไม่แตะไฟล์ต้นฉบับ");
 }
 
+/// ภาพทดสอบ 400×300: ฉากเทา + จีวรสีส้มด้านซ้ายล่าง + "ใบหน้า" สีผิวรูปวงรีที่ (fx, fy) รัศมี 30×40
+fn face_scene(fx: u32, fy: u32) -> Vec<u8> {
+    let img = image::RgbImage::from_fn(400, 300, |x, y| {
+        let (dx, dy) = ((x as f64 - fx as f64) / 30.0, (y as f64 - fy as f64) / 40.0);
+        if dx * dx + dy * dy <= 1.0 {
+            image::Rgb([205, 150, 125])
+        } else if (40..120).contains(&x) && y >= 150 {
+            image::Rgb([235, 140, 20])
+        } else {
+            image::Rgb([120, 120, 120])
+        }
+    });
+    let mut bytes = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 95).encode_image(&img).unwrap();
+    bytes
+}
+
+#[test]
+fn edit_face_mask_brightens_only_skin_and_pastes_onto_each_photos_own_faces() {
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-21 ปรับเฉพาะส่วน");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.jpg"), face_scene(200, 100)).unwrap();
+    std::fs::write(root.join("b.jpg"), face_scene(320, 180)).unwrap();
+    lib.import(&root, "single_event", |_| true);
+    let before = tree_state(&root);
+    let (a, b) = (lib.photo_id("a.jpg"), lib.photo_id("b.jpg"));
+    let face_box =
+        |fx: f64, fy: f64| json!({ "x": (fx - 30.0) / 400.0, "y": (fy - 40.0) / 300.0, "w": 0.15, "h": 80.0 / 300.0 });
+    for (id, fx, fy, name) in [(&a, 200.0, 100.0, "คุณเอ"), (&b, 320.0, 180.0, "คุณบี")] {
+        lib.call(
+            "create_manual_face",
+            json!({ "requestId": new_id(), "photoId": id, "bbox": face_box(fx, fy), "newPersonName": name }),
+        );
+    }
+    let pixel = |kind: &str, id: &str, x: u32, y: u32| {
+        let a = puri_core::api::asset(&lib.app, &format!("{kind}/{id}")).unwrap();
+        image::load_from_memory(&a.bytes).unwrap().to_rgb8().get_pixel(x, y).0
+    };
+    let same = |p: [u8; 3], q: [u8; 3]| p.iter().zip(q).all(|(a, b)| a.abs_diff(b) <= 3);
+    let face_a = json!([[0.425, 0.2, 0.15, 80.0 / 300.0]]);
+    let mask = |amount: f64| json!({ "id": "m1", "area": { "kind": "faces", "boxes": face_a, "skin": true }, "adjust": { "exposure": 1.0 }, "amount": amount });
+
+    // ความแรงเกินช่วงถูกปฏิเสธ
+    let err =
+        lib.try_call("save_photo_edit", json!({ "photoId": a, "settings": { "masks": [mask(150.0)] } })).unwrap_err();
+    assert_eq!(err.code, "INVALID_INPUT");
+
+    // หน้าสว่างขึ้น · จีวร ฉากหลังข้างหน้า (อยู่ในวงรีแต่ไม่ใช่สีผิว) และฉากไกล ๆ เท่าเดิม
+    let (face, beside, robe, far) = ((200, 100), (233, 100), (80, 250), (370, 30));
+    let original = |id: &str, (x, y): (u32, u32)| pixel("original", id, x, y);
+    lib.call("save_photo_edit", json!({ "photoId": a, "settings": { "masks": [mask(100.0)] } }));
+    let shown = pixel("photo", &a, face.0, face.1);
+    assert!(shown[1] > original(&a, face)[1] + 30, "หน้าสว่างขึ้น {shown:?}");
+    for spot in [beside, robe, far] {
+        assert!(same(pixel("photo", &a, spot.0, spot.1), original(&a, spot)), "ไม่ใช่ผิวต้องเท่าเดิมที่ {spot:?}");
+    }
+    let settings = lib.call("get_photo_details", json!({ "photoId": a }))["edit"]["settings"].clone();
+    assert_eq!(settings["masks"][0]["area"]["boxes"], face_a);
+
+    // สำเนาที่ส่งออกได้หน้าที่สว่างแบบเดียวกัน
+    let dest = lib.tmp.path().join("ส่งออกปรับเฉพาะส่วน");
+    std::fs::create_dir_all(&dest).unwrap();
+    let plan = lib
+        .call("preview_export", json!({ "selection": { "kind": "explicit", "photoIds": [a] }, "destination": dest }));
+    lib.call("start_export", json!({ "planId": plan["planId"], "requestId": new_id() }));
+    lib.run_jobs();
+    let out = image::load_from_memory(&std::fs::read(dest.join("a.jpg")).unwrap()).unwrap().to_rgb8();
+    let px = out.get_pixel(face.0, face.1).0;
+    assert!(px.iter().zip(shown).all(|(p, s)| p.abs_diff(s) <= 4), "ส่งออก {px:?} ตรงกับที่แสดง {shown:?}");
+
+    // วางเฉพาะแสง: ไม่แตะการปรับเฉพาะส่วนของรูปปลายทาง (b ยังไม่มี)
+    let only = |light: bool, masks: bool| json!({ "geometry": false, "light": light, "color": false, "masks": masks });
+    let to_b = json!({ "kind": "explicit", "photoIds": [b] });
+    lib.call("apply_photo_edits", json!({ "selection": to_b, "settings": settings, "parts": only(true, false) }));
+    assert!(lib.call("get_photo_details", json!({ "photoId": b }))["edit"].is_null(), "แสงของ a เป็นค่าเริ่มต้น");
+
+    // วางการปรับเฉพาะส่วน: b ได้ Mask ที่ครอบใบหน้าของ b เอง (ไม่ใช่ตำแหน่งหน้าของ a)
+    let r =
+        lib.call("apply_photo_edits", json!({ "selection": to_b, "settings": settings, "parts": only(false, true) }));
+    assert_eq!(r["updated"].as_i64(), Some(1));
+    let eb = lib.call("get_photo_details", json!({ "photoId": b }))["edit"]["settings"].clone();
+    let boxes = eb["masks"][0]["area"]["boxes"].as_array().unwrap().clone();
+    assert_eq!(boxes.len(), 1);
+    assert!((boxes[0][0].as_f64().unwrap() - 290.0 / 400.0).abs() < 1e-6, "{boxes:?}");
+    assert!(pixel("photo", &b, 320, 180)[1] > original(&b, (320, 180))[1] + 30, "หน้าของ b สว่างขึ้น");
+    assert!(same(pixel("photo", &b, face.0, face.1), original(&b, face)), "ตำแหน่งหน้าของ a บนรูป b ไม่โดน");
+    // วางซ้ำ = ไม่มีอะไรเปลี่ยน
+    let r =
+        lib.call("apply_photo_edits", json!({ "selection": to_b, "settings": settings, "parts": only(false, true) }));
+    assert_eq!((r["updated"].as_i64(), r["unchanged"].as_i64()), (Some(0), Some(1)));
+    assert_eq!(tree_state(&root), before, "ปรับเฉพาะส่วนไม่แตะไฟล์ต้นฉบับ");
+}
+
 /// preset .xmp แบบที่ Lightroom Classic ส่งออก (ย่อ) — สมดุลแสงขาวแบบเพิ่ม/ลด HSL เส้นโค้ง และส่วนที่เรายังทำไม่ได้
 const LIGHTROOM_XMP: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-c000">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">

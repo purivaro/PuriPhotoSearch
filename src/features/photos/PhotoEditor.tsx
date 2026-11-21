@@ -10,10 +10,13 @@ import { cn } from '@/lib/cn';
 import { errorMessage, formatCount } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
 import type { EditSettings, PhotoDetails, RawPairInfo, UnitRect } from '@/lib/ipc/types';
-import { NEUTRAL, applyToPixels, autoAdjust, histogram, isNeutral, neutralize, type Adjust, type Histogram, type Profile, type SliderKey } from './adjust';
-import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, SliderRow, ToneCurvePanel, VignettePanel } from './AdjustControls';
+import { NEUTRAL, applyToPixels, autoAdjust, histogram, isNeutral, neutralize, type Adjust, type Histogram, type Profile } from './adjust';
+import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, ToneCurvePanel, VignettePanel } from './AdjustControls';
 import { EditPresets } from './EditPresets';
 import { applyLocal, hasLocal } from './local';
+import { MaskPanel } from './MaskPanel';
+import { applyMasks, maskIsActive } from './masks';
+import { COLOR, LIGHT, PRESENCE, SliderGroup } from './SliderGroup';
 import {
   FULL,
   IDENTITY,
@@ -32,7 +35,7 @@ import {
 } from './editGeometry';
 
 type Aspect = 'free' | 'original' | '1:1' | '4:5' | '4:3' | '3:2' | '16:9';
-type Tab = 'crop' | 'light' | 'presets';
+type Tab = 'crop' | 'light' | 'masks' | 'presets';
 
 const ASPECTS: { value: Aspect; label: string; ratio: number | null }[] = [
   { value: 'free', label: 'อิสระ', ratio: null },
@@ -46,41 +49,9 @@ const ASPECTS: { value: Aspect; label: string; ratio: number | null }[] = [
 
 const HANDLES: Handle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 
-interface SliderSpec {
-  key: SliderKey;
-  label: string;
-  min: number;
-  max: number;
-  step: number;
-  /** ข้อความปลายสองข้าง (ซ้าย, ขวา) */
-  ends?: [string, string];
-  format?: (v: number) => string;
-}
-
-const LIGHT: SliderSpec[] = [
-  { key: 'exposure', label: 'ค่าแสง', min: -3, max: 3, step: 0.05, format: (v) => `${v > 0 ? '+' : ''}${v.toFixed(2)} EV` },
-  { key: 'contrast', label: 'คอนทราสต์', min: -100, max: 100, step: 1 },
-  { key: 'highlights', label: 'ส่วนสว่าง', min: -100, max: 100, step: 1 },
-  { key: 'shadows', label: 'เงา', min: -100, max: 100, step: 1 },
-  { key: 'whites', label: 'จุดขาว', min: -100, max: 100, step: 1 },
-  { key: 'blacks', label: 'จุดดำ', min: -100, max: 100, step: 1 },
-];
-
-// ปรับที่ดูพิกเซลรอบข้าง (DECISIONS ข้อ 27) — ชื่อเดียวกับ Lightroom ในวงเล็บ
-const PRESENCE: SliderSpec[] = [
-  { key: 'texture', label: 'พื้นผิว (Texture)', min: -100, max: 100, step: 1, ends: ['นุ่ม เนียน', 'คม'] },
-  { key: 'clarity', label: 'ความชัด (Clarity)', min: -100, max: 100, step: 1, ends: ['นวล', 'มีมิติ'] },
-  { key: 'dehaze', label: 'ลดหมอก (Dehaze)', min: -100, max: 100, step: 1, ends: ['เติมหมอก', 'ใส'] },
-];
-
-const COLOR: SliderSpec[] = [
-  { key: 'temperature', label: 'อุณหภูมิสี', min: -100, max: 100, step: 1, ends: ['เย็น', 'อุ่น'] },
-  { key: 'tint', label: 'โทนสี', min: -100, max: 100, step: 1, ends: ['เขียว', 'ม่วงแดง'] },
-  { key: 'vibrance', label: 'ความสดของสี', min: -100, max: 100, step: 1 },
-  { key: 'saturation', label: 'ความอิ่มสี', min: -100, max: 100, step: 1 },
-];
-
-const sameSettings = (a: EditSettings, b: EditSettings) => JSON.stringify(a) === JSON.stringify(b);
+// ไม่มี Mask กับรายการ Mask ว่าง (ค่าจาก Rust ไม่ส่งช่องที่ว่าง) ถือว่าเหมือนกัน
+const comparable = (s: EditSettings) => JSON.stringify({ ...s, masks: s.masks?.length ? s.masks : undefined });
+const sameSettings = (a: EditSettings, b: EditSettings) => comparable(a) === comparable(b);
 
 /** ส่วนของ Lightroom ที่ทำตามไม่ได้ แบบย่อ: Mask หลายอันนับรวมเป็นหนึ่งรายการ */
 export function unsupportedSummary(items: string[]): string {
@@ -162,6 +133,7 @@ function paint(
   frame = false,
   wantHistogram = false,
   profile: Profile = 'display',
+  overlay: string | null = null,
 ): Histogram | null {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
@@ -176,13 +148,20 @@ function paint(
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(source, (-source.width * k) / 2, (-source.height * k) / 2, source.width * k, source.height * k);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  const adjusting = withAdjust && !isNeutral(s.adjust);
+  // ปรับเฉพาะส่วน (DECISIONS ข้อ 28) หรือแสดงบริเวณของ Mask ที่เลือก
+  const masks = s.masks ?? [];
+  const masking = masks.some(maskIsActive) || overlay !== null;
+  const adjusting = withAdjust && (!isNeutral(s.adjust) || masking);
   if (!adjusting && !wantHistogram) return null;
   const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
   if (adjusting) {
     applyToPixels(pixels.data, s.adjust, frame ? canvas.width : undefined, profile);
     // รัศมีคิดจากด้านยาวของทั้งกรอบ (ขยายดูบางส่วนก็ได้ผลแบบเดียวกับทั้งภาพ)
     if (hasLocal(s.adjust)) applyLocal(pixels.data, canvas.width, canvas.height, 4, Math.max(frameW, frameH), s.adjust);
+    if (masking) {
+      const where = { width: canvas.width, height: canvas.height, view, sourceW: source.width, sourceH: source.height, settings: s };
+      applyMasks(pixels.data, where, masks, Math.max(frameW, frameH), overlay);
+    }
     ctx.putImageData(pixels, 0, 0);
   }
   return wantHistogram ? histogram(pixels.data) : null;
@@ -227,6 +206,9 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
   const [picking, setPicking] = useState(false);
   // ชี้ที่ preset: ดูตัวอย่างบนภาพก่อนใช้
   const [previewAdjust, setPreviewAdjust] = useState<Adjust | null>(null);
+  // ปรับเฉพาะส่วน: บริเวณที่เลือก และบริเวณที่แสดงเป็นสีแดงทับ (กดค้าง / เพิ่งเพิ่ม)
+  const [activeMask, setActiveMask] = useState<string | null>(null);
+  const [showArea, setShowArea] = useState<string | null>(null);
   // ค่าที่วาดบนภาพ: ระหว่างชี้ที่ preset ใช้ค่าของ preset (memo ไว้ ไม่ให้วาดซ้ำทุกครั้งที่ฮิสโตแกรมอัปเดต)
   const shown = useMemo(() => (previewAdjust ? { ...settings, adjust: previewAdjust } : settings), [settings, previewAdjust]);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
@@ -344,6 +326,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
           onCrop={(next) => setSettings((s) => ({ ...s, crop: next }))}
           onHistogram={setHist}
           profile={profile}
+          overlay={tab === 'masks' ? showArea : null}
           picking={picking}
           onPick={(fx, fy) => {
             setPicking(false);
@@ -374,6 +357,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
               items={[
                 { value: 'crop', label: 'ตัดและหมุน' },
                 { value: 'light', label: 'แสงและสี' },
+                { value: 'masks', label: 'เฉพาะส่วน' },
                 { value: 'presets', label: 'Preset' },
               ]}
               label="เครื่องมือแต่งภาพ"
@@ -524,6 +508,15 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
                 <VignettePanel adjust={settings.adjust} onChange={setAdjust} />
                 <BeforeButton disabled={isNeutral(settings.adjust)} onHold={setBefore} />
               </>
+            ) : tab === 'masks' ? (
+              <MaskPanel
+                masks={settings.masks ?? []}
+                faces={details.faces}
+                selected={activeMask}
+                onSelect={setActiveMask}
+                onChange={(masks) => setSettings((s) => ({ ...s, masks }))}
+                onShowArea={setShowArea}
+              />
             ) : (
               <>
                 <EditPresets adjust={settings.adjust} onApply={(adjust) => setSettings((s) => ({ ...s, adjust }))} onPreview={setPreviewAdjust} />
@@ -556,51 +549,6 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
         }}
       />
     </div>
-  );
-}
-
-function SliderGroup({
-  title,
-  icon,
-  specs,
-  adjust,
-  onChange,
-  action,
-}: {
-  title: string;
-  icon?: React.ReactNode;
-  specs: SliderSpec[];
-  adjust: Adjust;
-  onChange: (patch: Partial<Adjust>) => void;
-  /** ปุ่มเสริมท้ายหัวข้อ */
-  action?: React.ReactNode;
-}) {
-  return (
-    <section>
-      <div className="mb-2 flex min-h-8 items-center justify-between gap-2">
-        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-ink">
-          {icon}
-          {title}
-        </h3>
-        {action}
-      </div>
-      <div className="space-y-3">
-        {specs.map((spec) => (
-          <SliderRow
-            key={spec.key}
-            id={`editor-${spec.key}`}
-            label={spec.label}
-            value={adjust[spec.key]}
-            min={spec.min}
-            max={spec.max}
-            step={spec.step}
-            ends={spec.ends}
-            format={spec.format}
-            onChange={(v) => onChange({ [spec.key]: v })}
-          />
-        ))}
-      </div>
-    </section>
   );
 }
 
@@ -643,10 +591,12 @@ interface EditCanvasProps {
   onPick: (fx: number, fy: number) => void;
   /** สูตรของภาพต้นทาง (RAW: ภาพต้นทางคือโทนตั้งต้น 8 บิต — DECISIONS ข้อ 25) */
   profile: Profile;
+  /** แสดงบริเวณของ Mask นี้เป็นสีแดงทับ */
+  overlay: string | null;
 }
 
 /** ตัวอย่างภาพที่แต่ง: แท็บตัดและหมุนแสดงทั้งกรอบพร้อมกรอบตัดที่ลากได้ · แท็บแสงและสีแสดงเฉพาะส่วนที่ตัดพร้อมแสงสี */
-function EditCanvas({ source, failed, failMessage, settings, frameAspect, ratio, mode, straightening, before, faces, onCrop, onHistogram, picking, onPick, profile }: EditCanvasProps) {
+function EditCanvas({ source, failed, failMessage, settings, frameAspect, ratio, mode, straightening, before, faces, onCrop, onHistogram, picking, onPick, profile, overlay }: EditCanvasProps) {
   const area = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -683,9 +633,9 @@ function EditCanvas({ source, failed, failMessage, settings, frameAspect, ratio,
         el.width = w;
         el.height = h;
       }
-      onHistogram(paint(el, source, settings, view, !before, mode !== 'crop', true, profile));
+      onHistogram(paint(el, source, settings, view, !before, mode !== 'crop', true, profile, overlay));
     });
-  }, [source, settings, view, before, boxW, boxH, mode, onHistogram, profile]);
+  }, [source, settings, view, before, boxW, boxH, mode, onHistogram, profile, overlay]);
   useEffect(() => {
     redraw();
     return () => cancelAnimationFrame(frame.current);

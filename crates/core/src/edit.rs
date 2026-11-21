@@ -36,6 +36,9 @@ pub struct EditSettings {
     pub crop: Option<Rect>,
     /// แสงและสี (ทำหลังตัด/หมุน)
     pub adjust: crate::adjust::Adjust,
+    /// ปรับเฉพาะส่วน (DECISIONS ข้อ 28) — ทำหลังแสงและสีของทั้งภาพ ตามลำดับ
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub masks: Vec<crate::masks::Mask>,
     /// แต่งจากไฟล์ RAW คู่ของรูป (DECISIONS ข้อ 26) — แอปตั้งเองตอนบันทึก ไม่ใช่ค่าที่ผู้ใช้ปรับ
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub from_raw: bool,
@@ -49,6 +52,7 @@ const EPS: f64 = 1e-6;
 impl EditSettings {
     pub fn validate(&self) -> Result<()> {
         self.adjust.validate()?;
+        crate::masks::validate(&self.masks)?;
         if ![0, 90, 180, 270].contains(&self.rotate) {
             return Err(AppError::invalid("หมุนได้ทีละ 90 องศาเท่านั้น"));
         }
@@ -72,7 +76,12 @@ impl EditSettings {
 
     /// ไม่ได้แต่งอะไรเลย (เก็บแบบนี้ = ลบการแต่ง)
     pub fn is_identity(&self) -> bool {
-        self.is_geometry_identity() && self.adjust.is_neutral()
+        self.is_geometry_identity() && self.adjust.is_neutral() && !self.has_masks()
+    }
+
+    /// มีการปรับเฉพาะส่วนที่มีผล
+    pub fn has_masks(&self) -> bool {
+        self.masks.iter().any(crate::masks::Mask::is_active)
     }
 
     /// ไม่ได้ตัด หมุน หรือปรับเอียง (ขนาดและตำแหน่งของภาพเท่าเดิม)
@@ -87,6 +96,7 @@ impl EditSettings {
             && self.straighten == other.straighten
             && crop(self) == crop(other)
             && self.adjust == other.adjust
+            && self.masks == other.masks
             && self.from_raw == other.from_raw
     }
 }
@@ -237,7 +247,28 @@ pub fn render(img: DynamicImage, s: &EditSettings) -> DynamicImage {
 
 /// เหมือน [`render`] ตามชนิดของภาพต้นทาง (RAW: `img` เป็นภาพ 8 บิตของโทนตั้งต้น)
 pub fn render_with(img: DynamicImage, s: &EditSettings, profile: crate::adjust::Profile) -> DynamicImage {
-    crate::adjust::apply_profile(render_geometry(img, s), &s.adjust, profile)
+    let g = Geometry::new(img.width(), img.height(), s);
+    with_masks(crate::adjust::apply_profile(render_geometry(img, s), &s.adjust, profile), &g, s)
+}
+
+/// ปรับเฉพาะส่วน (DECISIONS ข้อ 28) บนภาพที่แต่งแล้วทั้งกรอบ — `g` ของภาพเดิมที่ภาพนี้มาจาก
+pub(crate) fn with_masks(img: DynamicImage, g: &Geometry, s: &EditSettings) -> DynamicImage {
+    if !s.has_masks() {
+        return img;
+    }
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    match img {
+        // ภาพที่มีส่วนโปร่งใส (PNG): คงช่อง alpha ไว้ ให้ขั้นส่งออกปูพื้นขาวตามเดิม
+        DynamicImage::ImageRgba8(mut rgba) => {
+            crate::masks::apply(&mut rgba, w, h, 4, g, &s.masks);
+            DynamicImage::ImageRgba8(rgba)
+        }
+        other => {
+            let mut rgb = other.into_rgb8();
+            crate::masks::apply(&mut rgb, w, h, 3, g, &s.masks);
+            DynamicImage::ImageRgb8(rgb)
+        }
+    }
 }
 
 /// ตัด หมุน ปรับเอียง (ภาพ 8 บิต หรือภาพ RAW แบบทศนิยม)
@@ -459,11 +490,17 @@ pub struct EditParts {
     pub light: bool,
     /// อุณหภูมิสี โทนสี ความสดของสี ความอิ่มสี และ HSL
     pub color: bool,
+    /// ปรับเฉพาะส่วน (DECISIONS ข้อ 28) — บริเวณใบหน้าใช้ใบหน้าของแต่ละรูปเอง
+    #[serde(default)]
+    pub masks: bool,
 }
 
 impl EditParts {
-    /// การแต่งเดิมของรูป แทนเฉพาะส่วนที่เลือกด้วยค่าจาก `from`
-    pub fn merge(self, mut base: EditSettings, from: &EditSettings) -> EditSettings {
+    /// การแต่งเดิมของรูป แทนเฉพาะส่วนที่เลือกด้วยค่าจาก `from` · `faces` = กรอบใบหน้าของรูปนั้น (บนภาพเดิม)
+    pub fn merge(self, mut base: EditSettings, from: &EditSettings, faces: &[[f64; 4]]) -> EditSettings {
+        if self.masks {
+            base.masks = from.masks.iter().map(|m| m.on_faces(faces)).collect();
+        }
         if self.geometry {
             (base.rotate, base.straighten, base.crop) = (from.rotate, from.straighten, from.crop);
         }
@@ -507,7 +544,7 @@ pub fn apply_many(
     parts: EditParts,
 ) -> Result<ApplyResult> {
     settings.validate()?;
-    if !(parts.geometry || parts.light || parts.color) {
+    if !(parts.geometry || parts.light || parts.color || parts.masks) {
         return Err(AppError::invalid("เลือกอย่างน้อยหนึ่งส่วนที่จะวาง"));
     }
     let mut result = ApplyResult { updated: 0, unchanged: 0, not_ready: 0 };
@@ -532,7 +569,15 @@ pub fn apply_many(
             let stored = old.as_ref().map(|o| &o.settings);
             let origin = origin(&tx, &row.photo_id, stored)?;
             let base = origin.current(stored);
-            let mut next = parts.merge(base.clone(), settings);
+            let faces: Vec<[f64; 4]> = if parts.masks {
+                crate::faces::for_revision(&tx, &row.revision_id)?
+                    .iter()
+                    .map(|f| [f.bbox.x, f.bbox.y, f.bbox.w, f.bbox.h])
+                    .collect()
+            } else {
+                vec![]
+            };
+            let mut next = parts.merge(base.clone(), settings, &faces);
             next.from_raw = origin.from_raw;
             if next == base {
                 result.unchanged += 1;

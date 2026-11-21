@@ -527,10 +527,12 @@ pub fn render(bytes: &[u8], s: &crate::edit::EditSettings, max_edge: u32) -> Res
         }
         _ => u32::MAX,
     };
-    let (lin, _) = develop(bytes, need)?;
+    let (lin, info) = develop(bytes, need)?;
     let img = crate::edit::render_geometry(DynamicImage::ImageRgb32F(lin), s).into_rgb32f();
     let img = if max_edge == u32::MAX { img } else { shrink(img, max_edge) };
-    Ok(crate::adjust::apply_linear(&img, &s.adjust))
+    let out = crate::adjust::apply_linear(&img, &s.adjust);
+    let g = crate::edit::Geometry::new(info.width, info.height, s);
+    Ok(crate::edit::with_masks(DynamicImage::ImageRgb8(out), &g, s).into_rgb8())
 }
 
 #[cfg(test)]

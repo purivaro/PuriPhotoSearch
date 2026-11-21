@@ -43,6 +43,23 @@ export function outputSize(width: number, height: number, s: EditSettings) {
   return { w: Math.max(Math.round(c.w * k * r.w), 1), h: Math.max(Math.round(c.h * k * r.h), 1) };
 }
 
+/** ย้อน [`toFrame`]: จุดบนกรอบหลังปรับเอียง → จุดบนภาพเดิม (Rust: Geometry::to_rotated + quarter_inverse) */
+export function fromFrame(width: number, height: number, s: EditSettings, fx: number, fy: number) {
+  const r = rotatedSize(Math.max(width, 1), Math.max(height, 1), s.rotate);
+  const k = frameScale(r.w, r.h, s.straighten);
+  const t = (s.straighten * Math.PI) / 180;
+  const rx = (fx - 0.5) * k * r.w;
+  const ry = (fy - 0.5) * k * r.h;
+  const px = rx * Math.cos(t) + ry * Math.sin(t);
+  const py = -rx * Math.sin(t) + ry * Math.cos(t);
+  const u = px / r.w + 0.5;
+  const v = py / r.h + 0.5;
+  if (s.rotate === 90) return { x: v, y: 1 - u };
+  if (s.rotate === 180) return { x: 1 - u, y: 1 - v };
+  if (s.rotate === 270) return { x: 1 - v, y: u };
+  return { x: u, y: v };
+}
+
 /** จุดบนภาพเดิม → จุดบนกรอบหลังปรับเอียง (ยังไม่ตัด) */
 export function toFrame(width: number, height: number, s: EditSettings, u: number, v: number) {
   const [qu, qv] = s.rotate === 90 ? [1 - v, u] : s.rotate === 180 ? [1 - u, 1 - v] : s.rotate === 270 ? [v, 1 - u] : [u, v];
