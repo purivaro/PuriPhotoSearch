@@ -43,6 +43,13 @@
     el.click();
     await sleep(80);
   };
+  // เมนูของ Radix เปิดด้วย pointerdown ไม่ใช่ click
+  const openMenu = async (el, what) => {
+    if (!el) throw new Error(`ไม่มีเมนูให้เปิด: ${what}`);
+    el.scrollIntoView({ block: 'nearest' });
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, pointerType: 'mouse' }));
+    await sleep(80);
+  };
   const type = async (el, value) => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, value);
     el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -416,7 +423,7 @@
     expect(text(flags).includes('เลือกไว้ 1') && text(flags).includes('ไม่เอา 1'), `สรุปการคัด (ได้ "${text(flags)}")`);
     // เลือกหลายรูปแล้วล้างการคัดจากเมนูในแถบเลือก
     await click(tid('photo-card-select', photoCard('IMG_0250.jpg')), 'เลือกรูป');
-    await click(await see('flag-menu-button'), 'เมนูคัดรูป');
+    await openMenu(await see('flag-menu-button'), 'เมนูคัดรูป');
     await click(await see('flag-menu-clear'), 'ล้างการคัด');
     await waitFor(() => tids('photo-card').length === 0, 'ล้างแล้วหลุดจากรายการที่เลือกไว้');
     expect((await rpc('get_photo_details', { photoId: pickedId })).flag === null, 'ล้างการคัดแล้ว');

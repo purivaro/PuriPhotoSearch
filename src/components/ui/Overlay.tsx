@@ -73,17 +73,21 @@ export function MenuItem({
   tone = 'default',
   onSelect,
   disabled,
+  'data-testid': testId,
 }: {
   children: ReactNode;
   icon?: ReactNode;
   tone?: 'default' | 'danger';
   onSelect: () => void;
   disabled?: boolean;
+  /** ส่งต่อถึง DOM (TypeScript ไม่ตรวจ attribute ที่มีขีด ถ้าไม่ประกาศไว้ค่าจะหายเงียบ ๆ) */
+  'data-testid'?: string;
 }) {
   return (
     <DropdownMenu.Item
       disabled={disabled}
       onSelect={onSelect}
+      data-testid={testId}
       className={cn(
         'flex min-h-9 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm outline-none data-[disabled]:cursor-not-allowed data-[disabled]:opacity-45',
         tone === 'danger' ? 'text-danger data-[highlighted]:bg-danger-soft' : 'text-ink data-[highlighted]:bg-sunken',

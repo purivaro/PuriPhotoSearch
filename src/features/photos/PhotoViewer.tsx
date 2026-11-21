@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
 import { ArrowLeft, Ban, ChevronLeft, ChevronRight, ClipboardPaste, Copy, EllipsisVertical, ExternalLink, Flag, FolderOpen, Image as ImageIcon, Minus, PanelRight, Plus, ScanFace, Palette, SlidersHorizontal, Sparkles, Undo2, Upload, X } from 'lucide-react';
-import { useViewer, type ViewerLocationState } from '@/app/navigation';
+import { useViewer, viewerPhotoIdNow, type ViewerLocationState } from '@/app/navigation';
 import { Button, IconButton } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
 import { ErrorState, LoadingBlock } from '@/components/ui/Feedback';
@@ -143,15 +143,26 @@ export function PhotoViewer() {
 
   // คัดก่อนแต่ง (DECISIONS ข้อ 33): P เลือก · X ไม่เอา แล้วไปรูปถัดไปเอง · U ล้าง — เห็นผลทันที บันทึกตามหลัง
   const setFlags = useSetPhotoFlags();
+  // คัดรูปที่อยู่ใน URL ตอนกดจริง: กด P แล้ว X ติดกันเร็ว ๆ — URL เปลี่ยนเป็นรูปถัดไปแล้วแต่ React อาจยังวาดรูปเดิม
+  // ถ้าใช้ state ของรอบที่วาดอยู่ X จะไปทับรูปก่อนหน้า (e2e จับได้) · คัดได้แม้รายละเอียดของรูปยังโหลดไม่เสร็จ
+  const mutateFlags = useRef(setFlags.mutate);
+  mutateFlags.current = setFlags.mutate;
+  const sessionNow = viewer.session;
   const applyFlag = useCallback(
     (flag: PhotoFlag | null, advance: boolean) => {
-      if (!data) return;
-      qc.setQueryData(qk.photo(data.id), { ...data, flag });
-      setFlags.mutate({ selection: { kind: 'explicit', photoIds: [data.id] }, flag });
-      toast.success(flag ? `${FLAG_LABEL[flag]} ${data.filename}` : `ล้างการคัด ${data.filename}`, { id: 'photo-flags' });
-      if (advance && nextId) goTo(nextId);
+      const id = viewerPhotoIdNow();
+      if (!id) return;
+      const current = qc.getQueryData<PhotoDetails>(qk.photo(id));
+      if (current) qc.setQueryData(qk.photo(id), { ...current, flag });
+      mutateFlags.current({ selection: { kind: 'explicit', photoIds: [id] }, flag });
+      const name = current?.filename ?? 'รูปนี้';
+      toast.success(flag ? `${FLAG_LABEL[flag]} ${name}` : `ล้างการคัด ${name}`, { id: 'photo-flags' });
+      const ids = sessionNow.current.ids;
+      const at = ids.indexOf(id);
+      const next = at >= 0 ? ids[at + 1] : undefined;
+      if (advance && next) goTo(next);
     },
-    [data, qc, setFlags, nextId, goTo],
+    [qc, goTo, sessionNow],
   );
 
   const close = useCallback(() => {
