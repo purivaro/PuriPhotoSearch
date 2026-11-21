@@ -6,6 +6,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+# ตัวอย่างสดและภาพที่บันทึกใช้ทุกแกน (แบ่งตามแถว ผลเท่ากันทุกบิตกับแกนเดียว — DECISIONS ข้อ 30)
+rayon = "1.12.0"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 jpeg-decoder = { version = "0.3.2", default-features = false }
 kamadak-exif = "0.6.2"

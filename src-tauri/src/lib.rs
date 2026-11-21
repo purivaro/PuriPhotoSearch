@@ -47,6 +47,7 @@ macro_rules! domain_commands {
                 pick_preset,
                 restart_app,
                 e2e_report,
+                render_preview,
                 updater::update_status,
                 updater::update_check,
                 updater::update_install
@@ -103,6 +104,8 @@ domain_commands!(
     get_export_report,
     reveal_export_destination,
     save_photo_edit,
+    preview_white_balance,
+    preview_auto_light,
     reset_photo_edit,
     apply_photo_edits,
     list_edit_presets,
@@ -205,6 +208,16 @@ async fn pick_folder(app: tauri::AppHandle, title: String) -> Option<String> {
 #[tauri::command]
 fn restart_app(app: tauri::AppHandle) {
     app.restart();
+}
+
+/// ภาพตัวอย่างสดของหน้าแต่งภาพ (DECISIONS ข้อ 30): Rust วาดแล้วส่งพิกเซล RGBA เป็น bytes · ทำบน blocking pool ไม่ขวางหน้าต่าง
+#[tauri::command]
+async fn render_preview(state: tauri::State<'_, Shared>, args: Value) -> Result<tauri::ipc::Response, AppError> {
+    let app = state.inner().clone();
+    let pixels = tauri::async_runtime::spawn_blocking(move || api::render_preview(&app, args))
+        .await
+        .map_err(AppError::internal)??;
+    Ok(tauri::ipc::Response::new(pixels))
 }
 
 /// รับรายงานจากสคริปต์ทดสอบ end-to-end (debug build เท่านั้น; release ไม่ทำอะไร)

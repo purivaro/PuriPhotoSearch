@@ -1,4 +1,4 @@
-import type { AppError, AssetKind, CommandName, Commands, DataChangedEvent, UpdateStatus } from './types';
+import type { AppError, AssetKind, CommandName, Commands, DataChangedEvent, PreviewRequest, UpdateStatus } from './types';
 
 /**
  * ทางเรียก Rust ทางเดียวของ UI
@@ -65,6 +65,29 @@ export async function call<K extends CommandName>(
   const body = await res.json();
   if (!res.ok) throw toIpcError(body);
   return body as Commands[K][1];
+}
+
+/**
+ * ภาพตัวอย่างสดของหน้าแต่งภาพหนึ่งเฟรม (DECISIONS ข้อ 30): Rust วาดด้วยสูตรเดียวกับไฟล์ที่บันทึก แล้วส่งพิกเซล RGBA
+ * ขนาด `width`×`height` กลับมาเป็น bytes (ในแอปผ่าน IPC · ใน development preview ผ่าน dev bridge)
+ */
+export async function renderPreview(req: PreviewRequest): Promise<ArrayBuffer> {
+  if (isTauri) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    try {
+      return await invoke<ArrayBuffer>('render_preview', { args: req });
+    } catch (e) {
+      throw toIpcError(e);
+    }
+  }
+  let res: Response;
+  try {
+    res = await fetch(`${DEV_BRIDGE}/preview`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(req) });
+  } catch {
+    throw toIpcError(null);
+  }
+  if (!res.ok) throw toIpcError(await res.json().catch(() => null));
+  return res.arrayBuffer();
 }
 
 /** URL ของ asset สำหรับ `<img src>`; `version` ใช้กัน cache เมื่อข้อมูลเปลี่ยน */

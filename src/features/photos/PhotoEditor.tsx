@@ -8,13 +8,12 @@ import { InlineNotice, Spinner } from '@/components/ui/Feedback';
 import { Tabs } from '@/components/ui/Form';
 import { cn } from '@/lib/cn';
 import { errorMessage, formatCount } from '@/lib/format';
-import { assetUrl, call } from '@/lib/ipc/client';
-import type { EditSettings, PhotoDetails, RawPairInfo, UnitRect } from '@/lib/ipc/types';
-import { NEUTRAL, autoAdjust, histogram, isNeutral, neutralize, type Adjust, type Histogram, type Profile } from './adjust';
+import { call, renderPreview } from '@/lib/ipc/client';
+import type { EditSettings, PhotoDetails, PreviewRequest, PreviewSource, RawPairInfo, UnitRect } from '@/lib/ipc/types';
+import { NEUTRAL, histogram, isNeutral, type Adjust, type Histogram } from './adjust';
 import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, ToneCurvePanel, VignettePanel } from './AdjustControls';
 import { EditPresets } from './EditPresets';
 import { MaskPanel } from './MaskPanel';
-import { isMasking, renderPixels } from './render';
 import { COLOR, LIGHT, PRESENCE, SliderGroup } from './SliderGroup';
 import {
   FULL,
@@ -24,7 +23,6 @@ import {
   cutOut,
   dragCrop,
   fitAspect,
-  frameScale,
   isIdentity,
   outputSize,
   rotateCrop,
@@ -81,95 +79,6 @@ function RawPairNotice({ pair, fromRaw }: { pair: RawPairInfo; fromRaw: boolean 
   );
 }
 
-/** ภาพต้นฉบับย่อไว้สำหรับวาดตัวอย่าง (ด้านยาวไม่เกิน 2400 px — วาดซ้ำได้เร็วทุกครั้งที่เลื่อนแถบ)
- *  · รูปที่แต่งจาก RAW คู่ใช้ `rawframe` (ภาพจาก RAW ในกรอบของ JPEG) */
-function useSource(photoId: string, kind: 'original' | 'rawframe') {
-  const [source, setSource] = useState<HTMLCanvasElement | null>(null);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    let alive = true;
-    setSource(null);
-    setFailed(false);
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.decoding = 'async';
-    img.onload = () => {
-      if (!alive) return;
-      const scale = Math.min(1, 2400 / Math.max(img.naturalWidth, img.naturalHeight));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        setFailed(true);
-        return;
-      }
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      setSource(canvas);
-    };
-    img.onerror = () => {
-      if (alive) setFailed(true);
-    };
-    img.src = assetUrl(kind, photoId);
-    return () => {
-      alive = false;
-    };
-  }, [photoId, kind]);
-  return { source, failed };
-}
-
-/**
- * วาดภาพที่แต่งเฉพาะส่วน `view` (สัดส่วนของกรอบหลังปรับเอียง) ลง canvas ทั้งผืน
- * `frame` = canvas นี้คือกรอบหลังตัดทั้งกรอบ (คิด Vignette ได้) · คืนฮิสโตแกรมของภาพที่วาดเมื่อขอ
- */
-function paint(
-  canvas: HTMLCanvasElement,
-  source: HTMLCanvasElement,
-  s: EditSettings,
-  view: UnitRect,
-  withAdjust: boolean,
-  frame = false,
-  wantHistogram = false,
-  profile: Profile = 'display',
-  overlay: string | null = null,
-): Histogram | null {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return null;
-  const r = rotatedSize(source.width, source.height, s.rotate);
-  const frameW = canvas.width / view.w;
-  const frameH = canvas.height / view.h;
-  const k = frameW / (frameScale(r.w, r.h, s.straighten) * r.w);
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.translate(-view.x * frameW + frameW / 2, -view.y * frameH + frameH / 2);
-  ctx.rotate(((s.rotate + s.straighten) * Math.PI) / 180);
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(source, (-source.width * k) / 2, (-source.height * k) / 2, source.width * k, source.height * k);
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  // ปรับเฉพาะส่วน (DECISIONS ข้อ 28) หรือแสดงบริเวณของ Mask ที่เลือก
-  const adjusting = withAdjust && (!isNeutral(s.adjust) || isMasking(s, overlay));
-  if (!adjusting && !wantHistogram) return null;
-  const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  if (adjusting) {
-    renderPixels(pixels.data, canvas.width, canvas.height, s, profile, { view, sourceW: source.width, sourceH: source.height, whole: frame }, overlay);
-    ctx.putImageData(pixels, 0, 0);
-  }
-  return wantHistogram ? histogram(pixels.data) : null;
-}
-
-/** ค่าเฉลี่ยของสีรอบจุด (fx, fy) เป็นสัดส่วนของ canvas — รัศมี 2 พิกเซล */
-function sampleAround(canvas: HTMLCanvasElement, fx: number, fy: number): [number, number, number] | null {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return null;
-  const x = Math.min(Math.max(Math.round(fx * canvas.width) - 2, 0), canvas.width - 5);
-  const y = Math.min(Math.max(Math.round(fy * canvas.height) - 2, 0), canvas.height - 5);
-  const d = ctx.getImageData(x, y, 5, 5).data;
-  const sum = [0, 0, 0];
-  for (let i = 0; i < d.length; i += 4) for (let c = 0; c < 3; c += 1) sum[c]! += d[i + c]!;
-  return sum.map((v) => v / (d.length / 4)) as [number, number, number];
-}
-
 interface PhotoEditorProps {
   details: PhotoDetails;
   onClose: () => void;
@@ -203,9 +112,10 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
   // ค่าที่วาดบนภาพ: ระหว่างชี้ที่ preset ใช้ค่าของ preset (memo ไว้ ไม่ให้วาดซ้ำทุกครั้งที่ฮิสโตแกรมอัปเดต)
   const shown = useMemo(() => (previewAdjust ? { ...settings, adjust: previewAdjust } : settings), [settings, previewAdjust]);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const { source, failed } = useSource(details.id, fromRaw ? 'rawframe' : 'original');
-  // RAW: ภาพต้นทาง (asset original / rawframe) เป็นโทนตั้งต้นที่แอปล้างไว้ — แสงสีคิดด้วยสูตรของ RAW ให้ตรงกับไฟล์ที่ได้
-  const profile: Profile = details.raw || fromRaw ? 'raw' : 'display';
+  // ภาพต้นทางของตัวอย่างสด (Rust ถอดเองแล้ววาดทุกเฟรม — DECISIONS ข้อ 30) · RAW: Rust คิดแสงสีด้วยสูตรของ RAW เอง
+  const sourceKind: PreviewSource = fromRaw ? 'rawframe' : 'original';
+  // ภาพแรกขึ้นแล้ว (ปุ่มที่ต้องใช้ภาพต้นทางกดได้)
+  const [ready, setReady] = useState(false);
   const dirty = !sameSettings(settings, saved);
   const atStart = fromRaw ? sameSettings(settings, unedited) : isIdentity(settings);
   const lightAtStart = fromRaw ? JSON.stringify(settings.adjust) === JSON.stringify(unedited.adjust) : isNeutral(settings.adjust);
@@ -262,19 +172,14 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
 
   const setAdjust = (patch: Partial<Adjust>) => setSettings((s) => ({ ...s, adjust: { ...s.adjust, ...patch } }));
 
-  // ปรับอัตโนมัติจากภาพที่ตัดแล้ว (ย่อเล็กพอสำหรับนับค่าความสว่าง)
-  const auto = () => {
-    if (!source) return;
-    const probe = document.createElement('canvas');
-    const crop = settings.crop ?? FULL;
-    const aspectNow = (frameAspect * crop.w) / crop.h;
-    probe.width = aspectNow >= 1 ? 320 : Math.max(1, Math.round(320 * aspectNow));
-    probe.height = aspectNow >= 1 ? Math.max(1, Math.round(320 / aspectNow)) : 320;
-    paint(probe, source, settings, crop, false);
-    const data = probe.getContext('2d')?.getImageData(0, 0, probe.width, probe.height).data;
-    if (!data) return;
-    const suggested = autoAdjust(data, profile);
-    setAdjust({ exposure: suggested.exposure, whites: suggested.whites, blacks: suggested.blacks });
+  // ปรับอัตโนมัติจากภาพที่ตัดแล้ว (Rust นับค่าความสว่างจากภาพต้นทาง)
+  const auto = async () => {
+    try {
+      const s = await call('preview_auto_light', { photoId: details.id, source: sourceKind, settings });
+      setAdjust({ exposure: s.exposure, whites: s.whites, blacks: s.blacks });
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
   };
 
   const faces = details.faces.map((face) => {
@@ -304,8 +209,9 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
 
       <div className="flex min-h-0 flex-1 gap-3 p-3">
         <EditCanvas
-          source={source}
-          failed={failed}
+          photoId={details.id}
+          sourceKind={sourceKind}
+          onReady={setReady}
           failMessage={fromRaw ? (pair?.problem ?? 'เปิดไฟล์ RAW คู่ไม่ได้ ตรวจว่าไดรฟ์ต่ออยู่แล้วลองใหม่') : undefined}
           settings={shown}
           frameAspect={frameAspect}
@@ -316,23 +222,18 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
           faces={faces}
           onCrop={(next) => setSettings((s) => ({ ...s, crop: next }))}
           onHistogram={setHist}
-          profile={profile}
           overlay={tab === 'masks' ? showArea : null}
           picking={picking}
-          onPick={(fx, fy) => {
+          onPick={async (fx, fy) => {
             setPicking(false);
-            if (!source) return;
-            // สีของจุดนั้นก่อนปรับแสงสี (วาดส่วนที่เห็นแบบไม่ปรับ แล้วเฉลี่ยรอบจุด)
-            const probe = document.createElement('canvas');
-            const crop = settings.crop ?? FULL;
-            const aspectNow = (frameAspect * crop.w) / crop.h;
-            probe.width = aspectNow >= 1 ? 800 : Math.max(1, Math.round(800 * aspectNow));
-            probe.height = aspectNow >= 1 ? Math.max(1, Math.round(800 / aspectNow)) : 800;
-            paint(probe, source, settings, crop, false);
-            const rgb = sampleAround(probe, fx, fy);
-            if (!rgb) return;
-            setAdjust(neutralize(...rgb, profile));
-            toast.success('ตั้งสมดุลแสงขาวจากจุดที่เลือกแล้ว');
+            // สีของจุดนั้นก่อนปรับแสงสี (Rust เฉลี่ยรอบจุดบนส่วนที่ตัดแล้ว)
+            try {
+              const wb = await call('preview_white_balance', { photoId: details.id, source: sourceKind, settings, x: fx, y: fy });
+              setAdjust(wb);
+              toast.success('ตั้งสมดุลแสงขาวจากจุดที่เลือกแล้ว');
+            } catch (e) {
+              toast.error(errorMessage(e));
+            }
           }}
         />
 
@@ -463,7 +364,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
               <>
                 <HistogramView data={hist} />
                 <div className="flex gap-1.5">
-                  <Button size="sm" icon={<Wand2 className="size-4" aria-hidden />} onClick={auto} disabled={!source} className="flex-1" data-testid="editor-auto">
+                  <Button size="sm" icon={<Wand2 className="size-4" aria-hidden />} onClick={() => void auto()} disabled={!ready} className="flex-1" data-testid="editor-auto">
                     ปรับอัตโนมัติ
                   </Button>
                   <Button size="sm" variant="ghost" disabled={lightAtStart} onClick={() => setAdjust(fromRaw ? unedited.adjust : NEUTRAL)} data-testid="editor-reset-light">
@@ -485,7 +386,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
                       size="sm"
                       variant={picking ? 'primary' : 'ghost'}
                       icon={<Pipette className="size-4" aria-hidden />}
-                      disabled={!source}
+                      disabled={!ready}
                       onClick={() => setPicking((v) => !v)}
                       aria-pressed={picking}
                       data-testid="editor-wb-picker"
@@ -563,8 +464,10 @@ function BeforeButton({ disabled, onHold }: { disabled: boolean; onHold: (holdin
 }
 
 interface EditCanvasProps {
-  source: HTMLCanvasElement | null;
-  failed: boolean;
+  photoId: string;
+  sourceKind: PreviewSource;
+  /** ภาพแรกขึ้นแล้ว / ยังไม่ขึ้น */
+  onReady: (ready: boolean) => void;
   /** ข้อความเมื่อเปิดภาพต้นทางไม่ได้ (ค่าเริ่มต้น: ไฟล์ต้นฉบับ) */
   failMessage?: string;
   settings: EditSettings;
@@ -580,14 +483,12 @@ interface EditCanvasProps {
   /** โหมดหลอดดูดสี: คลิกบนภาพแล้วส่งตำแหน่ง (สัดส่วนของภาพที่แสดง) */
   picking: boolean;
   onPick: (fx: number, fy: number) => void;
-  /** สูตรของภาพต้นทาง (RAW: ภาพต้นทางคือโทนตั้งต้น 8 บิต — DECISIONS ข้อ 25) */
-  profile: Profile;
   /** แสดงบริเวณของ Mask นี้เป็นสีแดงทับ */
   overlay: string | null;
 }
 
 /** ตัวอย่างภาพที่แต่ง: แท็บตัดและหมุนแสดงทั้งกรอบพร้อมกรอบตัดที่ลากได้ · แท็บแสงและสีแสดงเฉพาะส่วนที่ตัดพร้อมแสงสี */
-function EditCanvas({ source, failed, failMessage, settings, frameAspect, ratio, mode, straightening, before, faces, onCrop, onHistogram, picking, onPick, profile, overlay }: EditCanvasProps) {
+function EditCanvas({ photoId, sourceKind, onReady, failMessage, settings, frameAspect, ratio, mode, straightening, before, faces, onCrop, onHistogram, picking, onPick, overlay }: EditCanvasProps) {
   const area = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -610,27 +511,61 @@ function EditCanvas({ source, failed, failMessage, settings, frameAspect, ratio,
   const boxW = Math.max(0, Math.min(size.w - pad * 2, (size.h - pad * 2) * viewAspect));
   const boxH = viewAspect > 0 ? boxW / viewAspect : 0;
 
-  // วาดใหม่ทุกครั้งที่ค่าเปลี่ยน (รวมเป็นครั้งเดียวต่อเฟรมจอ)
-  const frame = useRef(0);
-  const redraw = useCallback(() => {
-    cancelAnimationFrame(frame.current);
-    frame.current = requestAnimationFrame(() => {
-      const el = canvas.current;
-      if (!el || !source || boxW === 0) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const w = Math.round(boxW * dpr);
-      const h = Math.round(boxH * dpr);
-      if (el.width !== w || el.height !== h) {
-        el.width = w;
-        el.height = h;
-      }
-      onHistogram(paint(el, source, settings, view, !before, mode !== 'crop', true, profile, overlay));
-    });
-  }, [source, settings, view, before, boxW, boxH, mode, onHistogram, profile, overlay]);
+  // ขอภาพจาก Rust ทุกครั้งที่ค่าเปลี่ยน — ค้างได้ครั้งละหนึ่งคำขอ ค่าล่าสุดแทนค่าที่ยังไม่ได้ส่ง (ลากแถบเร็ว ๆ ภาพไม่ตามหลังเป็นคิว)
+  const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [problem, setProblem] = useState<string | null>(null);
+  const busy = useRef(false);
+  const pending = useRef<PreviewRequest | null>(null);
+  const alive = useRef(true);
   useEffect(() => {
-    redraw();
-    return () => cancelAnimationFrame(frame.current);
-  }, [redraw]);
+    // StrictMode ติดตั้ง/ถอด/ติดตั้งซ้ำ: ตั้งกลับทุกครั้งที่ติดตั้ง
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  const send = useCallback(
+    async (req: PreviewRequest) => {
+      busy.current = true;
+      try {
+        const pixels = new Uint8ClampedArray(await renderPreview(req));
+        const el = canvas.current;
+        // ขนาด canvas เปลี่ยนระหว่างรอ = ภาพนี้ไม่ใช่ของขนาดนี้แล้ว (คำขอถัดไปมีขนาดใหม่)
+        if (alive.current && el && el.width === req.width && el.height === req.height) {
+          el.getContext('2d')?.putImageData(new ImageData(pixels, req.width, req.height), 0, 0);
+          onHistogram(histogram(pixels));
+          setState('ready');
+          onReady(true);
+        }
+      } catch (e) {
+        // ภาพแรกเปิดไม่ได้ = แจ้ง · หลังจากนั้นคงภาพเดิมไว้ (คำขอถัดไปมักใช้ได้)
+        if (alive.current) {
+          setProblem(errorMessage(e));
+          setState((s) => (s === 'ready' ? s : 'failed'));
+        }
+      } finally {
+        busy.current = false;
+        const next = pending.current;
+        pending.current = null;
+        if (next && alive.current) void send(next);
+      }
+    },
+    [onHistogram, onReady],
+  );
+  useEffect(() => {
+    const el = canvas.current;
+    if (!el || boxW === 0) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(1, Math.round(boxW * dpr));
+    const h = Math.max(1, Math.round(boxH * dpr));
+    if (el.width !== w || el.height !== h) {
+      el.width = w;
+      el.height = h;
+    }
+    const req: PreviewRequest = { photoId, source: sourceKind, settings, width: w, height: h, view, whole: mode !== 'crop', adjust: !before, show: overlay };
+    if (busy.current) pending.current = req;
+    else void send(req);
+  }, [photoId, sourceKind, settings, view, before, boxW, boxH, mode, overlay, send]);
 
   const pct = (v: number) => `${v * 100}%`;
   const begin = (handle: Handle) => (event: React.PointerEvent) => {
@@ -650,13 +585,20 @@ function EditCanvas({ source, failed, failMessage, settings, frameAspect, ratio,
 
   return (
     <div ref={area} className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden rounded-2xl bg-viewer" data-testid="editor-canvas">
-      {!source && (
-        <div className="flex flex-col items-center gap-2 text-white/80">
-          {failed ? <p className="text-sm">{failMessage ?? 'เปิดไฟล์ต้นฉบับไม่ได้ ตรวจว่าไดรฟ์ต่ออยู่แล้วลองใหม่'}</p> : <Spinner className="size-6" />}
+      {state !== 'ready' && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 px-6 text-center text-white/80">
+          {state === 'failed' ? (
+            <p className="text-sm" data-testid="editor-preview-failed">
+              {failMessage ?? 'เปิดไฟล์ต้นฉบับไม่ได้ ตรวจว่าไดรฟ์ต่ออยู่แล้วลองใหม่'}
+              {problem && failMessage === undefined && <span className="mt-1 block text-[12.5px] text-white/60">{problem}</span>}
+            </p>
+          ) : (
+            <Spinner className="size-6" />
+          )}
         </div>
       )}
-      {source && boxW > 0 && (
-        <div className="relative" style={{ width: boxW, height: boxH }} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
+      {boxW > 0 && (
+        <div className={cn('relative', state !== 'ready' && 'invisible')} style={{ width: boxW, height: boxH }} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
           <canvas ref={canvas} className="absolute inset-0 size-full" aria-label="ตัวอย่างภาพที่แต่ง" data-testid="editor-preview" />
           {picking && mode !== 'crop' && (
             <button
@@ -724,7 +666,7 @@ function EditCanvas({ source, failed, failMessage, settings, frameAspect, ratio,
           )}
         </div>
       )}
-      {mode === 'crop' && faces.length > 0 && source && (
+      {mode === 'crop' && faces.length > 0 && state === 'ready' && (
         <p className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-1.5 rounded-md bg-black/65 px-2 py-1 text-[12.5px] text-white">
           <ScanFace className="size-3.5" aria-hidden /> กรอบประ = ใบหน้าในรูป · กรอบแดง = จะอยู่นอกกรอบตัด
         </p>

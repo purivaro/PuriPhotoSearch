@@ -321,6 +321,9 @@ enum Command {
         face_ids: Vec<String>,
         person_id: String,
     },
+
+    PreviewWhiteBalance(crate::preview::PointRequest),
+    PreviewAutoLight(crate::preview::PointRequest),
 }
 
 /// ชื่อคำสั่งทั้งหมด — ต้องตรงกับ `Commands` ใน `src/lib/ipc/types.ts` (มีเทสต์ตรวจ)
@@ -410,6 +413,8 @@ pub const COMMAND_NAMES: &[&str] = &[
     "get_review_faces",
     "reject_suggestions",
     "restore_suggestions",
+    "preview_white_balance",
+    "preview_auto_light",
 ];
 
 #[derive(Serialize)]
@@ -621,10 +626,20 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         RestoreSuggestions { face_ids, person_id } => {
             ok(serde_json::json!({ "dataRevision": review::restore(app, &face_ids, &person_id)? }))
         }
+        PreviewWhiteBalance(r) => ok(crate::preview::white_balance(app, &r)?),
+        PreviewAutoLight(r) => ok(crate::preview::auto(app, &r)?),
     }
 }
 
 /// ภาพสำหรับ `<img>`: `thumb/{photoId}`, `photo/{photoId}`, `face/{faceId}`, `draft/{previewId}/{draftId}`
 pub fn asset(app: &App, request_path: &str) -> Result<Asset> {
     assets::resolve(app, request_path)
+}
+
+/// ภาพตัวอย่างสดของหน้าแต่งภาพหนึ่งเฟรม (DECISIONS ข้อ 30): พิกเซล RGBA — เปลือก Tauri ส่งเป็น bytes ผ่าน IPC
+/// ส่วน dev bridge ส่งทาง HTTP · `args` แบบ [`crate::preview::Request`]
+pub fn render_preview(app: &App, args: Value) -> Result<Vec<u8>> {
+    let req: crate::preview::Request =
+        serde_json::from_value(args).map_err(|e| AppError::invalid(format!("คำขอภาพตัวอย่างไม่ถูกต้อง: {e}")))?;
+    crate::preview::render(app, &req)
 }

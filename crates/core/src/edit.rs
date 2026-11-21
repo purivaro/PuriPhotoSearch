@@ -164,7 +164,7 @@ impl Geometry {
     }
 
     /// ด้านยาวของกรอบก่อนตัด เป็นพิกเซลของภาพที่แต่งขนาด `width`×`height` — รัศมีของ Texture/Clarity/Dehaze และขอบเผื่อของ
-    /// Mask คิดจากค่านี้ ตัดภาพแล้วผลไม่เปลี่ยน (ตัวอย่างสดคิดแบบเดียวกัน: `renderPixels`)
+    /// Mask คิดจากค่านี้ ตัดภาพแล้วผลไม่เปลี่ยน (ตัวอย่างสดคิดแบบเดียวกัน: [`crate::preview`])
     pub fn frame_long(&self, width: u32, height: u32) -> f64 {
         (width as f64 / self.crop.w).max(height as f64 / self.crop.h)
     }

@@ -717,6 +717,23 @@ impl Spline {
     }
 }
 
+/// ค่าของภาพ 0–1 → แสงเชิงเส้นตามชนิดของภาพต้นทาง (RAW: ถอดเส้นโค้งโทนตั้งต้นกลับ)
+pub fn decode_for(profile: Profile, v: f64) -> f64 {
+    match profile {
+        Profile::Display => to_linear(v),
+        Profile::Raw => raw_tone_inverse(v),
+    }
+}
+
+/// หลอดดูดสี: อุณหภูมิสีและโทนสี (หน่วยของแถบ ยังไม่ปัด) ที่ทำให้สี `rgb` (0–255 ก่อนปรับ) กลายเป็นสีเทา
+pub fn neutral_white_balance(rgb: [f64; 3], profile: Profile) -> (f64, f64) {
+    let [rl, gl, bl] = rgb.map(|v| decode_for(profile, v / 255.0).max(1e-4));
+    let t = ((bl - rl) / (0.25 * (rl + bl))).clamp(-1.0, 1.0);
+    let target = rl * (1.0 + 0.25 * t);
+    let ti = ((1.0 - target / gl) / 0.2).clamp(-1.0, 1.0);
+    (t * 100.0, ti * 100.0)
+}
+
 fn to_linear(v: f64) -> f64 {
     if v <= 0.04045 {
         v / 12.92
@@ -751,40 +768,46 @@ pub fn apply_profile_in_frame(img: DynamicImage, a: &Adjust, profile: Profile, l
     if a.is_neutral() {
         return img;
     }
+    let (width, height) = (img.width() as usize, img.height() as usize);
+    if img.color().has_alpha() {
+        let mut rgba = img.to_rgba8();
+        apply_pixels(&mut rgba, width, height, 4, a, profile, long);
+        DynamicImage::ImageRgba8(rgba)
+    } else {
+        let mut rgb = img.into_rgb8();
+        apply_pixels(&mut rgb, width, height, 3, a, profile, long);
+        DynamicImage::ImageRgb8(rgb)
+    }
+}
+
+/// แสงสีทั้งภาพ + Texture/Clarity/Dehaze ในที่ บนพิกเซล `width`×`height` พิกเซลละ `n` ไบต์ (3 = RGB, 4 = RGBA — ช่องที่สี่ไม่แตะ)
+/// · `long` ตาม [`apply_profile_in_frame`] · Vignette คิดตามขนาดนี้ (ภาพนี้คือกรอบที่ตัดแล้วทั้งกรอบ)
+/// · แบ่งแถวให้ทุกแกน (แต่ละพิกเซลคิดแยกกัน ผลเท่ากับแกนเดียวทุกบิต)
+pub fn apply_pixels(raw: &mut [u8], width: usize, height: usize, n: usize, a: &Adjust, profile: Profile, long: f64) {
+    use rayon::prelude::*;
+    if a.is_neutral() || width == 0 || raw.len() < width * height * n {
+        return;
+    }
     let curves = a.curves_for(profile);
     let vignette = a.vignette.amount != 0.0;
     let only_curves = !a.per_pixel() && !vignette;
-    let (w, h) = (img.width() as f64, img.height() as f64);
-    let width = img.width() as usize;
-    let height = img.height() as usize;
+    let (w, h) = (width as f64, height as f64);
     // ตารางสามช่องที่ปัดเป็น 0–255 แล้ว: กรณีไม่ปรับสีต่อพิกเซล ใช้ตารางตรง ๆ เร็วที่สุด
     let table: [[u8; 256]; 3] = curves.map(|t| t.map(|v| (v * 255.0).round() as u8));
-    let alpha = img.color().has_alpha();
-    let mut rgba = if alpha { img.to_rgba8() } else { image::RgbaImage::new(0, 0) };
-    let mut rgb = if alpha { image::RgbImage::new(0, 0) } else { img.into_rgb8() };
-    let n = if alpha { 4 } else { 3 };
-    let raw: &mut [u8] = if alpha { &mut rgba } else { &mut rgb };
-    for (i, px) in raw.chunks_exact_mut(n).enumerate() {
-        let v = [px[0], px[1], px[2]];
-        let out = if only_curves {
-            [table[0][v[0] as usize], table[1][v[1] as usize], table[2][v[2] as usize]]
-        } else {
-            let t = if vignette {
-                a.vignette.weight((i % width) as f64 + 0.5, (i / width) as f64 + 0.5, w, h)
+    raw[..width * height * n].par_chunks_exact_mut(width * n).enumerate().for_each(|(row, line)| {
+        for (col, px) in line.chunks_exact_mut(n).enumerate() {
+            let v = [px[0], px[1], px[2]];
+            let out = if only_curves {
+                [table[0][v[0] as usize], table[1][v[1] as usize], table[2][v[2] as usize]]
             } else {
-                0.0
+                let t = if vignette { a.vignette.weight(col as f64 + 0.5, row as f64 + 0.5, w, h) } else { 0.0 };
+                a.pixel_at(&curves, v, t)
             };
-            a.pixel_at(&curves, v, t)
-        };
-        px[..3].copy_from_slice(&out);
-    }
+            px[..3].copy_from_slice(&out);
+        }
+    });
     if crate::local::is_active(a) {
         crate::local::apply(raw, width, height, n, long, a);
-    }
-    if alpha {
-        DynamicImage::ImageRgba8(rgba)
-    } else {
-        DynamicImage::ImageRgb8(rgb)
     }
 }
 
@@ -792,7 +815,7 @@ pub fn apply_profile_in_frame(img: DynamicImage, a: &Adjust, profile: Profile, l
 mod tests {
     use super::*;
 
-    /// ค่าเดียวกับ `adjust.test.ts` ฝั่ง UI
+    /// ค่าอ้างอิงตายตัวของสูตร (เดิมเทียบกับ adjust.ts ของหน้าเว็บ — ตอนนี้ตัวอย่างสดใช้สูตรนี้เอง DECISIONS ข้อ 30)
     pub(crate) fn sample() -> Adjust {
         Adjust {
             exposure: 0.5,
@@ -820,7 +843,7 @@ mod tests {
         a
     }
 
-    /// sample_full + Levels + Color Grading + Vignette (ใส่ค่าเดียวกันใน adjust.test.ts)
+    /// sample_full + Levels + Color Grading + Vignette
     pub(crate) fn sample_pro() -> Adjust {
         let mut a = sample_full();
         a.levels = Levels { in_black: 10.0, in_white: 240.0, gamma: 1.3, out_black: 5.0, out_white: 250.0 };
@@ -837,7 +860,7 @@ mod tests {
         a
     }
 
-    /// ค่าอ้างอิงของ `sample_pro` ที่สามตำแหน่งในภาพ 400×300 (ใส่ค่าเดียวกันใน adjust.test.ts)
+    /// ค่าอ้างอิงของ `sample_pro` ที่สามตำแหน่งในภาพ 400×300
     /// (สีเข้า, ตำแหน่งพิกเซล, สีออก)
     type ProCase = ([u8; 3], (f64, f64), [u8; 3]);
     const PRO_EXPECTED: [ProCase; 3] = [
@@ -932,7 +955,7 @@ mod tests {
 
     #[test]
     fn matches_the_ui_formula() {
-        // ผลชุดนี้คัดลอกไปไว้ใน adjust.test.ts — แก้สูตรฝั่งไหนต้องแก้ทั้งสองฝั่ง
+        // ค่าอ้างอิงตายตัว: เปลี่ยนสูตรแล้วค่าเปลี่ยน = ตั้งใจเปลี่ยนเท่านั้น
         let a = sample();
         let curves = a.curves();
         assert_eq!(a.pixel(&curves, [10, 20, 30]), [11, 30, 47]);
@@ -945,11 +968,11 @@ mod tests {
         assert_eq!(got, FULL_EXPECTED.to_vec());
     }
 
-    /// ค่าอ้างอิงของ `sample_full` (ใส่ค่าเดียวกันใน adjust.test.ts)
+    /// ค่าอ้างอิงของ `sample_full`
     const FULL_EXPECTED: [[u8; 3]; 3] = [[20, 37, 53], [255, 190, 135], [77, 179, 116]];
 
     /// ชุดที่เทสต์สุ่ม (`tests/preview_parity.rs` ชุด 765, 2067, 5995) จับได้ว่าตัวอย่างสดต่างจากไฟล์: การวน hue ด้วย
-    /// `((x % m) + m) % m` ของ JavaScript ปัดเศษเพิ่ม และ hue ที่ตกที่ 360° พอดี — ค่าเดียวกันใน adjust.test.ts
+    /// `((x % m) + m) % m` ของ JavaScript ปัดเศษเพิ่ม และ hue ที่ตกที่ 360° พอดี
     /// ([hue, sat, lum] ทั้ง 8 ช่วง, พิกเซลเข้า, พิกเซลออก)
     type HslCase = ([[f64; 8]; 3], [u8; 3], [u8; 3]);
     const HSL_EXPECTED: [HslCase; 3] = [
@@ -1033,7 +1056,7 @@ mod tests {
         }
     }
 
-    /// ค่าอ้างอิงของ `sample` ด้วยสูตรของ RAW (ใส่ค่าเดียวกันใน adjust.test.ts)
+    /// ค่าอ้างอิงของ `sample` ด้วยสูตรของ RAW
     const RAW_EXPECTED: [[u8; 3]; 3] = [[11, 35, 53], [154, 117, 236], [255, 244, 228]];
 
     #[test]
