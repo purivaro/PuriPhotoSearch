@@ -290,7 +290,8 @@
     await waitFor(() => tids('preset-item').length === 2, 'preset สองอัน');
     await stage('editor-presets', { presets: tids('preset-item').map((b) => text(b)) });
 
-    // ปรับเฉพาะส่วน (DECISIONS ข้อ 28): บริเวณใบหน้าจากกรอบที่ระบุไว้ → "ผิวขาวใส" เปลี่ยนเฉพาะผิวหน้า ฉากหลังเท่าเดิม
+    // ปรับเฉพาะส่วน (DECISIONS ข้อ 28): บริเวณใบหน้าจากกรอบที่ระบุไว้ → เปลี่ยนเฉพาะผิวหน้า ฉากหลังเท่าเดิม
+    // (ผิวของรูปนี้สว่างเกือบขาวแล้วจาก preset ข้างบน "ผิวขาวใส" จึงสว่างขึ้นได้นิดเดียว — ใช้ค่าแสง −1 ของบริเวณให้เห็นผลชัด)
     const canvasAt = (fx, fy) => {
       const c = tid('editor-preview');
       const d = c.getContext('2d').getImageData(Math.round(c.width * fx) - 2, Math.round(c.height * fy) - 2, 5, 5).data;
@@ -307,10 +308,15 @@
     await see('mask-editor', 'แผงปรับบริเวณที่เลือก');
     await sleep(1600); // ให้สีแดงที่แสดงบริเวณชั่วครู่หายไปก่อน
     await click(tids('mask-look').find((b) => text(b) === 'ผิวขาวใส'), 'จุดเริ่ม “ผิวขาวใส”');
-    const skin1 = await waitFor(() => {
-      const s = canvasAt(0.3, 0.46);
-      return s[1] > skin0[1] + 4 ? s : null;
-    }, 'ผิวหน้าสว่างขึ้นในตัวอย่าง');
+    await type(await see('mask-exposure'), '-1');
+    let last = skin0;
+    const skin1 = await waitFor(
+      () => {
+        last = canvasAt(0.3, 0.46);
+        return last[1] < skin0[1] - 20 ? last : null;
+      },
+      { toString: () => `ผิวหน้าในตัวอย่างมืดลงตามค่าแสงของบริเวณ (ก่อน ${skin0.map(Math.round)} · ล่าสุด ${last.map(Math.round)})` },
+    );
     const back1 = canvasAt(0.06, 0.08);
     expect(back1.every((v, k) => Math.abs(v - back0[k]) <= 1), `ฉากหลังเท่าเดิม ${back0} → ${back1}`);
     await stage('editor-masks', { skin: [skin0, skin1].map((s) => s.map(Math.round)) });
@@ -320,7 +326,10 @@
     const edit = (await rpc('get_photo_details', { photoId: editedId })).edit;
     expect(edit?.settings.adjust.exposure === 0.4 && edit.settings.adjust.lum[1] === 45, `ค่าที่บันทึก: ${JSON.stringify(edit?.settings.adjust)}`);
     const mask = edit?.settings.masks?.[0];
-    expect(edit.settings.masks.length === 1 && mask.area.boxes.length === 2 && mask.adjust.texture === -35, `Mask ที่บันทึก: ${JSON.stringify(mask)}`);
+    expect(
+      edit.settings.masks.length === 1 && mask.area.boxes.length === 2 && mask.adjust.texture === -35 && mask.adjust.exposure === -1,
+      `Mask ที่บันทึก: ${JSON.stringify(mask)}`,
+    );
     await waitFor(() => all('[data-testid="viewer-image-box"] img').some((i) => i.naturalWidth > 0), 'ภาพที่แต่งแล้วโหลดในตัวดูภาพ');
     await click(tid('viewer-close'), 'ปิดตัวดูภาพ');
     await waitFor(() => !tid('photo-viewer'), 'ปิดตัวดูภาพแล้ว');
