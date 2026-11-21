@@ -1,24 +1,21 @@
-//! ภาพตัวอย่างสดของหน้าแต่งภาพ (TypeScript) ตรงกับภาพที่บันทึก/ส่งออก (Rust) ทีละพิกเซล
+//! ภาพตัวอย่างสดของหน้าแต่งภาพตรงกับภาพที่บันทึก/ส่งออกทุกพิกเซล (DECISIONS ข้อ 29–30)
 //!
-//! สุ่มค่าการแต่ง (ทุกแถบ HSL เส้นโค้ง Levels Color Grading Vignette Texture/Clarity/Dehaze ตัด/หมุน/เอียง และปรับเฉพาะส่วน)
-//! กับภาพเล็ก ๆ (รวมดำล้วน ขาวล้วน ไล่โทน) [`CASES`] ชุดด้วย seed ตายตัว · Rust คิดผลด้วยขั้นเดียวกับภาพที่บันทึก
-//! (`adjust::apply_profile` แล้ว `masks::apply` — ส่วนท้ายของ `edit::render_with`) แล้วให้ vitest คิดชุดเดียวกันด้วยโค้ดของ
-//! ตัวอย่างสด (`src/features/photos/parity.test.ts` → `renderPixels`) และเทียบทีละพิกเซล ต่างได้ไม่เกิน [`TOLERANCE`] ระดับ
+//! ตัวอย่างสดใช้ฟังก์ชันชุดเดียวกับไฟล์ที่บันทึกแล้ว แต่ทางเดินต่างกัน: canvas เป็น RGBA ส่วนไฟล์เป็น RGB · ตัวอย่างสุ่มส่วนที่เห็นจาก
+//! ภาพต้นทางตามขนาด canvas · รัศมีของ Texture/Clarity/Dehaze และเรขาคณิตของ Mask ส่งต่อคนละทาง — เทสต์นี้สุ่มค่าการแต่ง
+//! (ทุกแถบ HSL เส้นโค้ง Levels Color Grading Vignette Texture/Clarity/Dehaze หมุนทีละ 90° และ Mask ใบหน้า) กับภาพเล็ก ๆ
+//! (รวมดำล้วน ขาวล้วน ไล่โทน) [`CASES`] ชุดด้วย seed ตายตัว แล้วเทียบ [`puri_core::preview::render_image`] ที่ขนาดภาพเต็ม
+//! กับ [`puri_core::edit::render_with`] ต้องเท่ากันทุกบิต (หมุนทีละ 90° พิกเซลตรงกันพอดี ไม่มีการสุ่มภาพใหม่)
 //!
-//! ต้องมี node และ `pnpm install` แล้ว (CI ติดตั้งก่อนรันเทสต์ Rust) · ชุดที่เคยไม่ตรงถูกเก็บเป็นค่าอ้างอิงตายตัวของแต่ละสูตร
+//! ดูชุดที่ไม่ตรง: `PURI_PARITY_ONLY=<ids>` · ลองมากขึ้น: `PURI_PARITY_N=20000`
 
 use image::{DynamicImage, Rgb, RgbImage};
-use puri_core::adjust::{apply_profile_in_frame, Adjust, Grading, Levels, Profile, Vignette, Wheel};
+use puri_core::adjust::{Adjust, Grading, Levels, Profile, Vignette, Wheel};
 use puri_core::edit::{EditSettings, Geometry, Rect};
 use puri_core::masks::{Area, Mask};
-use serde_json::json;
-use std::path::Path;
-use std::process::Command;
+use puri_core::preview::{render_image, Request, SourceKind};
 
 const CASES: u64 = 400;
 const SEED: u64 = 20_261_121;
-/// ต่างได้ไม่เกินเท่านี้ทุกช่องสีของทุกพิกเซล (การปัดทศนิยมที่ต่างกันเล็กน้อยระหว่าง f32/f64 และ Math ของ JavaScript)
-const TOLERANCE: u8 = 1;
 
 /// SplitMix64 — สุ่มแบบทำซ้ำได้ ไม่ต้องพึ่ง crate
 struct Rng(u64);
@@ -208,21 +205,14 @@ fn masks(rng: &mut Rng) -> Vec<Mask> {
         .collect()
 }
 
+/// หมุนทีละ 90° (ตัด/ปรับเอียงต้องสุ่มภาพใหม่ — ตัวอย่างกับไฟล์จึงต่างกันตามวิธีย่อภาพ ไม่ใช่สูตร)
 fn geometry(rng: &mut Rng, s: &mut EditSettings) {
-    if !rng.chance(0.3) {
-        return;
-    }
-    s.rotate = [0, 90, 180, 270][rng.int(0, 3) as usize];
-    if rng.chance(0.3) {
-        s.straighten = (rng.range(-20.0, 20.0) * 10.0).round() / 10.0;
-    }
     if rng.chance(0.4) {
-        let (w, h) = (rng.range(0.15, 1.0), rng.range(0.15, 1.0));
-        s.crop = Some(Rect { x: rng.range(0.0, 1.0 - w), y: rng.range(0.0, 1.0 - h), w, h });
+        s.rotate = [0, 90, 180, 270][rng.int(0, 3) as usize];
     }
 }
 
-/// ภาพของกรอบที่แต่ง (หลังตัด/หมุน) — ฉากต่าง ๆ รวมกรณีขอบ · ฉากสุดท้ายมี "ใบหน้า" สีผิวตรงกรอบของ Mask
+/// ภาพต้นทาง — ฉากต่าง ๆ รวมกรณีขอบ · ฉากสุดท้ายมี "ใบหน้า" สีผิวตรงกรอบของ Mask
 fn picture(rng: &mut Rng, w: u32, h: u32, faces: &[(f64, f64, f64, f64)]) -> RgbImage {
     let base = [rng.byte(), rng.byte(), rng.byte()];
     let kind = rng.int(0, 7);
@@ -277,21 +267,6 @@ fn picture(rng: &mut Rng, w: u32, h: u32, faces: &[(f64, f64, f64, f64)]) -> Rgb
     img
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// ผลของ Rust: ขั้นเดียวกับภาพที่บันทึกหลังตัด/หมุน (`edit::render_with` = render_geometry → apply_profile_in_frame → with_masks)
-fn render(input: &RgbImage, s: &EditSettings, profile: Profile, source: (u32, u32)) -> RgbImage {
-    let (w, h) = input.dimensions();
-    let g = Geometry::new(source.0, source.1, s);
-    let adjusted =
-        apply_profile_in_frame(DynamicImage::ImageRgb8(input.clone()), &s.adjust, profile, g.frame_long(w, h));
-    let mut px = adjusted.into_rgb8().into_raw();
-    puri_core::masks::apply(&mut px, w as usize, h as usize, 3, &g, &s.masks);
-    RgbImage::from_raw(w, h, px).unwrap()
-}
-
 /// ชื่อสั้น ๆ ของสิ่งที่เปิดในชุดนี้ (ให้รายงานชุดที่ไม่ตรงอ่านง่าย)
 fn features(s: &EditSettings, profile: Profile) -> Vec<&'static str> {
     let a = &s.adjust;
@@ -341,26 +316,18 @@ fn features(s: &EditSettings, profile: Profile) -> Vec<&'static str> {
 
 #[test]
 fn live_preview_matches_the_saved_image_pixel_for_pixel() {
-    let mut cases = vec![];
-    // ลองชุดมากขึ้นได้: PURI_PARITY_N=<จำนวน>
     let n = std::env::var("PURI_PARITY_N").ok().and_then(|v| v.parse().ok()).unwrap_or(CASES);
-    // ดูเฉพาะบางชุด: PURI_PARITY_ONLY=5995,11569 (ใช้กับ PURI_PARITY_DUMP)
     let only: Option<Vec<u64>> =
         std::env::var("PURI_PARITY_ONLY").ok().map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect());
-    let ids: Vec<u64> = only.unwrap_or_else(|| (0..n).collect());
-    for id in ids {
+    let mut failures = vec![];
+    for id in only.unwrap_or_else(|| (0..n).collect()) {
         let mut rng = Rng(SEED.wrapping_mul(1_000_003).wrapping_add(id));
         let mut s = EditSettings { adjust: adjust(&mut rng), ..Default::default() };
         geometry(&mut rng, &mut s);
         s.masks = masks(&mut rng);
         let profile = if rng.chance(0.2) { Profile::Raw } else { Profile::Display };
-        // ขนาดภาพเดิม (สัดส่วนมีผลกับการแปลงพิกัดของ Mask) และกรอบที่แต่งย่อให้อยู่ใน 16–64 × 16–48 ตามสัดส่วนจริง
-        let source = (rng.int(300, 6000), rng.int(300, 6000));
-        let g = Geometry::new(source.0, source.1, &s);
-        let (fw, fh) = g.output_size();
-        let k = (rng.int(32, 64) as f64 / fw as f64).min(rng.int(24, 48) as f64 / fh as f64);
-        let (w, h) = (((fw as f64 * k).round() as u32).clamp(16, 64), ((fh as f64 * k).round() as u32).clamp(16, 48));
-        // ใบหน้าบนกรอบที่แต่ง (พิกเซล) ตรงกับกรอบของ Mask บนภาพเดิม
+        let (w, h) = (rng.int(16, 64), rng.int(16, 48));
+        // ใบหน้าบนภาพต้นทาง (พิกเซล) ตรงกับกรอบของ Mask
         let faces: Vec<(f64, f64, f64, f64)> = s
             .masks
             .iter()
@@ -368,50 +335,45 @@ fn live_preview_matches_the_saved_image_pixel_for_pixel() {
                 Area::Faces { boxes, .. } => boxes.clone(),
             })
             .map(|b| {
-                let (cx, cy) = g.forward(b[0] + b[2] / 2.0, b[1] + b[3] * 0.56);
-                (cx * w as f64, cy * h as f64, b[2] * 0.45 * w as f64, b[3] * 0.5 * h as f64)
+                (
+                    (b[0] + b[2] / 2.0) * w as f64,
+                    (b[1] + b[3] * 0.56) * h as f64,
+                    b[2] * 0.45 * w as f64,
+                    b[3] * 0.5 * h as f64,
+                )
             })
             .collect();
         let input = picture(&mut rng, w, h, &faces);
         s.validate().unwrap_or_else(|e| panic!("ชุด {id} สร้างค่าที่แอปไม่รับ: {e}"));
-        let output = render(&input, &s, profile, source);
-        cases.push(json!({
-            "id": id,
-            "w": w,
-            "h": h,
-            "sourceW": source.0,
-            "sourceH": source.1,
-            "profile": if profile == Profile::Raw { "raw" } else { "display" },
-            "features": features(&s, profile),
-            "settings": s,
-            "input": hex(input.as_raw()),
-            "output": hex(output.as_raw()),
-        }));
+        let saved = puri_core::edit::render_with(DynamicImage::ImageRgb8(input.clone()), &s, profile).into_rgb8();
+        let (ow, oh) = saved.dimensions();
+        assert_eq!((ow, oh), Geometry::new(w, h, &s).output_size());
+        let req = Request {
+            photo_id: String::new(),
+            source: SourceKind::Original,
+            settings: s.clone(),
+            width: ow,
+            height: oh,
+            view: Rect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 },
+            whole: true,
+            adjust: true,
+            show: None,
+        };
+        let shown = render_image(&input, profile, &req);
+        let mut over = 0;
+        let mut first = None;
+        for (i, (p, q)) in shown.as_chunks::<4>().0.iter().zip(saved.pixels()).enumerate() {
+            if p[..3] != q.0 || p[3] != 255 {
+                over += 1;
+                first.get_or_insert((i as u32 % ow, i as u32 / ow, [p[0], p[1], p[2]], q.0));
+            }
+        }
+        if over > 0 {
+            failures.push(format!(
+                "ชุด {id} ({ow}×{oh} {}): ต่าง {over} พิกเซล เช่น {first:?}",
+                features(&s, profile).join(" ")
+            ));
+        }
     }
-
-    let dir = tempfile::tempdir().unwrap();
-    let (file, report) = (dir.path().join("cases.json"), dir.path().join("report.json"));
-    let tolerance = std::env::var("PURI_PARITY_TOLERANCE").ok().and_then(|v| v.parse().ok()).unwrap_or(TOLERANCE);
-    std::fs::write(&file, serde_json::to_vec(&json!({ "tolerance": tolerance, "cases": cases })).unwrap()).unwrap();
-    // ดูชุดที่ไม่ตรงทีละชุด: PURI_PARITY_DUMP=<ไฟล์> เก็บชุดทั้งหมดไว้
-    if let Some(dump) = std::env::var_os("PURI_PARITY_DUMP") {
-        std::fs::copy(&file, dump).unwrap();
-    }
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let vitest = root.join("node_modules/vitest/vitest.mjs");
-    assert!(vitest.is_file(), "ต้อง `pnpm install` ก่อน: เทสต์นี้รันโค้ดตัวอย่างสดของหน้าแต่งภาพด้วย vitest");
-    let out = Command::new("node")
-        .arg(&vitest)
-        .args(["run", "src/features/photos/parity.test.ts"])
-        .current_dir(&root)
-        .env("PURI_PARITY_CASES", &file)
-        .env("PURI_PARITY_REPORT", &report)
-        .output()
-        .expect("เรียก node ไม่ได้ (ต้องมี Node.js)");
-    let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
-    if !out.status.success() {
-        let failures = std::fs::read_to_string(&report).unwrap_or_default();
-        panic!("ตัวอย่างสดต่างจากภาพที่บันทึกเกิน {TOLERANCE} ระดับ:\n{failures}\n\n{text}");
-    }
-    assert!(text.contains("1 passed"), "vitest ไม่ได้รันเทสต์เทียบผล:\n{text}");
+    assert!(failures.is_empty(), "ตัวอย่างสดต่างจากภาพที่บันทึก {} ชุด:\n{}", failures.len(), failures.join("\n"));
 }

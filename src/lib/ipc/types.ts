@@ -465,6 +465,36 @@ export interface EditMask {
   invert: boolean;
 }
 
+/** ภาพต้นทางของหน้าแต่งภาพ: ไฟล์ของรูป หรือภาพจาก RAW คู่ในกรอบของ JPEG */
+export type PreviewSource = 'original' | 'rawframe';
+
+/** คำขอภาพตัวอย่างหนึ่งเฟรม (Rust วาด — DECISIONS ข้อ 30) */
+export interface PreviewRequest {
+  photoId: Id;
+  source: PreviewSource;
+  settings: EditSettings;
+  /** ขนาด canvas (พิกเซล) */
+  width: number;
+  height: number;
+  /** ส่วนของกรอบหลังปรับเอียง (ยังไม่ตัด) ที่ canvas แสดง */
+  view: UnitRect;
+  /** canvas คือกรอบที่ตัดแล้วทั้งกรอบ (คิด Vignette) */
+  whole: boolean;
+  /** false = ภาพก่อนปรับ */
+  adjust: boolean;
+  /** แสดงบริเวณของ Mask นี้เป็นสีแดงทับ */
+  show: string | null;
+}
+
+/** จุดบนส่วนที่ตัดแล้ว (สัดส่วน) สำหรับหลอดดูดสี · ปรับอัตโนมัติใช้เฉพาะรูปและการแต่ง */
+export interface PreviewPointArgs {
+  photoId: Id;
+  source: PreviewSource;
+  settings: EditSettings;
+  x?: number;
+  y?: number;
+}
+
 /** ส่วนของการแต่งที่จะวางให้รูปอื่น */
 export interface EditParts {
   /** ตัด หมุน ปรับเอียง */
@@ -1075,6 +1105,10 @@ export interface Commands {
   /** แสดงโฟลเดอร์ปลายทางของงานส่งออกในตัวจัดการไฟล์ */
   reveal_export_destination: [{ jobId: Id }, null];
   save_photo_edit: [{ photoId: Id; settings: EditSettings }, PhotoDetails];
+  /** หลอดดูดสี: อุณหภูมิสีและโทนสีที่ทำให้จุดนั้นเป็นสีเทา (คิดจากภาพต้นทางใน Rust) */
+  preview_white_balance: [PreviewPointArgs, { temperature: number; tint: number }];
+  /** ปรับอัตโนมัติ: ค่าแสง จุดขาว จุดดำ ที่เสนอจากส่วนที่ตัดแล้ว */
+  preview_auto_light: [PreviewPointArgs, { exposure: number; whites: number; blacks: number }];
   reset_photo_edit: [{ photoId: Id }, PhotoDetails];
   apply_photo_edits: [{ selection: SelectionSpec; settings: EditSettings; parts: EditParts }, ApplyEditsResult];
   list_edit_presets: [Record<string, never>, EditPreset[]];

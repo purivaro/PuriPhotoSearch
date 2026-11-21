@@ -2,7 +2,7 @@
 //!
 //! ทำหลังการปรับทั้งภาพ (รวม Texture/Clarity/Dehaze) บนภาพผล 8 บิต: ปรับส่วนที่ครอบบริเวณนั้นด้วยค่าของ Mask แล้วผสมกับภาพเดิม
 //! ตามน้ำหนักของ Mask (0–1 ต่อพิกเซล) · พิกัดของบริเวณเป็นสัดส่วนบนภาพเดิม (ก่อนตัด/หมุน) — ตัด/หมุนใหม่ภายหลัง Mask ยังอยู่ที่เดิม
-//! บนภาพ · สูตรเดียวกับ `src/features/photos/masks.ts` ของหน้าแต่งภาพ (ค่าอ้างอิงร่วม [`MASK_EXPECTED`])
+//! บนภาพ · ตัวอย่างสดของหน้าแต่งภาพใช้ฟังก์ชันนี้เอง ([`crate::preview`] — ค่าอ้างอิงตายตัว [`MASK_EXPECTED`])
 //!
 //! - **ใบหน้า:** วงรีนุ่ม ๆ รอบกรอบใบหน้าที่แอปตรวจไว้ (ใหญ่กว่ากรอบให้คลุมหน้าผากและคาง) · "เฉพาะผิว" = คูณความเป็นสีผิวจากช่วง Cb/Cr
 //!   ของ YCbCr (สีจีวรส้มสดอยู่นอกช่วง) จึงทำหน้าขาวใส/ผิวเนียนได้โดยจีวรและฉากหลังไม่โดน
@@ -10,7 +10,6 @@
 use crate::adjust::{Adjust, Profile};
 use crate::edit::Geometry;
 use crate::error::{AppError, Result};
-use image::{DynamicImage, RgbImage};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_MASKS: usize = 10;
@@ -258,54 +257,86 @@ fn bounds(area: &Area, g: &Geometry, w: usize, h: usize, long: f64) -> Option<(u
 
 /// ปรับเฉพาะส่วนในที่ · `px` ภาพที่แต่งแล้วทั้งกรอบ ขนาด w×h พิกเซลละ `stride` ไบต์ (3 หรือ 4) · `g` แปลงพิกัดของภาพนี้กลับไปภาพเดิม
 pub fn apply(px: &mut [u8], w: usize, h: usize, stride: usize, g: &Geometry, masks: &[Mask]) {
+    apply_showing(px, w, h, stride, g, masks, None);
+}
+
+/// เหมือน [`apply`] · `show` = แสดงบริเวณของ Mask นี้เป็นสีแดงทับแทนการปรับ (หน้าแต่งภาพตอนกดค้างหรือเพิ่งเพิ่ม — แม้ยังไม่ได้ปรับค่า)
+/// · แต่ละแถวคิดคู่ขนานกัน (ผลเท่ากับแกนเดียวทุกบิต)
+pub fn apply_showing(
+    px: &mut [u8],
+    w: usize,
+    h: usize,
+    stride: usize,
+    g: &Geometry,
+    masks: &[Mask],
+    show: Option<&str>,
+) {
+    use rayon::prelude::*;
     if w == 0 || h == 0 || px.len() < w * h * stride {
         return;
     }
-    // ด้านยาวของกรอบก่อนตัด (รัศมีของ Texture/Clarity และขอบเผื่อ) — เท่ากับตัวอย่างสด
+    // ด้านยาวของกรอบก่อนตัด (รัศมีของ Texture/Clarity และขอบเผื่อ)
     let long = g.frame_long(w as u32, h as u32);
-    for mask in masks.iter().filter(|m| m.is_active()) {
+    for mask in masks {
+        let showing = show == Some(mask.id.as_str());
+        if !showing && !mask.is_active() {
+            continue;
+        }
         let region = if mask.invert { Some((0, 0, w, h)) } else { bounds(&mask.area, g, w, h, long) };
         let Some((x0, y0, x1, y1)) = region else { continue };
         let (rw, rh) = (x1 - x0, y1 - y0);
-        // ส่วนที่ครอบบริเวณ → ปรับด้วยค่าของ Mask (Texture/Clarity คิดรัศมีจากด้านยาวของทั้งภาพ)
-        let crop = RgbImage::from_fn(rw as u32, rh as u32, |x, y| {
-            let i = ((y0 + y as usize) * w + x0 + x as usize) * stride;
-            image::Rgb([px[i], px[i + 1], px[i + 2]])
+        // ส่วนที่ครอบบริเวณ → ปรับด้วยค่าของ Mask (Texture/Clarity คิดรัศมีจากด้านยาวของทั้งกรอบ)
+        let adjusted = (!showing).then(|| {
+            let mut crop = vec![0u8; rw * rh * 3];
+            crop.par_chunks_mut(rw * 3).enumerate().for_each(|(y, line)| {
+                for x in 0..rw {
+                    let i = ((y0 + y) * w + x0 + x) * stride;
+                    line[x * 3..x * 3 + 3].copy_from_slice(&px[i..i + 3]);
+                }
+            });
+            // Vignette เป็นของกรอบภาพทั้งภาพ ไม่ใช่ของบริเวณ — ไม่ใช้ในบริเวณ
+            let per_pixel = Adjust {
+                texture: 0.0,
+                clarity: 0.0,
+                dehaze: 0.0,
+                vignette: crate::adjust::Vignette::default(),
+                ..mask.adjust.clone()
+            };
+            crate::adjust::apply_pixels(&mut crop, rw, rh, 3, &per_pixel, Profile::Display, long);
+            if crate::local::is_active(&mask.adjust) {
+                crate::local::apply(&mut crop, rw, rh, 3, long, &mask.adjust);
+            }
+            crop
         });
-        // Vignette เป็นของกรอบภาพทั้งภาพ ไม่ใช่ของบริเวณ — ไม่ใช้ในบริเวณ (เหมือนตัวอย่างสด)
-        let per_pixel = Adjust {
-            texture: 0.0,
-            clarity: 0.0,
-            dehaze: 0.0,
-            vignette: crate::adjust::Vignette::default(),
-            ..mask.adjust.clone()
-        };
-        let mut adjusted =
-            crate::adjust::apply_profile(DynamicImage::ImageRgb8(crop), &per_pixel, Profile::Display).into_rgb8();
-        if crate::local::is_active(&mask.adjust) {
-            crate::local::apply(&mut adjusted, rw, rh, 3, long, &mask.adjust);
-        }
         let amount = mask.amount / 100.0;
         let tones = face_tones(px, w, h, stride, g, &mask.area);
-        for y in 0..rh {
+        px[y0 * w * stride..y1 * w * stride].par_chunks_mut(w * stride).enumerate().for_each(|(y, line)| {
             for x in 0..rw {
-                let i = ((y0 + y) * w + x0 + x) * stride;
-                let rgb = [px[i], px[i + 1], px[i + 2]];
+                let i = (x0 + x) * stride;
+                let rgb = [line[i], line[i + 1], line[i + 2]];
                 let (u, v) = g.inverse(((x0 + x) as f64 + 0.5) / w as f64, ((y0 + y) as f64 + 0.5) / h as f64);
                 let mut t = area_weight(&mask.area, &tones, u, v, rgb);
                 if mask.invert {
                     t = 1.0 - t;
                 }
+                let Some(adjusted) = &adjusted else {
+                    // บริเวณที่เลือก: แดงโปร่งตามน้ำหนัก
+                    let k = t * 0.55;
+                    for (c, target) in [230.0, 40.0, 60.0].into_iter().enumerate() {
+                        line[i + c] = (rgb[c] as f64 + (target - rgb[c] as f64) * k).round() as u8;
+                    }
+                    continue;
+                };
                 let t = t * amount;
                 if t <= 0.0 {
                     continue;
                 }
-                let a = adjusted.get_pixel(x as u32, y as u32).0;
+                let a = &adjusted[(y * rw + x) * 3..(y * rw + x) * 3 + 3];
                 for c in 0..3 {
-                    px[i + c] = (rgb[c] as f64 + (a[c] as f64 - rgb[c] as f64) * t).round().clamp(0.0, 255.0) as u8;
+                    line[i + c] = (rgb[c] as f64 + (a[c] as f64 - rgb[c] as f64) * t).round().clamp(0.0, 255.0) as u8;
                 }
             }
-        }
+        });
     }
 }
 
@@ -313,7 +344,7 @@ pub fn apply(px: &mut [u8], w: usize, h: usize, stride: usize, g: &Geometry, mas
 #[doc(hidden)]
 pub const MASK_SAMPLES: [(usize, usize); 5] = [(5, 5), (20, 14), (24, 16), (30, 20), (44, 28)];
 
-/// ค่าอ้างอิงร่วมกับ `masks.test.ts`: Mask ใบหน้า [0.3, 0.2, 0.35, 0.5] ค่าแสง +0.6 Texture −40 (เฉพาะผิว / ทั้งบริเวณ)
+/// ค่าอ้างอิงตายตัว: Mask ใบหน้า [0.3, 0.2, 0.35, 0.5] ค่าแสง +0.6 Texture −40 (เฉพาะผิว / ทั้งบริเวณ)
 /// บนภาพที่ไม่ได้ตัด/หมุน → พิกเซลที่ [`MASK_SAMPLES`]
 #[doc(hidden)]
 pub const MASK_EXPECTED: [(bool, [[u8; 3]; 5]); 2] = [
@@ -325,6 +356,7 @@ pub const MASK_EXPECTED: [(bool, [[u8; 3]; 5]); 2] = [
 mod tests {
     use super::*;
     use crate::edit::EditSettings;
+    use image::RgbImage;
 
     fn face_mask(boxes: Vec<[f64; 4]>, skin: bool, adjust: Adjust) -> Mask {
         Mask { id: "m1".into(), area: Area::Faces { boxes, skin }, adjust, amount: 100.0, invert: false }

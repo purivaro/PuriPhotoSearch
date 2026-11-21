@@ -48,6 +48,18 @@ fn handle(app: &App, mut request: Request) {
                 Err(e) => respond(request, 400, "application/json", json_error(&e)),
             }
         }
+        (Method::Post, "/preview") => {
+            // ภาพตัวอย่างสดของหน้าแต่งภาพ: พิกเซล RGBA (แอปจริงส่งผ่าน IPC)
+            let mut body = String::new();
+            let _ = request.as_reader().read_to_string(&mut body);
+            let result = serde_json::from_str::<serde_json::Value>(&body)
+                .map_err(AppError::from)
+                .and_then(|v| api::render_preview(app, v));
+            match result {
+                Ok(pixels) => respond(request, 200, "application/octet-stream", pixels),
+                Err(e) => respond(request, 400, "application/json", json_error(&e)),
+            }
+        }
         (Method::Get, path) if path.starts_with("/asset/") => match api::asset(app, &path["/asset/".len()..]) {
             Ok(asset) => respond(request, 200, asset.mime, asset.bytes),
             Err(e) => respond(request, 404, "application/json", json_error(&e)),

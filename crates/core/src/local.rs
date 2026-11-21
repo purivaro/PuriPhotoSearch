@@ -1,7 +1,7 @@
 //! ปรับที่ต้องดูพิกเซลรอบข้าง (DECISIONS ข้อ 27): Texture, Clarity, Dehaze แบบ Lightroom
 //!
-//! ทำหลังขั้นต่อพิกเซลทั้งหมด บนภาพผล 8 บิต (sRGB) · สูตรเดียวกับ `src/features/photos/local.ts` ที่หน้าแต่งภาพใช้
-//! (ค่าอ้างอิงร่วม [`LOCAL_EXPECTED`]) · รัศมีเป็นสัดส่วนของด้านยาวของภาพ: ภาพตัวอย่างเล็กกับไฟล์เต็มขนาดได้ผลแบบเดียวกัน
+//! ทำหลังขั้นต่อพิกเซลทั้งหมด บนภาพผล 8 บิต (sRGB) · ตัวอย่างสดในหน้าแต่งภาพใช้ฟังก์ชันเดียวกันนี้ ([`crate::preview`])
+//! · รัศมีเป็นสัดส่วนของด้านยาวของกรอบ: ภาพตัวอย่างเล็กกับไฟล์เต็มขนาดได้ผลแบบเดียวกัน
 //!
 //! - **Texture / Clarity:** แยกรายละเอียดออกจาก "ฐาน" ที่ได้จาก guided filter (เบลอแบบรักษาขอบ — ขอบชัดไม่เกิดรัศมีรอบวัตถุ)
 //!   แล้วเพิ่ม/ลดรายละเอียดของความสว่าง · Texture รัศมีเล็ก (ผิว เนื้อผ้า) · Clarity รัศมีใหญ่ เน้นช่วงกลาง (มิติของภาพ) ·
@@ -10,9 +10,10 @@
 //!   แล้วให้ guided filter ทำตามขอบของภาพ · ค่าลบ = เติมหมอก
 //!
 //! guided filter คิดที่ความละเอียดต่ำแล้วขยายสัมประสิทธิ์กลับ (fast guided filter, He & Sun 2015) — ภาพเต็มขนาดใช้หน่วยความจำ
-//! เพิ่มแค่ค่าความสว่างหนึ่งชุด
+//! เพิ่มแค่ค่าความสว่างหนึ่งชุด · แบ่งแถว/คอลัมน์/แถวของบล็อกให้ทุกแกน โดยแต่ละค่าบวกตามลำดับเดิม ผลจึงเท่ากับแกนเดียวทุกบิต
 
 use crate::adjust::Adjust;
+use rayon::prelude::*;
 
 /// รัศมีเป็นสัดส่วนของด้านยาว และค่า ε ของ guided filter (ความต่างที่ถือเป็น "ขอบ" ที่ต้องรักษา — ยกกำลังสอง)
 const TEXTURE_RADIUS: f64 = 0.0035;
@@ -33,8 +34,7 @@ pub fn is_active(a: &Adjust) -> bool {
 /// ปรับในที่: `px` พิกเซลละ `stride` ไบต์ (3 = RGB, 4 = RGBA — ช่องที่สี่ไม่แตะ) · `long` = ด้านยาวของกรอบก่อนตัดเป็นพิกเซลของ `px`
 /// ([`crate::edit::Geometry::frame_long`] — ภาพที่ไม่ได้ตัดคือด้านยาวของ `px`)
 ///
-/// คิดด้วย f64 และเก็บค่ากลางทางเป็น f32 ที่จุดเดียวกับ `local.ts` (ซึ่งคิดด้วย number แล้วเก็บใน Float32Array)
-/// ตัวอย่างสดจึงได้ผลเดียวกันทุกบิต (ตรวจด้วย `tests/preview_parity.rs`)
+/// คิดด้วย f64 และเก็บค่ากลางทางเป็น f32 (DECISIONS ข้อ 29)
 pub fn apply(px: &mut [u8], width: usize, height: usize, stride: usize, long: f64, a: &Adjust) {
     if width == 0 || height == 0 || px.len() < width * height * stride {
         return;
@@ -59,48 +59,63 @@ fn radius(fraction: f64, long: f64) -> usize {
     (fraction * long).round().max(1.0) as usize
 }
 
-/// ค่าเฉลี่ยในหน้าต่าง (2r+1)×(2r+1) — ที่ขอบภาพนับเฉพาะพิกเซลที่อยู่ในภาพ
-fn box_mean(src: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
-    let mut prefix = vec![0f64; w.max(h) + 1];
-    let mut rows = vec![0f32; w * h];
-    for y in 0..h {
-        for x in 0..w {
-            prefix[x + 1] = prefix[x] + src[y * w + x] as f64;
-        }
-        for x in 0..w {
-            let (a, b) = (x.saturating_sub(r), (x + r + 1).min(w));
-            rows[y * w + x] = ((prefix[b] - prefix[a]) / (b - a) as f64) as f32;
-        }
-    }
-    let mut out = vec![0f32; w * h];
-    for x in 0..w {
-        for y in 0..h {
-            prefix[y + 1] = prefix[y] + rows[y * w + x] as f64;
-        }
-        for y in 0..h {
-            let (a, b) = (y.saturating_sub(r), (y + r + 1).min(h));
-            out[y * w + x] = ((prefix[b] - prefix[a]) / (b - a) as f64) as f32;
-        }
-    }
+/// ค่าเฉลี่ยตามแถวในหน้าต่าง 2r+1 — ที่ขอบนับเฉพาะค่าที่อยู่ในแถว · แถวละ `w` ค่า (คิดคู่ขนานทีละแถว)
+fn row_means(src: &[f32], w: usize, r: usize) -> Vec<f32> {
+    let mut out = vec![0f32; src.len()];
+    out.par_chunks_mut(w).zip(src.par_chunks(w)).for_each_init(
+        || vec![0f64; w + 1],
+        |prefix, (dst, line)| {
+            for x in 0..w {
+                prefix[x + 1] = prefix[x] + line[x] as f64;
+            }
+            for (x, v) in dst.iter_mut().enumerate() {
+                let (a, b) = (x.saturating_sub(r), (x + r + 1).min(w));
+                *v = ((prefix[b] - prefix[a]) / (b - a) as f64) as f32;
+            }
+        },
+    );
     out
 }
 
-/// ย่อด้วยค่าเฉลี่ยของบล็อก s×s (บล็อกท้ายแถว/คอลัมน์อาจเล็กกว่า)
+/// สลับแถวกับคอลัมน์ (ภาพ w×h → h×w)
+fn transpose(src: &[f32], w: usize, h: usize) -> Vec<f32> {
+    let mut out = vec![0f32; w * h];
+    out.par_chunks_mut(h).enumerate().for_each(|(x, col)| {
+        for (y, v) in col.iter_mut().enumerate() {
+            *v = src[y * w + x];
+        }
+    });
+    out
+}
+
+/// ค่าเฉลี่ยในหน้าต่าง (2r+1)×(2r+1) — ที่ขอบภาพนับเฉพาะพิกเซลที่อยู่ในภาพ (แถวก่อน แล้วคอลัมน์ บนภาพที่สลับแถว/คอลัมน์)
+fn box_mean(src: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+    let rows = row_means(src, w, r);
+    let cols = row_means(&transpose(&rows, w, h), h, r);
+    transpose(&cols, h, w)
+}
+
+/// ย่อด้วยค่าเฉลี่ยของบล็อก s×s (บล็อกท้ายแถว/คอลัมน์อาจเล็กกว่า) — แต่ละบล็อกบวกตามแถวแล้วคอลัมน์เหมือนเดิม
 fn shrink(src: &[f32], w: usize, h: usize, s: usize) -> (Vec<f32>, usize, usize) {
     if s <= 1 {
         return (src.to_vec(), w, h);
     }
     let (wl, hl) = (w.div_ceil(s), h.div_ceil(s));
-    let mut sum = vec![0f64; wl * hl];
-    let mut n = vec![0u32; wl * hl];
-    for y in 0..h {
-        for x in 0..w {
-            let k = (y / s) * wl + x / s;
-            sum[k] += src[y * w + x] as f64;
-            n[k] += 1;
+    let mut out = vec![0f32; wl * hl];
+    out.par_chunks_mut(wl).enumerate().for_each(|(by, dst)| {
+        let mut sum = vec![0f64; wl];
+        let mut n = vec![0u32; wl];
+        for y in by * s..((by + 1) * s).min(h) {
+            for x in 0..w {
+                sum[x / s] += src[y * w + x] as f64;
+                n[x / s] += 1;
+            }
         }
-    }
-    (sum.iter().zip(&n).map(|(s, n)| (s / *n as f64) as f32).collect(), wl, hl)
+        for (k, v) in dst.iter_mut().enumerate() {
+            *v = (sum[k] / n[k] as f64) as f32;
+        }
+    });
+    (out, wl, hl)
 }
 
 /// สัมประสิทธิ์ของ guided filter ที่ความละเอียดต่ำ: ค่าผลที่พิกเซลเต็มขนาด = a·guide + b (a, b ขยายแบบ bilinear)
@@ -117,18 +132,19 @@ struct Coeffs {
 fn guided(guide: &[f32], input: &[f32], w: usize, h: usize, r: usize, eps: f64, s: usize) -> Coeffs {
     let mean_i = box_mean(guide, w, h, r);
     let mean_p = box_mean(input, w, h, r);
-    let ip: Vec<f32> = guide.iter().zip(input).map(|(i, p)| (*i as f64 * *p as f64) as f32).collect();
-    let ii: Vec<f32> = guide.iter().map(|i| (*i as f64 * *i as f64) as f32).collect();
+    let ip: Vec<f32> = guide.par_iter().zip(input).map(|(i, p)| (*i as f64 * *p as f64) as f32).collect();
+    let ii: Vec<f32> = guide.par_iter().map(|i| (*i as f64 * *i as f64) as f32).collect();
     let (mean_ip, mean_ii) = (box_mean(&ip, w, h, r), box_mean(&ii, w, h, r));
-    let mut a = vec![0f32; w * h];
-    let mut b = vec![0f32; w * h];
-    for k in 0..w * h {
-        let (mi, mp) = (mean_i[k] as f64, mean_p[k] as f64);
-        let cov = mean_ip[k] as f64 - mi * mp;
-        let var = mean_ii[k] as f64 - mi * mi;
-        a[k] = (cov / (var + eps)) as f32;
-        b[k] = (mp - a[k] as f64 * mi) as f32;
-    }
+    let (a, b): (Vec<f32>, Vec<f32>) = (0..w * h)
+        .into_par_iter()
+        .map(|k| {
+            let (mi, mp) = (mean_i[k] as f64, mean_p[k] as f64);
+            let cov = mean_ip[k] as f64 - mi * mp;
+            let var = mean_ii[k] as f64 - mi * mi;
+            let a = (cov / (var + eps)) as f32;
+            (a, (mp - a as f64 * mi) as f32)
+        })
+        .unzip();
     Coeffs { a: box_mean(&a, w, h, r), b: box_mean(&b, w, h, r), w, h, s }
 }
 
@@ -161,13 +177,12 @@ fn smooth(y: &[f32], w: usize, h: usize, long: f64, fraction: f64, eps: f64) -> 
 
 /// Texture / Clarity: ความสว่าง + k·(ความสว่าง − ฐาน) · Clarity คูณน้ำหนักช่วงกลาง (0 ที่ดำ/ขาวสุด)
 fn detail(px: &mut [u8], w: usize, h: usize, stride: usize, long: f64, texture: f64, clarity: f64) {
-    let y: Vec<f32> = (0..w * h).map(|i| luma(&px[i * stride..]) as f32).collect();
+    let y: Vec<f32> = px[..w * h * stride].par_chunks_exact(stride).map(|p| luma(p) as f32).collect();
     let tex = (texture != 0.0).then(|| smooth(&y, w, h, long, TEXTURE_RADIUS, TEXTURE_EPS));
     let cla = (clarity != 0.0).then(|| smooth(&y, w, h, long, CLARITY_RADIUS, CLARITY_EPS));
-    for row in 0..h {
+    px[..w * h * stride].par_chunks_mut(w * stride).enumerate().for_each(|(row, line)| {
         for col in 0..w {
-            let i = row * w + col;
-            let l = y[i] as f64;
+            let l = y[row * w + col] as f64;
             let mut delta = 0.0;
             if let Some(c) = &tex {
                 let (a, b) = c.at(col, row);
@@ -178,11 +193,11 @@ fn detail(px: &mut [u8], w: usize, h: usize, stride: usize, long: f64, texture: 
                 let mid = 1.0 - (2.0 * l - 1.0) * (2.0 * l - 1.0);
                 delta += clarity * (l - (a * l + b)) * mid;
             }
-            for v in &mut px[i * stride..i * stride + 3] {
+            for v in &mut line[col * stride..col * stride + 3] {
                 *v = to_u8(*v as f64 / 255.0 + delta);
             }
         }
-    }
+    });
 }
 
 /// Dehaze: ค่าบวก = J = (I − A)/t + A · ค่าลบ = เข้าหาสีของหมอก
@@ -190,21 +205,31 @@ fn dehaze(px: &mut [u8], w: usize, h: usize, stride: usize, long: f64, amount: f
     let s = radius(DEHAZE_BLOCK, long);
     let (wl, hl) = (w.div_ceil(s), h.div_ceil(s));
     // ต่อบล็อก: ค่าต่ำสุดของ min(R,G,B) · ค่าเฉลี่ยของสีและความสว่าง
-    let mut dark = vec![1f32; wl * hl];
-    let mut sum = vec![[0f64; 4]; wl * hl];
-    let mut n = vec![0u32; wl * hl];
-    for row in 0..h {
-        for col in 0..w {
-            let p = &px[(row * w + col) * stride..];
-            let k = (row / s) * wl + col / s;
-            dark[k] = (dark[k] as f64).min(p[0].min(p[1]).min(p[2]) as f64 / 255.0) as f32;
-            for c in 0..3 {
-                sum[k][c] += p[c] as f64 / 255.0;
+    // แต่ละแถวของบล็อกคิดคู่ขนานกัน — ในบล็อกบวกตามแถวแล้วคอลัมน์เหมือนเดิม
+    type Block = (f32, [f64; 4], u32);
+    let blocks: Vec<Block> = (0..hl)
+        .into_par_iter()
+        .flat_map_iter(|by| {
+            let src: &[u8] = px;
+            let mut line: Vec<Block> = vec![(1.0, [0.0; 4], 0); wl];
+            for row in by * s..((by + 1) * s).min(h) {
+                for col in 0..w {
+                    let p = &src[(row * w + col) * stride..];
+                    let (dark, sum, n) = &mut line[col / s];
+                    *dark = (*dark as f64).min(p[0].min(p[1]).min(p[2]) as f64 / 255.0) as f32;
+                    for c in 0..3 {
+                        sum[c] += p[c] as f64 / 255.0;
+                    }
+                    sum[3] += luma(p) as f32 as f64;
+                    *n += 1;
+                }
             }
-            sum[k][3] += luma(p) as f32 as f64;
-            n[k] += 1;
-        }
-    }
+            line
+        })
+        .collect();
+    let dark: Vec<f32> = blocks.iter().map(|b| b.0).collect();
+    let sum: Vec<[f64; 4]> = blocks.iter().map(|b| b.1).collect();
+    let n: Vec<u32> = blocks.iter().map(|b| b.2).collect();
     let mean = |k: usize, c: usize| sum[k][c] / n[k] as f64;
     // สีของหมอก: ค่าเฉลี่ยของ 1% ของบล็อกที่ dark channel สูงสุด (เท่ากันเรียงตามตำแหน่ง)
     let mut order: Vec<usize> = (0..wl * hl).collect();
@@ -219,24 +244,30 @@ fn dehaze(px: &mut [u8], w: usize, h: usize, stride: usize, long: f64, amount: f
     let air = air.map(|v| (v / top as f64).max(0.05));
     if amount < 0.0 {
         let t = -amount * 0.5;
-        for i in 0..w * h {
+        px[..w * h * stride].par_chunks_exact_mut(stride).for_each(|p| {
             for (c, a) in air.iter().enumerate() {
-                let v = px[i * stride + c] as f64 / 255.0;
-                px[i * stride + c] = to_u8(v + (a - v) * t);
+                let v = p[c] as f64 / 255.0;
+                p[c] = to_u8(v + (a - v) * t);
             }
-        }
+        });
         return;
     }
     // dark channel ของภาพที่หารด้วยสีของหมอก: ต่ำสุดในบล็อก แล้วต่ำสุดในบล็อกข้าง ๆ (3×3)
-    let mut norm = vec![f32::MAX; wl * hl];
-    for row in 0..h {
-        for col in 0..w {
-            let p = &px[(row * w + col) * stride..];
-            let k = (row / s) * wl + col / s;
-            let m = (0..3).map(|c| p[c] as f64 / 255.0 / air[c]).fold(f64::MAX, f64::min);
-            norm[k] = (norm[k] as f64).min(m) as f32;
-        }
-    }
+    let norm: Vec<f32> = (0..hl)
+        .into_par_iter()
+        .flat_map_iter(|by| {
+            let src: &[u8] = px;
+            let mut line = vec![f32::MAX; wl];
+            for row in by * s..((by + 1) * s).min(h) {
+                for col in 0..w {
+                    let p = &src[(row * w + col) * stride..];
+                    let m = (0..3).map(|c| p[c] as f64 / 255.0 / air[c]).fold(f64::MAX, f64::min);
+                    line[col / s] = (line[col / s] as f64).min(m) as f32;
+                }
+            }
+            line
+        })
+        .collect();
     let mut spread = vec![0f32; wl * hl];
     for row in 0..hl {
         for col in 0..wl {
@@ -253,21 +284,21 @@ fn dehaze(px: &mut [u8], w: usize, h: usize, stride: usize, long: f64, amount: f
     let t_low: Vec<f32> = spread.iter().map(|d| (1.0 - omega * *d as f64) as f32).collect();
     let y_low: Vec<f32> = (0..wl * hl).map(|k| mean(k, 3) as f32).collect();
     let coeffs = guided(&y_low, &t_low, wl, hl, 2, DEHAZE_EPS, s);
-    for row in 0..h {
+    px[..w * h * stride].par_chunks_mut(w * stride).enumerate().for_each(|(row, line)| {
         for col in 0..w {
-            let i = (row * w + col) * stride;
-            let l = luma(&px[i..]);
+            let p = &mut line[col * stride..col * stride + 3];
+            let l = luma(p);
             let (a, b) = coeffs.at(col, row);
             let t = (a * l + b).clamp(MIN_TRANSMISSION, 1.0);
             for (c, air_c) in air.iter().enumerate() {
-                let v = px[i + c] as f64 / 255.0;
-                px[i + c] = to_u8((v - air_c) / t + air_c);
+                let v = p[c] as f64 / 255.0;
+                p[c] = to_u8((v - air_c) / t + air_c);
             }
         }
-    }
+    });
 }
 
-/// ภาพทดสอบที่ Rust และ `local.test.ts` สร้างเหมือนกัน (คิดด้วยจำนวนเต็มล้วน): ไล่สี + ลายตาราง + จุดละเอียด · RGB
+/// ภาพทดสอบ (คิดด้วยจำนวนเต็มล้วน): ไล่สี + ลายตาราง + จุดละเอียด · RGB
 #[doc(hidden)]
 pub fn test_image(w: usize, h: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(w * h * 3);
@@ -285,7 +316,7 @@ pub fn test_image(w: usize, h: usize) -> Vec<u8> {
 #[doc(hidden)]
 pub const LOCAL_SAMPLES: [(usize, usize); 5] = [(0, 0), (5, 5), (20, 10), (40, 25), (47, 31)];
 
-/// ค่าอ้างอิงร่วมกับ `local.test.ts`: ภาพ [`test_image`] 48×32 ปรับ [Texture, Clarity, Dehaze] แล้วอ่านพิกเซลที่ [`LOCAL_SAMPLES`]
+/// ค่าอ้างอิงตายตัว: ภาพ [`test_image`] 48×32 ปรับ [Texture, Clarity, Dehaze] แล้วอ่านพิกเซลที่ [`LOCAL_SAMPLES`]
 #[doc(hidden)]
 pub const LOCAL_EXPECTED: [([f64; 3], [[u8; 3]; 5]); 7] = [
     ([-60.0, 0.0, 0.0], [[35, 65, 45], [68, 190, 58], [80, 192, 120], [184, 77, 199], [110, 63, 234]]),
@@ -293,7 +324,7 @@ pub const LOCAL_EXPECTED: [([f64; 3], [[u8; 3]; 5]); 7] = [
     ([0.0, 0.0, 40.0], [[17, 50, 27], [58, 192, 47], [67, 192, 110], [183, 67, 198], [101, 52, 235]]),
     ([0.0, 0.0, -30.0], [[57, 80, 67], [91, 192, 84], [100, 192, 135], [189, 96, 203], [125, 83, 232]]),
     ([40.0, -30.0, 0.0], [[29, 59, 39], [68, 190, 58], [79, 191, 119], [186, 79, 201], [110, 63, 234]]),
-    // ค่าสุดขอบแบบที่เทสต์สุ่ม (tests/preview_parity.rs) เคยจับได้ว่าตัวอย่างสดต่าง 2 ระดับ ก่อนคิดด้วย f64 แบบเดียวกับ local.ts
+    // ค่าสุดขอบที่เทสต์สุ่มเคยจับได้ว่าตัวอย่างสด (TS เดิม) ต่าง 2 ระดับ ก่อนคิดด้วย f64 (DECISIONS ข้อ 29)
     ([33.0, 100.0, -100.0], [[114, 122, 125], [150, 204, 151], [147, 196, 173], [197, 136, 210], [160, 129, 228]]),
     ([100.0, -58.0, 100.0], [[0, 28, 0], [33, 187, 18], [42, 190, 90], [180, 47, 196], [85, 30, 237]]),
 ];

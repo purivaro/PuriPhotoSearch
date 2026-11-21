@@ -25,6 +25,7 @@ pub mod pair;
 pub mod people;
 pub mod platform;
 pub mod preset;
+pub mod preview;
 pub mod raw;
 pub mod relink;
 pub mod review;
@@ -80,6 +81,8 @@ pub struct App {
     pub(crate) review_cache: Mutex<Option<Arc<review::ReviewData>>>,
     pub(crate) face_vectors: Mutex<review::VectorCache>,
     pub(crate) match_state: Mutex<Option<review::MatchState>>,
+    /// ภาพต้นทางของรูปที่กำลังแต่ง (ตัวอย่างสด — DECISIONS ข้อ 30)
+    pub(crate) editor_source: Mutex<Option<Arc<preview::Source>>>,
     /// ผู้ช่วย AI: รอบการคุยที่ยังอ่าน/ย้อนได้ (DECISIONS ข้อ 22)
     pub(crate) assistant: assistant::Assistant,
     /// ตัวเอง (สำหรับงานเบื้องหลังที่ต้องถือ App ไว้ เช่นรอบการคุยกับ AI)
@@ -126,6 +129,7 @@ impl App {
             review_cache: Mutex::new(None),
             face_vectors: Mutex::new(HashMap::new()),
             match_state: Mutex::new(None),
+            editor_source: Mutex::new(None),
             assistant: assistant::Assistant::default(),
             me: me.clone(),
             _lock: lock,
