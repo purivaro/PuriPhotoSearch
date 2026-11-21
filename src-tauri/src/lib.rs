@@ -117,6 +117,7 @@ domain_commands!(
     ai_undo,
     ai_generate,
     ai_generate_info,
+    selection_photos,
     list_watermarks,
     add_watermark,
     delete_watermark,

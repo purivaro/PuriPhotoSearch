@@ -86,6 +86,15 @@ fn edited(app: &App, photo_id: &str, stored: &crate::edit::Stored, kind: &str) -
     Ok(jpeg(bytes))
 }
 
+/// ไฟล์ต้นฉบับ หรือภาพย่อเดิมของแอป (หมุนตั้งตรงแล้ว ยังไม่แต่ง) เมื่อต้นฉบับไม่พร้อม — สำหรับคำนวณจากภาพก่อนแต่ง
+pub(crate) fn source_or_plain_thumb(app: &App, photo_id: &str) -> Result<Vec<u8>> {
+    let source = PathBuf::from(crate::catalog::photo_path(&app.db(), photo_id)?);
+    match media::read_file(&source) {
+        Ok(bytes) => Ok(bytes),
+        Err(_) => Ok(plain_thumb(app, photo_id)?.bytes),
+    }
+}
+
 fn thumb(app: &App, photo_id: &str) -> Result<Asset> {
     let stored = crate::edit::load(&app.db(), photo_id)?;
     if let Some(stored) = stored {

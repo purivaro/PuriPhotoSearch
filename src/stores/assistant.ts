@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { QueryClient } from '@tanstack/react-query';
 import { errorMessage } from '@/lib/format';
 import { call } from '@/lib/ipc/client';
-import type { AiEvent, AiProvider, Id, SelectionSpec } from '@/lib/ipc/types';
+import type { AiEvent, AiProvider, AiReference, Id, SelectionSpec } from '@/lib/ipc/types';
 
 export interface ToolStep {
   id: number;
@@ -50,17 +50,31 @@ function write(key: string, value: string) {
   }
 }
 
+/** ภาพตัวอย่างที่แนบอยู่กับการคุย (ส่งไปทุกรอบจนกว่าจะเอาออก) */
+export interface AttachedReference {
+  reference: AiReference;
+  /** ชื่อที่แสดง (ชื่อไฟล์) */
+  label: string;
+}
+
 interface AssistantState {
   provider: AiProvider;
   tools: boolean;
   messages: ChatMessage[];
+  reference: AttachedReference | null;
+  setReference: (reference: AttachedReference | null) => void;
+  /** ให้ AI แต่งรูปที่เลือกให้ดูเหมือนภาพตัวอย่าง (ด้วยเครื่องมือแต่งภาพของแอป) */
+  matchLook: (args: { reference: AttachedReference; targets: { id: Id; filename: string }[]; note: string }, qc: QueryClient) => Promise<void>;
   /** รอบที่กำลังทำ */
   running: Id | null;
   setProvider: (p: AiProvider) => void;
   setTools: (on: boolean) => void;
   send: (text: string, context: string | null, qc: QueryClient) => Promise<void>;
   /** ให้ ChatGPT สร้างภาพจากรูปที่เลือก — ความคืบหน้าแสดงเป็นข้อความในแผงผู้ช่วย */
-  generate: (args: { selection: SelectionSpec; count: number; prompt: string; template: string | null }, qc: QueryClient) => Promise<void>;
+  generate: (
+    args: { selection: SelectionSpec; count: number; prompt: string; template: string | null; style?: AttachedReference | null },
+    qc: QueryClient,
+  ) => Promise<void>;
   stop: () => void;
   undo: (messageId: string, qc: QueryClient) => Promise<number>;
   clear: () => void;
@@ -133,6 +147,15 @@ export const useAssistant = create<AssistantState>((set, get) => {
     tools: read(TOOLS_KEY) !== 'false',
     messages: [],
     running: null,
+    reference: null,
+    setReference: (reference) => set({ reference }),
+    matchLook: async ({ reference, targets, note }, qc) => {
+      if (get().running) throw new Error('รอให้ผู้ช่วย AI ทำงานที่ค้างอยู่เสร็จก่อน');
+      set({ reference, tools: true });
+      const list = targets.map((t) => `${t.id} (${t.filename})`).join('\n');
+      const text = `แต่ง ${targets.length} รูปที่เลือกให้ดูเหมือนภาพตัวอย่าง “${reference.label}”${note.trim() ? `\n${note.trim()}` : ''}`;
+      await get().send(text, `รูปที่ผู้ใช้เลือกให้แต่ง (${targets.length} รูป):\n${list}`, qc);
+    },
     setProvider: (provider) => {
       write(PROVIDER_KEY, provider);
       set({ provider });
@@ -142,7 +165,7 @@ export const useAssistant = create<AssistantState>((set, get) => {
       set({ tools });
     },
     send: async (text, context, qc) => {
-      const { provider, tools, messages, running } = get();
+      const { provider, tools, messages, running, reference } = get();
       if (running || !text.trim()) return;
       // บทสนทนาที่ส่ง: คำถามทุกข้อ และคำตอบที่ไม่ล้ม
       const history = messages
@@ -153,29 +176,39 @@ export const useAssistant = create<AssistantState>((set, get) => {
       set({ messages: [...messages, user, answer] });
       let turnId: Id;
       try {
-        turnId = (await call('ai_start', { provider, messages: [...history, { role: 'user', text: user.text }], context, tools })).turnId;
+        turnId = (
+          await call('ai_start', {
+            provider,
+            messages: [...history, { role: 'user', text: user.text }],
+            context,
+            tools,
+            reference: tools ? (reference?.reference ?? null) : null,
+          })
+        ).turnId;
       } catch (e) {
         patch(answer.id, (m) => ({ ...m, status: 'error', error: errorMessage(e) }));
         return;
       }
       await follow(answer.id, turnId, qc);
     },
-    generate: async ({ selection, count, prompt, template }, qc) => {
+    generate: async ({ selection, count, prompt, template, style }, qc) => {
       if (get().running) throw new Error('รอให้ผู้ช่วย AI ทำงานที่ค้างอยู่เสร็จก่อน');
+      const how = style ? ` ตามสไตล์ภาพตัวอย่าง “${style.label}”` : template ? ` (แม่แบบ “${template}”)` : '';
       const user: ChatMessage = {
         id: nextId(),
         role: 'user',
-        text: `สร้างภาพด้วย AI จาก ${count} รูป${template ? ` (แม่แบบ “${template}”)` : ''}\n${prompt}`,
+        text: `สร้างภาพด้วย AI จาก ${count} รูป${how}${prompt.trim() ? `\n${prompt.trim()}` : ''}`,
         steps: [],
         photos: [],
         status: 'done',
         undoable: 0,
       };
       const answer: ChatMessage = { id: nextId(), role: 'assistant', text: '', provider: 'codex', model: null, steps: [], photos: [], status: 'running', undoable: 0 };
-      set((s) => ({ messages: [...s.messages, user, answer] }));
+      // ภาพตัวอย่างที่เพิ่งเลือกเป็นภาพตัวอย่างของการคุยนี้ด้วย (ไม่ให้แถบเหนือช่องพิมพ์ค้างภาพของงานก่อน)
+      set((s) => ({ messages: [...s.messages, user, answer], ...(style ? { reference: style } : {}) }));
       let turnId: Id;
       try {
-        turnId = (await call('ai_generate', { selection, prompt, template })).turnId;
+        turnId = (await call('ai_generate', { selection, prompt, template, styleReference: style?.reference ?? null })).turnId;
       } catch (e) {
         patch(answer.id, (m) => ({ ...m, status: 'error', error: errorMessage(e) }));
         return;
@@ -197,7 +230,7 @@ export const useAssistant = create<AssistantState>((set, get) => {
     },
     clear: () => {
       get().stop();
-      set({ messages: [] });
+      set({ messages: [], reference: null });
     },
   };
 });

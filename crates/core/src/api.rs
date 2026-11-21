@@ -218,6 +218,13 @@ enum Command {
     },
     AiGenerate(assistant::generate::GenerateArgs),
     AiGenerateInfo {},
+    /// รูปในชุดที่เลือก (รหัส + ชื่อไฟล์) — ให้หน้าต่างแสดงให้เลือกภาพตัวอย่าง
+    #[serde(rename_all = "camelCase")]
+    SelectionPhotos {
+        selection: export::SelectionSpec,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
     ListWatermarks {},
     AddWatermark {
         path: String,
@@ -379,6 +386,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "ai_undo",
     "ai_generate",
     "ai_generate_info",
+    "selection_photos",
     "list_watermarks",
     "add_watermark",
     "delete_watermark",
@@ -545,6 +553,15 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         AiEvents { turn_id, after } => ok(assistant::events(app, &turn_id, after)?),
         AiCancel { turn_id } => ok(assistant::cancel(app, &turn_id)?),
         AiGenerate(args) => ok(serde_json::json!({ "turnId": assistant::generate::start(app, args)? })),
+        SelectionPhotos { selection, limit } => {
+            let rows = export::load_items(&app.db(), &selection)?;
+            let items: Vec<_> = rows
+                .iter()
+                .take(limit.unwrap_or(60).clamp(1, 500))
+                .map(|r| serde_json::json!({ "id": r.photo_id, "filename": r.filename }))
+                .collect();
+            ok(serde_json::json!({ "total": rows.len(), "items": items }))
+        }
         AiGenerateInfo {} => ok(serde_json::json!({
             "outputRoot": assistant::generate::output_root().to_string_lossy(),
             "maxPhotos": assistant::generate::MAX_PHOTOS,

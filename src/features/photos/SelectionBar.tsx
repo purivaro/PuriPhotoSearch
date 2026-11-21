@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ClipboardPaste, Minimize2, SlidersHorizontal, Sparkles, Upload, X } from 'lucide-react';
+import { ChevronDown, ClipboardPaste, Minimize2, Palette, SlidersHorizontal, Sparkles, Upload, X } from 'lucide-react';
 import { useEditClipboard } from '@/stores/editClipboard';
 import { Button } from '@/components/ui/Button';
+import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/Overlay';
 import { errorMessage, formatCount } from '@/lib/format';
 import { call } from '@/lib/ipc/client';
 import type { Id } from '@/lib/ipc/types';
@@ -28,12 +29,14 @@ interface SelectionBarProps {
   onApplyPreset: () => void;
   /** ให้ AI สร้างภาพใหม่จากรูปที่เลือก */
   onGenerate: () => void;
+  /** ให้ AI แต่งรูปที่เลือกตามภาพตัวอย่าง */
+  onMatchStyle: () => void;
   /** ปุ่มเฉพาะหน้า วางก่อนปุ่มส่งออก */
   actions?: ReactNode;
 }
 
 /** แถบเลือกหลายรูป: บอกจำนวนและขอบเขตตลอดเวลา อยู่ท้าย grid โดยไม่บังแถวสุดท้าย */
-export function SelectionBar({ selection, onSelectionChange, loadedIds, total, query, onExport, onShrink, onPasteEdit, onApplyPreset, onGenerate, actions }: SelectionBarProps) {
+export function SelectionBar({ selection, onSelectionChange, loadedIds, total, query, onExport, onShrink, onPasteEdit, onApplyPreset, onGenerate, onMatchStyle, actions }: SelectionBarProps) {
   const count = selectionCount(selection);
   const copied = useEditClipboard((s) => s.copied);
   // ปุ่ม "ใช้ preset" ขึ้นเมื่อมี preset แล้วเท่านั้น (ไม่รกแถบของคนที่ไม่ได้ใช้)
@@ -88,9 +91,22 @@ export function SelectionBar({ selection, onSelectionChange, loadedIds, total, q
             ใช้ preset
           </Button>
         )}
-        <Button icon={<Sparkles className="size-4" aria-hidden />} onClick={onGenerate} data-testid="generate-button">
-          สร้างภาพด้วย AI
-        </Button>
+        <Menu>
+          <MenuTrigger asChild>
+            <Button icon={<Sparkles className="size-4" aria-hidden />} data-testid="ai-menu-button">
+              ใช้ AI
+              <ChevronDown className="size-4" aria-hidden />
+            </Button>
+          </MenuTrigger>
+          <MenuContent>
+            <MenuItem icon={<Palette />} onSelect={onMatchStyle}>
+              แต่งตามภาพตัวอย่าง…
+            </MenuItem>
+            <MenuItem icon={<Sparkles />} onSelect={onGenerate}>
+              สร้างภาพด้วย AI…
+            </MenuItem>
+          </MenuContent>
+        </Menu>
         <Button icon={<Minimize2 className="size-4" aria-hidden />} onClick={onShrink} data-testid="shrink-button">
           ย่อไฟล์ต้นฉบับ
         </Button>

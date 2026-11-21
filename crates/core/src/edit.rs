@@ -288,6 +288,11 @@ pub(crate) fn cache_path(cache_dir: &Path, photo_id: &str, edit_id: &str, kind: 
 /// ภาพที่แต่งย่อให้ด้านยาวไม่เกิน `max_edge` เป็น JPEG — ถอดรหัสต้นฉบับเท่าที่ต้องใช้
 /// (`bytes` เป็นต้นฉบับ หรือภาพย่อของแอปซึ่งหมุนตั้งตรงแล้ว ก็ได้)
 pub(crate) fn preview_jpeg(bytes: &[u8], s: &EditSettings, max_edge: u32, quality: u8) -> Result<Vec<u8>> {
+    media::encode_jpeg(&render_small(bytes, s, max_edge)?, quality)
+}
+
+/// ภาพที่แต่งย่อให้ด้านยาวไม่เกิน `max_edge` — ถอดรหัสต้นฉบับเท่าที่ต้องใช้ (ถอดเผื่อส่วนที่ถูกตัดออก)
+pub(crate) fn render_small(bytes: &[u8], s: &EditSettings, max_edge: u32) -> Result<DynamicImage> {
     let need = match media::upright_dimensions(bytes) {
         Some((w, h)) if w > 0 && h > 0 => {
             let (ow, oh) = Geometry::new(w, h, s).output_size();
@@ -297,8 +302,7 @@ pub(crate) fn preview_jpeg(bytes: &[u8], s: &EditSettings, max_edge: u32, qualit
         _ => u32::MAX,
     };
     let img = render(media::decode_upright(bytes, need)?, s);
-    let img = if img.width().max(img.height()) > max_edge { img.thumbnail(max_edge, max_edge) } else { img };
-    media::encode_jpeg(&img, quality)
+    Ok(if img.width().max(img.height()) > max_edge { img.thumbnail(max_edge, max_edge) } else { img })
 }
 
 /// ส่วนของการแต่งที่จะวางให้รูปอื่น (แบบ "Paste Settings" ของ Lightroom)
