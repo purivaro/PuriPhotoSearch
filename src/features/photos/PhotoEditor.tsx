@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Aperture, Crop, Eye, Info, Palette, Pipette, RotateCcw, RotateCw, ScanFace, Sparkle, Sun, TriangleAlert, Wand2 } from 'lucide-react';
+import { Aperture, ChevronRight, Crop, Eye, Info, Palette, Pipette, RotateCcw, RotateCw, ScanFace, Sparkle, Sun, TriangleAlert, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
 import { InlineNotice, Spinner } from '@/components/ui/Feedback';
@@ -86,13 +86,18 @@ interface PhotoEditorProps {
   details: PhotoDetails;
   onClose: () => void;
   onSaved: (details: PhotoDetails) => void;
+  /**
+   * แต่งทีละรูป (DECISIONS ข้อ 32): ตำแหน่งของรูปนี้ในชุดที่เปิดมา และไปรูปถัดไปโดยเปิดหน้าแต่งภาพค้างไว้
+   * (`next` ได้ผลการบันทึกเมื่อบันทึกก่อนไป · null = รูปสุดท้ายของชุด)
+   */
+  sequence?: { index: number; total: number; next: ((saved?: PhotoDetails) => void) | null };
 }
 
 /**
  * แต่งภาพ — ตัด หมุน ปรับเอียง แสงและสี (DECISIONS ข้อ 17–18)
  * เก็บเป็นค่าในคลัง ไฟล์ต้นฉบับไม่ถูกแตะ ใบหน้าและชื่ออยู่ครบเสมอ กลับเป็นต้นฉบับได้ทุกเมื่อ
  */
-export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
+export function PhotoEditor({ details, onClose, onSaved, sequence }: PhotoEditorProps) {
   // รูปที่มีไฟล์ RAW คู่: แต่งจาก RAW — ค่าที่นับว่าไม่ได้แต่งคือค่าเริ่มต้นจาก Lightroom (DECISIONS ข้อ 26)
   const pair = details.rawPairInfo;
   const fromRaw = pair?.editFromRaw ?? false;
@@ -114,7 +119,9 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
   const [showArea, setShowArea] = useState<string | null>(null);
   // ค่าที่วาดบนภาพ: ระหว่างชี้ที่ preset ใช้ค่าของ preset (memo ไว้ ไม่ให้วาดซ้ำทุกครั้งที่ฮิสโตแกรมอัปเดต)
   const shown = useMemo(() => (previewAdjust ? { ...settings, adjust: previewAdjust } : settings), [settings, previewAdjust]);
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // ทิ้งการแต่งที่ยังไม่บันทึกแล้ว: ปิดหน้าแต่งภาพ หรือข้ามไปรูปถัดไป
+  const [confirmDiscard, setConfirmDiscard] = useState<'close' | 'next' | null>(null);
+  const next = sequence?.next ?? null;
   // ภาพต้นทางของตัวอย่างสด (Rust ถอดเองแล้ววาดทุกเฟรม — DECISIONS ข้อ 30) · RAW: Rust คิดแสงสีด้วยสูตรของ RAW เอง
   const sourceKind: PreviewSource = fromRaw ? 'rawframe' : 'original';
   // ภาพแรกขึ้นแล้ว (ปุ่มที่ต้องใช้ภาพต้นทางกดได้)
@@ -136,10 +143,12 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
   };
   const ratio = ratioOf(aspect);
 
+  // then = 'next': บันทึกแล้วไปรูปถัดไปของชุด (หน้าแต่งภาพเปิดต่อให้)
   const save = useMutation({
-    mutationFn: () => call('save_photo_edit', { photoId: details.id, settings }),
-    onSuccess: (result) => {
-      onSaved(result);
+    mutationFn: (_then: 'close' | 'next') => call('save_photo_edit', { photoId: details.id, settings }),
+    onSuccess: (result, then) => {
+      if (then === 'next' && next) next(result);
+      else onSaved(result);
       toast.success(result.edit ? 'บันทึกการแต่งแล้ว ไฟล์ต้นฉบับไม่ถูกแตะ' : 'กลับเป็นภาพต้นฉบับแล้ว');
     },
     onError: (e) => toast.error(errorMessage(e)),
@@ -154,7 +163,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
         event.stopPropagation();
         // Esc ระหว่างใช้หลอดดูดสี = เลิกเลือกจุด ไม่ใช่ปิดหน้าแต่งภาพ
         if (picking) setPicking(false);
-        else if (dirty) setConfirmDiscard(true);
+        else if (dirty) setConfirmDiscard('close');
         else onClose();
       }
     };
@@ -198,16 +207,40 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
         <p className="min-w-0 truncate text-sm text-muted" title={details.filename}>
           {details.filename}
         </p>
+        {sequence && (
+          // นับที่เหลือ ไม่ใช่ลำดับ: ตอนดูเฉพาะรูปที่ยังไม่แต่ง รูปที่บันทึกแล้วหลุดจากชุด ลำดับจึงไม่เดินหน้า แต่ "ที่เหลือ" ลดลงเสมอ
+          <span className="shrink-0 rounded-full bg-sunken px-2.5 py-0.5 text-[12.5px] font-semibold text-muted tabular-nums" data-testid="editor-position">
+            {sequence.total - sequence.index - 1 > 0 ? `ต่อจากนี้อีก ${formatCount(sequence.total - sequence.index - 1)} รูป` : 'รูปสุดท้ายของชุดนี้'}
+          </span>
+        )}
         <div data-tauri-drag-region className="min-w-2 flex-1" />
         <Button size="sm" variant="ghost" disabled={atStart} onClick={() => setSettings(unedited)} data-testid="editor-reset">
           รีเซ็ตทั้งหมด
         </Button>
-        <Button size="sm" onClick={() => (dirty ? setConfirmDiscard(true) : onClose())} data-testid="editor-cancel">
+        <Button size="sm" onClick={() => (dirty ? setConfirmDiscard('close') : onClose())} data-testid="editor-cancel">
           ยกเลิก
         </Button>
-        <Button size="sm" variant="primary" disabled={!dirty} busy={save.isPending} onClick={() => save.mutate()} data-testid="editor-save">
+        {next && (
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<ChevronRight className="size-4" aria-hidden />}
+            disabled={save.isPending}
+            onClick={() => (dirty ? setConfirmDiscard('next') : next())}
+            title="ไปรูปถัดไปโดยไม่บันทึกรูปนี้"
+            data-testid="editor-skip"
+          >
+            ข้าม
+          </Button>
+        )}
+        <Button size="sm" variant={next ? 'outline' : 'primary'} disabled={!dirty || (save.isPending && save.variables === 'next')} busy={save.isPending && save.variables === 'close'} onClick={() => save.mutate('close')} data-testid="editor-save">
           บันทึก
         </Button>
+        {next && (
+          <Button size="sm" variant="primary" disabled={!dirty || save.isPending} busy={save.isPending && save.variables === 'next'} onClick={() => save.mutate('next')} data-testid="editor-save-next">
+            บันทึก แล้วไปรูปถัดไป
+          </Button>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-1 gap-3 p-3">
@@ -437,16 +470,18 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
       </div>
 
       <ConfirmDialog
-        open={confirmDiscard}
-        onOpenChange={setConfirmDiscard}
+        open={confirmDiscard !== null}
+        onOpenChange={(open) => !open && setConfirmDiscard(null)}
         title="ทิ้งการแต่งที่ยังไม่บันทึก?"
-        description="ภาพจะกลับเป็นแบบที่บันทึกไว้ล่าสุด"
-        confirmLabel="ทิ้งการแต่ง"
+        description={confirmDiscard === 'next' ? 'รูปนี้จะกลับเป็นแบบที่บันทึกไว้ล่าสุด แล้วไปรูปถัดไป' : 'ภาพจะกลับเป็นแบบที่บันทึกไว้ล่าสุด'}
+        confirmLabel={confirmDiscard === 'next' ? 'ทิ้ง แล้วไปรูปถัดไป' : 'ทิ้งการแต่ง'}
         cancelLabel="แต่งต่อ"
         tone="danger"
         onConfirm={() => {
-          setConfirmDiscard(false);
-          onClose();
+          const to = confirmDiscard;
+          setConfirmDiscard(null);
+          if (to === 'next' && next) next();
+          else onClose();
         }}
       />
     </div>

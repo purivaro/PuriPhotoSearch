@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
-import { CircleCheck, CloudOff, Copy, FolderOpen, FolderSearch, Image as ImageIcon, ImageOff, RefreshCw, ScanFace, TriangleAlert, UserRoundSearch } from 'lucide-react';
+import { CircleCheck, CloudOff, Copy, FolderOpen, FolderSearch, Image as ImageIcon, ImageOff, Pin, RefreshCw, ScanFace, SlidersHorizontal, Sparkles, TriangleAlert, UserRoundSearch } from 'lucide-react';
 import { Page, PageHeader, useDocumentTitle } from '@/app/PageLayout';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState, ErrorState, InlineNotice, LoadingBlock, StatusBadge } from '@/components/ui/Feedback';
@@ -10,11 +10,13 @@ import { Field, Select, Tabs, TextArea, TextInput } from '@/components/ui/Form';
 import { JobCard, JobStrip } from '@/features/jobs/JobCard';
 import { FaceAvatar } from '@/features/people/FaceAvatar';
 import { ThumbSizeSlider } from '@/features/photos/ThumbSizeSlider';
+import { EditFilterSelect, EditProgress } from '@/features/photos/EditProgress';
 import { PhotoResults } from '@/features/photos/PhotoResults';
+import { parseEditFilter } from '@/features/search/searchParams';
 import { cn } from '@/lib/cn';
 import { errorMessage, formatCount, formatThaiDate, isErrorCode, middleEllipsis, newRequestId } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
-import type { EventDetail, SearchParams } from '@/lib/ipc/types';
+import type { EditFilter, EventDetail, SearchParams } from '@/lib/ipc/types';
 import { isJobActive, PHOTO_PAGE_SIZE, qk, useActiveJobs, useCapabilities, useEvent, type PhotoQuery } from '@/lib/queries';
 import { FILE_MANAGER } from '@/lib/platform';
 import { useFolderChooser } from '@/app/FolderChooser';
@@ -39,6 +41,8 @@ export function EventDetailPage() {
     else next.set(key, value);
     setParams(next, { replace: true });
   };
+  // แต่งตามคน (DECISIONS ข้อ 32): เลือกคนในงาน → เปิดรูปแรกของเขาที่ยังไม่แต่งในหน้าแต่งภาพ (ค่า = คนที่จะแต่ง)
+  const [autoEdit, setAutoEdit] = useState<string | null>(null);
 
   const reveal = useMutation({
     mutationFn: () => call('reveal_event_folder', { eventId }),
@@ -219,15 +223,57 @@ export function EventDetailPage() {
         className="mb-4"
       />
 
-      {tab === 'photos' && <PhotosTab event={data} personId={params.get('person')} onPersonChange={(id) => setParam('person', id)} scanning={Boolean(job)} />}
-      {tab === 'people' && <PeopleTab event={data} onShowPhotos={(id) => setParams(new URLSearchParams({ person: id }), { replace: true })} />}
+      {tab === 'photos' && (
+        <PhotosTab
+          event={data}
+          personId={params.get('person')}
+          onPersonChange={(id) => setParam('person', id)}
+          editFilter={parseEditFilter(params.get('ed'))}
+          onEditFilterChange={(value) => setParam('ed', value === 'any' ? null : value)}
+          scanning={Boolean(job)}
+          // เริ่มเมื่อ URL เปลี่ยนเป็นคนนั้น + "ยังไม่แต่ง" แล้วจริง (react-router เปลี่ยน URL แบบ transition ช้ากว่า state นี้)
+          autoEdit={autoEdit !== null && autoEdit === params.get('person') && params.get('ed') === 'unedited'}
+          onAutoEditHandled={(opened) => {
+            setAutoEdit(null);
+            if (!opened) toast.success('รูปของคนนี้ในงานนี้แต่งครบแล้ว');
+          }}
+        />
+      )}
+      {tab === 'people' && (
+        <PeopleTab
+          event={data}
+          onShowPhotos={(id) => setParams(new URLSearchParams({ person: id }), { replace: true })}
+          onEditPhotos={(id) => {
+            setParams(new URLSearchParams({ person: id, ed: 'unedited' }), { replace: true });
+            setAutoEdit(id);
+          }}
+        />
+      )}
       {tab === 'info' && <InfoTab key={data.recordVersion} event={data} />}
       {tab === 'history' && <HistoryTab event={data} />}
     </Page>
   );
 }
 
-function PhotosTab({ event, personId, onPersonChange, scanning }: { event: EventDetail; personId: string | null; onPersonChange: (id: string | null) => void; scanning: boolean }) {
+function PhotosTab({
+  event,
+  personId,
+  onPersonChange,
+  editFilter,
+  onEditFilterChange,
+  scanning,
+  autoEdit,
+  onAutoEditHandled,
+}: {
+  event: EventDetail;
+  personId: string | null;
+  onPersonChange: (id: string | null) => void;
+  editFilter: EditFilter;
+  onEditFilterChange: (value: EditFilter) => void;
+  scanning: boolean;
+  autoEdit: boolean;
+  onAutoEditHandled: (opened: boolean) => void;
+}) {
   const [faceFilter, setFaceFilter] = useState<SearchParams['faceFilter']>('any');
   const [sort, setSort] = useState<SearchParams['sort']>('taken_asc');
   // คน filter ที่มาจากหน้าบุคคลอาจยังไม่อยู่ในรายชื่อของงาน (เช่นถูกเอาออกแล้ว) ก็ยังแสดง chip ให้ล้างได้
@@ -240,9 +286,13 @@ function PhotosTab({ event, personId, onPersonChange, scanning }: { event: Event
       faceFilter,
       sort,
       limit: PHOTO_PAGE_SIZE,
+      // คนในงานนับรูปที่ AI จัดให้ด้วย (ตรงกับตัวเลขบนชิป) · ป้ายชื่อบนรูปบอกคนที่ AI จัดให้ด้วยรูปประกาย
+      includeSuggested: true,
+      editFilter,
     }),
-    [event.id, personId, faceFilter, sort],
+    [event.id, personId, faceFilter, sort, editFilter],
   );
+  const filtered = Boolean(personId) || faceFilter !== 'any' || editFilter !== 'any';
 
   return (
     <div>
@@ -257,6 +307,7 @@ function PhotosTab({ event, personId, onPersonChange, scanning }: { event: Event
               label={item.person.displayName}
               count={item.photoCount}
               asset={item.person.coverAsset}
+              pinned={item.pinned}
               testId="event-person-chip"
             />
           ))}
@@ -267,6 +318,7 @@ function PhotosTab({ event, personId, onPersonChange, scanning }: { event: Event
           <option value="has_faces">มีใบหน้าที่ระบุไว้</option>
           <option value="no_person">ยังไม่มีชื่อบุคคล</option>
         </Select>
+        <EditFilterSelect value={editFilter} onChange={onEditFilterChange} />
         <Select value={sort} onChange={(e) => setSort(e.target.value as SearchParams['sort'])} aria-label="เรียงรูปตาม">
           <option value="taken_asc">วันถ่าย เก่า → ใหม่</option>
           <option value="taken_desc">วันถ่าย ใหม่ → เก่า</option>
@@ -280,26 +332,41 @@ function PhotosTab({ event, personId, onPersonChange, scanning }: { event: Event
         query={query}
         label={`รูปในกิจกรรม ${event.title}`}
         originLabel="กลับไปกิจกรรม"
-        selectionKey={`${event.id}|${personId ?? ''}|${faceFilter}`}
+        selectionKey={`${event.id}|${personId ?? ''}|${faceFilter}|${editFilter}`}
+        autoEdit={autoEdit}
+        onAutoEditHandled={onAutoEditHandled}
         summary={(meta) =>
-          meta.total > 0 && (personId || faceFilter !== 'any') ? (
-            <p className="text-sm text-muted" aria-live="polite">
-              พบ {formatCount(meta.total)} รูปจาก {formatCount(event.photoCount)} รูปในงานนี้
-              {selectedPerson ? ` ที่ยืนยันแล้วว่ามี ${selectedPerson.displayName}` : ''}
-            </p>
+          meta.total > 0 || (meta.coverage?.eligiblePhotos ?? 0) > 0 ? (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              {filtered && (
+                <p className="text-sm text-muted" aria-live="polite">
+                  พบ {formatCount(meta.total)} รูป{editFilter === 'unedited' ? 'ที่ยังไม่แต่ง' : editFilter === 'edited' ? 'ที่แต่งแล้ว' : ''}จาก {formatCount(event.photoCount)} รูปในงานนี้
+                  {selectedPerson ? ` ที่มี ${selectedPerson.displayName} (รวมที่ AI จัดให้)` : ''}
+                </p>
+              )}
+              <EditProgress meta={meta} />
+            </div>
           ) : null
         }
         empty={
-          personId || faceFilter !== 'any' ? (
+          editFilter === 'unedited' && !(faceFilter !== 'any') ? (
+            <EmptyState
+              icon={<CircleCheck aria-hidden />}
+              title={selectedPerson ? `แต่งรูปของ ${selectedPerson.displayName} ในงานนี้ครบแล้ว` : 'แต่งรูปในงานนี้ครบแล้ว'}
+              description="ไม่มีรูปที่ยังไม่แต่ง — รูปที่แต่งแล้วมีป้าย “แต่งแล้ว” กำกับ"
+              action={<Button onClick={() => onEditFilterChange('any')}>ดูทุกรูป</Button>}
+            />
+          ) : filtered ? (
             <EmptyState
               icon={<UserRoundSearch aria-hidden />}
               title="ไม่มีรูปที่ตรงกับตัวกรองนี้ในงานนี้"
-              description="ผลนี้นับเฉพาะใบหน้าที่ยืนยันแล้ว ลองล้างตัวกรองเพื่อดูรูปทั้งหมดของกิจกรรม"
+              description="ลองล้างตัวกรองเพื่อดูรูปทั้งหมดของกิจกรรม"
               action={
                 <Button
                   onClick={() => {
                     onPersonChange(null);
                     setFaceFilter('any');
+                    onEditFilterChange('any');
                   }}
                 >
                   ล้างตัวกรอง
@@ -317,7 +384,23 @@ function PhotosTab({ event, personId, onPersonChange, scanning }: { event: Event
   );
 }
 
-function PersonChip({ active, onClick, label, count, asset, testId }: { active: boolean; onClick: () => void; label: string; count?: number; asset?: string | null; testId: string }) {
+function PersonChip({
+  active,
+  onClick,
+  label,
+  count,
+  asset,
+  pinned,
+  testId,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  count?: number;
+  asset?: string | null;
+  pinned?: boolean;
+  testId: string;
+}) {
   return (
     <button
       type="button"
@@ -331,19 +414,20 @@ function PersonChip({ active, onClick, label, count, asset, testId }: { active: 
       )}
     >
       {asset !== undefined && <FaceAvatar asset={asset} name={label} decorative className="size-7 text-xs" />}
+      {pinned && <Pin className="size-3.5 shrink-0 text-action" fill="currentColor" aria-label="ปักหมุดไว้" />}
       <span className="truncate">{label}</span>
       {count !== undefined && <span className="shrink-0 text-[12.5px] font-normal text-muted">{formatCount(count)}</span>}
     </button>
   );
 }
 
-function PeopleTab({ event, onShowPhotos }: { event: EventDetail; onShowPhotos: (personId: string) => void }) {
+function PeopleTab({ event, onShowPhotos, onEditPhotos }: { event: EventDetail; onShowPhotos: (personId: string) => void; onEditPhotos: (personId: string) => void }) {
   const capabilities = useCapabilities();
   if (event.people.length === 0) {
     return (
       <EmptyState
         icon={<UserRoundSearch aria-hidden />}
-        title="ยังไม่มีบุคคลที่ยืนยันในงานนี้"
+        title="ยังไม่พบบุคคลในงานนี้"
         description={
           capabilities.data?.faceAnalysis.available
             ? 'ตั้งชื่อใบหน้าของงานนี้ได้จากหน้าตรวจสอบใบหน้า หรือคลิกกรอบใบหน้าในตัวดูภาพ รายชื่อจะปรากฏที่นี่'
@@ -354,25 +438,57 @@ function PeopleTab({ event, onShowPhotos }: { event: EventDetail; onShowPhotos: 
   }
   return (
     <div>
-      <p className="mb-3 text-sm text-muted">รายชื่อที่ผู้ใช้ยืนยันแล้วในงานนี้ จำนวนรูปนับแบบไม่ซ้ำ (คนหนึ่งมีหลายใบหน้าในรูปเดียวนับครั้งเดียว)</p>
-      <ul className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
-        {event.people.map((item) => (
-          <li key={item.person.id} className="flex items-center gap-3 rounded-card border border-line bg-surface p-3 shadow-card">
-            <FaceAvatar asset={item.person.coverAsset} name={item.person.displayName} shape="rounded" decorative className="size-14 text-xl" />
-            <div className="min-w-0 flex-1">
-              <Link to={`/people/${item.person.id}`} className="block truncate text-[15.5px] font-bold text-ink hover:text-action hover:underline">
-                {item.person.displayName}
-              </Link>
-              <p className="flex items-center gap-1 text-[13.5px] text-muted">
-                <CircleCheck className="size-3.5 text-ok" aria-hidden />
-                ยืนยันแล้ว {formatCount(item.photoCount)} รูป
-              </p>
-            </div>
-            <Button size="sm" onClick={() => onShowPhotos(item.person.id)}>
-              ดูรูปในงานนี้
-            </Button>
-          </li>
-        ))}
+      <p className="mb-3 text-sm text-muted">
+        คนในงานนี้ ทั้งที่ยืนยันแล้วและที่ AI จัดให้ (ยังไม่มีคนตรวจ) · คนที่ปักหมุดไว้ขึ้นก่อน · จำนวนรูปนับแบบไม่ซ้ำ · กด “แต่งรูป” เพื่อแต่งรูปของคนนั้นที่ยังไม่แต่งทีละรูป
+      </p>
+      <ul className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3">
+        {event.people.map((item) => {
+          const confirmed = item.photoCount - item.aiPhotoCount;
+          return (
+            <li key={item.person.id} className="flex items-center gap-3 rounded-card border border-line bg-surface p-3 shadow-card" data-testid="event-person-row">
+              <FaceAvatar asset={item.person.coverAsset} name={item.person.displayName} shape="rounded" decorative className="size-14 text-xl" />
+              <div className="min-w-0 flex-1">
+                <Link to={`/people/${item.person.id}`} className="flex items-center gap-1.5 text-[15.5px] font-bold text-ink hover:text-action hover:underline">
+                  {item.pinned && <Pin className="size-3.5 shrink-0 text-action" fill="currentColor" aria-label="ปักหมุดไว้" />}
+                  <span className="truncate">{item.person.displayName}</span>
+                </Link>
+                <p className="flex flex-wrap items-center gap-x-2 text-[13px] text-muted">
+                  <span className="font-semibold text-ink">{formatCount(item.photoCount)} รูป</span>
+                  {confirmed > 0 && (
+                    <span className="inline-flex items-center gap-1">
+                      <CircleCheck className="size-3.5 text-ok" aria-hidden />
+                      ยืนยัน {formatCount(confirmed)}
+                    </span>
+                  )}
+                  {item.aiPhotoCount > 0 && (
+                    <span className="inline-flex items-center gap-1">
+                      <Sparkles className="size-3.5 text-brand" aria-hidden />
+                      AI จัดให้ {formatCount(item.aiPhotoCount)}
+                    </span>
+                  )}
+                </p>
+                <p className="text-[12.5px] text-muted" data-testid="event-person-unedited">
+                  {item.uneditedPhotoCount > 0 ? `ยังไม่แต่ง ${formatCount(item.uneditedPhotoCount)} รูป` : 'แต่งครบทุกรูปแล้ว'}
+                </p>
+              </div>
+              <div className="flex shrink-0 flex-col gap-1.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  icon={<SlidersHorizontal className="size-4" aria-hidden />}
+                  disabled={item.uneditedPhotoCount === 0}
+                  onClick={() => onEditPhotos(item.person.id)}
+                  data-testid="event-person-edit"
+                >
+                  แต่งรูป
+                </Button>
+                <Button size="sm" onClick={() => onShowPhotos(item.person.id)}>
+                  ดูรูปในงานนี้
+                </Button>
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

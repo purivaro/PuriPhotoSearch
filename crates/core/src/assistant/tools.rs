@@ -103,6 +103,7 @@ impl PhotoTools {
                         "event": { "type": "string", "description": "Event title (or part of it) or event id" },
                         "from": { "type": "string", "description": "Taken on or after, YYYY-MM-DD" },
                         "to": { "type": "string", "description": "Taken on or before, YYYY-MM-DD" },
+                        "edited": { "type": "string", "enum": ["edited", "unedited"], "description": "Only photos already edited in the app, or only those not edited yet" },
                         "limit": { "type": "integer", "minimum": 1, "maximum": MAX_LIST },
                     }),
                     &[],
@@ -372,6 +373,7 @@ impl PhotoTools {
             }),
             sort: Some("taken_desc".into()),
             limit: Some(args.get("limit").and_then(Value::as_i64).unwrap_or(30).clamp(1, MAX_LIST)),
+            edit_filter: str_arg(args, "edited").map(str::to_string),
             ..Default::default()
         };
         let page = catalog::query_photos(&conn, &params).map_err(|e| e.message)?;

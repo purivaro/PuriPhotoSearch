@@ -71,11 +71,22 @@ export function PhotoViewer() {
   const previousId = index > 0 ? ids[index - 1] : undefined;
   const nextId = index >= 0 && index < ids.length - 1 ? ids[index + 1] : undefined;
 
+  // แต่งทีละรูป (DECISIONS ข้อ 32): เปิดมาที่หน้าแต่งภาพเลย หรือเปิดหน้าแต่งภาพต่อให้รูปถัดไปหลัง "บันทึก แล้วไปรูปถัดไป" / "ข้าม"
+  // `editFor` = รูปที่ต้องเปิดหน้าแต่งภาพให้ · รันซ้ำได้ผลเดิม (StrictMode รัน effect สองรอบ) และล้างเมื่อไปรูปอื่นด้วยวิธีอื่น
+  const editFor = useRef<Id | null>(null);
+  const sessionRef = viewer.session;
   useEffect(() => {
     setDrawMode(false);
     setSelectedFaceId(null);
-    setEditing(false);
-  }, [photoId]);
+    const opened = sessionRef.current;
+    if (opened.edit) {
+      editFor.current = photoId;
+      sessionRef.current = { ...opened, edit: false };
+    } else if (editFor.current !== photoId) {
+      editFor.current = null;
+    }
+    setEditing(editFor.current === photoId);
+  }, [photoId, sessionRef]);
 
   // บันทึกการแต่งแล้ว: ใช้ข้อมูลใหม่ทันที และให้ภาพย่อในหน้าที่มาเปลี่ยนตาม
   const applyEdited = useCallback(
@@ -109,6 +120,23 @@ export function PhotoViewer() {
     },
     [navigate, location.state],
   );
+
+  // ไปรูปถัดไปโดยเปิดหน้าแต่งภาพค้างไว้ · โหลดข้อมูลของรูปถัดไปไว้ก่อน หน้าแต่งภาพจึงเปิดต่อได้ทันที
+  const editNext = nextId
+    ? (result?: PhotoDetails) => {
+        if (result) {
+          qc.setQueryData(qk.photo(result.id), result);
+          void qc.invalidateQueries({ queryKey: ['photos'] });
+        }
+        editFor.current = nextId;
+        goTo(nextId);
+      }
+    : null;
+  useQuery({
+    queryKey: qk.photo(nextId ?? ''),
+    queryFn: () => call('get_photo_details', { photoId: nextId as Id }),
+    enabled: editing && Boolean(nextId),
+  });
 
   const close = useCallback(() => {
     if (state?.pushed) navigate(-1);
@@ -416,7 +444,30 @@ export function PhotoViewer() {
       </div>
 
       {data && <ExportDialog open={exporting} onOpenChange={setExporting} selection={{ kind: 'explicit', photoIds: [photoId] }} count={1} previewPhotoId={photoId} />}
-      {editing && data && <PhotoEditor details={data} onClose={() => setEditing(false)} onSaved={applyEdited} />}
+      {editing && data && !(data.width > 0 && data.originalAvailable) && (
+        // แต่งทีละรูปมาถึงรูปที่แต่งไม่ได้ตอนนี้: บอกเหตุ แล้วให้ไปต่อได้ ไม่ค้างเงียบ ๆ
+        <div role="status" data-testid="viewer-edit-skip" className="absolute bottom-24 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded-xl border border-line bg-surface px-4 py-2.5 text-sm text-ink shadow-card">
+          {data.originalAvailable ? 'รูปนี้ยังเตรียมข้อมูลไม่เสร็จ จึงยังแต่งไม่ได้' : 'ไฟล์ต้นฉบับของรูปนี้ไม่พร้อม จึงแต่งไม่ได้ตอนนี้'}
+          {editNext ? (
+            <Button size="sm" variant="primary" icon={<ChevronRight className="size-4" aria-hidden />} onClick={() => editNext()}>
+              แต่งรูปถัดไป
+            </Button>
+          ) : (
+            <Button size="sm" onClick={() => setEditing(false)}>
+              ตกลง
+            </Button>
+          )}
+        </div>
+      )}
+      {editing && data && data.width > 0 && data.originalAvailable && (
+        <PhotoEditor
+          key={photoId}
+          details={data}
+          onClose={() => setEditing(false)}
+          onSaved={applyEdited}
+          sequence={index >= 0 && total > 1 ? { index, total, next: editNext } : undefined}
+        />
+      )}
       <PasteEditDialog open={pasting} onOpenChange={setPasting} selection={{ kind: 'explicit', photoIds: [photoId] }} count={1} />
       <GenerateDialog open={generating} onOpenChange={setGenerating} selection={{ kind: 'explicit', photoIds: [photoId] }} count={1} />
       <ConfirmDialog

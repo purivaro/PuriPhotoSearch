@@ -371,6 +371,32 @@
     await stage('apply-preset-many', { photos: ids.length });
     await click(tid('selection-clear'), 'ล้างที่เลือก');
 
+    // ── แต่งทีละรูป (DECISIONS ข้อ 32): กิจกรรม → เฉพาะรูปที่ยังไม่แต่ง → แต่งทีละรูป → บันทึก แล้วไปรูปถัดไป / ข้าม
+    location.hash = `#/events/${ai.id}?ed=unedited`;
+    await waitFor(() => tids('photo-card').length === 5 && !photoCard('IMG_0248.jpg'), 'เฉพาะห้ารูปที่ยังไม่แต่ง (IMG_0248 แต่งแล้ว)');
+    const progress = await see('edit-progress');
+    expect(text(progress).includes('แต่งแล้ว 1 จาก 6'), `ความคืบหน้าของงาน (ได้ "${text(progress)}")`);
+    const [savedId, skippedId] = ['IMG_0249.jpg', 'IMG_0250.jpg'].map((f) => photoCard(f).dataset.photoId);
+    await click(await see('edit-in-order'), 'แต่งทีละรูป');
+    const editing = () => {
+      const name = tid('photo-editor')?.querySelector('h2 + p');
+      return name ? text(name) : null;
+    };
+    await waitFor(() => editing() === 'IMG_0249.jpg', 'หน้าแต่งภาพเปิดรูปแรกที่ยังไม่แต่งเอง');
+    expect(text(tid('editor-position')).includes('อีก 4 รูป'), `บอกจำนวนที่เหลือ (ได้ "${text(tid('editor-position'))}")`);
+    await click(tid('editor-rotate-right'), 'หมุนขวา');
+    await click(tid('editor-save-next'), 'บันทึก แล้วไปรูปถัดไป');
+    await waitFor(() => editing() === 'IMG_0250.jpg', 'หน้าแต่งภาพเปิดรูปถัดไปต่อเอง');
+    expect((await rpc('get_photo_details', { photoId: savedId })).edit?.settings.rotate === 90, 'รูปแรกถูกบันทึกก่อนไปต่อ');
+    await click(tid('editor-skip'), 'ข้าม');
+    await waitFor(() => editing() === 'DSC_0101.jpg', 'ข้ามไปรูปถัดไป');
+    expect((await rpc('get_photo_details', { photoId: skippedId })).edit === null, 'รูปที่ข้ามไม่ถูกแต่ง');
+    await stage('edit-in-order');
+    await click(tid('editor-cancel'), 'ปิดหน้าแต่งภาพ');
+    await click(await see('viewer-close'), 'ปิดตัวดูภาพ');
+    await waitFor(() => tids('photo-card').length === 4 && !photoCard('IMG_0249.jpg'), 'รูปที่แต่งแล้วหลุดจากรายการที่ยังไม่แต่ง');
+    await waitFor(() => tid('edit-progress') && text(tid('edit-progress')).includes('แต่งแล้ว 2 จาก 6'), 'ความคืบหน้าเพิ่มขึ้น');
+
     // ── S05: หน้าหลักใช้ข้อมูลจริงจากคลัง
     await click(tid('nav-home'), 'เมนูหน้าหลัก');
     await waitFor(() => tids('person-card', tid('home-people-grid') ?? document).some((c) => c.dataset.personId === kan.id), 'คนที่ปักหมุดอยู่บนหน้าหลัก');

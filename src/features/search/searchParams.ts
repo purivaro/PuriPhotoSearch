@@ -1,4 +1,4 @@
-import type { Id, PersonMode, SearchParams } from '@/lib/ipc/types';
+import type { EditFilter, Id, PersonMode, SearchParams } from '@/lib/ipc/types';
 import type { PhotoQuery } from '@/lib/queries';
 
 /** เงื่อนไขค้นหาของหน้า S06 เก็บใน URL เพื่อย้อนกลับ/แชร์ภายในแอปได้ */
@@ -15,6 +15,8 @@ export interface SearchFilters {
   sort: SearchParams['sort'];
   /** นับรูปที่ AI จัดให้ด้วย (ค่าเริ่มต้น); ปิด = เฉพาะรูปที่มีคนยืนยันแล้ว */
   includeAi: boolean;
+  /** การแต่งในแอป: ทั้งหมด / ยังไม่แต่ง / แต่งแล้ว */
+  editFilter: EditFilter;
 }
 
 export const DEFAULT_FILTERS: SearchFilters = {
@@ -29,10 +31,17 @@ export const DEFAULT_FILTERS: SearchFilters = {
   faceFilter: 'any',
   sort: 'taken_desc',
   includeAi: true,
+  editFilter: 'any',
 };
 
 const SORTS: SearchParams['sort'][] = ['taken_desc', 'taken_asc', 'added_desc', 'filename'];
 const FACE_FILTERS: SearchParams['faceFilter'][] = ['any', 'has_faces', 'no_person'];
+const EDIT_FILTERS: EditFilter[] = ['any', 'edited', 'unedited'];
+
+/** อ่านตัวกรองการแต่งจาก URL (ค่าแปลกปลอม = ทั้งหมด) */
+export function parseEditFilter(value: string | null): EditFilter {
+  return value && (EDIT_FILTERS as string[]).includes(value) ? (value as EditFilter) : 'any';
+}
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 function list(value: string | null): Id[] {
@@ -58,6 +67,7 @@ export function parseFilters(search: URLSearchParams): SearchFilters {
     faceFilter: face && FACE_FILTERS.includes(face) ? face : 'any',
     sort: sort && SORTS.includes(sort) ? sort : 'taken_desc',
     includeAi: search.get('ai') !== '0',
+    editFilter: parseEditFilter(search.get('ed')),
   };
 }
 
@@ -78,6 +88,7 @@ export function filtersToSearch(filters: SearchFilters): URLSearchParams {
   if (filters.faceFilter !== 'any') out.set('face', filters.faceFilter);
   if (filters.sort !== 'taken_desc') out.set('sort', filters.sort);
   if (!filters.includeAi) out.set('ai', '0');
+  if (filters.editFilter !== 'any') out.set('ed', filters.editFilter);
   return out;
 }
 
@@ -87,7 +98,9 @@ export function hasDateFilter(filters: SearchFilters): boolean {
 
 /** มีเงื่อนไขที่ทำให้ผลแคบลงหรือไม่ (ไม่นับการเรียง) */
 export function hasActiveFilters(filters: SearchFilters): boolean {
-  return Boolean(filters.text.trim() || filters.personIds.length || filters.eventIds.length || hasDateFilter(filters) || filters.faceFilter !== 'any');
+  return Boolean(
+    filters.text.trim() || filters.personIds.length || filters.eventIds.length || hasDateFilter(filters) || filters.faceFilter !== 'any' || filters.editFilter !== 'any',
+  );
 }
 
 export function filtersToQuery(filters: SearchFilters, limit: number): PhotoQuery {
@@ -102,6 +115,7 @@ export function filtersToQuery(filters: SearchFilters, limit: number): PhotoQuer
     includeSuggested: filters.includeAi,
   };
   if (text) query.text = text;
+  if (filters.editFilter !== 'any') query.editFilter = filters.editFilter;
   if (hasDateFilter(filters)) {
     query.date = { field: filters.dateField, includeUnknown: filters.includeUnknownDate };
     if (filters.from) query.date.from = filters.from;

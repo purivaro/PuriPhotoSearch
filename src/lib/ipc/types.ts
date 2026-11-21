@@ -204,12 +204,19 @@ export interface EventSummary {
 
 export interface PersonCount {
   person: PersonRef;
+  /** รูปในงานนี้ที่มีคนนี้: ยืนยันแล้ว + ที่ AI จัดให้ (นับรูปไม่ซ้ำ) */
   photoCount: number;
+  /** ในจำนวนนั้น รูปที่มีแค่ AI จัดให้ (ยังไม่มีคนตรวจ) */
+  aiPhotoCount: number;
+  /** ในจำนวนนั้น รูปที่ยังไม่ได้แต่งในแอป */
+  uneditedPhotoCount: number;
+  /** ปักหมุดไว้ (คนสำคัญ) — ขึ้นก่อนในรายชื่อ */
+  pinned: boolean;
 }
 
 export interface EventDetail extends EventSummary {
   notes: string;
-  /** บุคคลที่ยืนยันแล้วในงานนี้ เรียงตามจำนวนรูป */
+  /** บุคคลในงานนี้ (ยืนยันแล้ว + ที่ AI จัดให้) คนที่ปักหมุดก่อน แล้วเรียงตามจำนวนรูป */
   people: PersonCount[];
   jobs: JobSnapshot[];
 }
@@ -248,7 +255,11 @@ export interface SearchParams {
   includeSuggested?: boolean;
   /** เฉพาะรูปที่ผู้ใช้แจ้งว่า "ไม่ใช่" บุคคลนี้; ผลบอกใบหน้าใน `rejectedFaces` */
   rejectedPersonId?: Id;
+  /** การแต่งในแอป (DECISIONS ข้อ 32): any = ทั้งหมด, edited = แต่งแล้ว, unedited = ยังไม่แต่ง */
+  editFilter?: EditFilter;
 }
+
+export type EditFilter = 'any' | 'edited' | 'unedited';
 
 export interface PersonRef {
   id: Id;
@@ -551,6 +562,8 @@ export interface Coverage {
   facesAnalyzed: number;
   /** รูปที่ยังไม่ได้วิเคราะห์ใบหน้า — ผลค้นตามคนอาจยังไม่ครบ */
   facesPending: number;
+  /** รูปที่แต่งในแอปแล้ว — ตัวเลขทั้งชุดนี้นับก่อนกรองการแต่ง ("แต่งแล้ว X จาก eligiblePhotos") */
+  edited: number;
 }
 
 export interface PhotoPage {

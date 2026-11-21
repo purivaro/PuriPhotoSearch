@@ -21,6 +21,8 @@ export interface PhotoResultsMeta {
   coverage: Coverage | null;
   /** กำลังโหลดผลของเงื่อนไขใหม่/รีเฟรช */
   refreshing: boolean;
+  /** แต่งทีละรูป: เปิดรูปแรกของผลในหน้าแต่งภาพ แล้วบันทึกไปทีละรูปตามลำดับนี้ (null = ไม่มีรูป) */
+  startEditing: (() => void) | null;
 }
 
 interface PhotoResultsProps {
@@ -40,13 +42,16 @@ interface PhotoResultsProps {
   selectionActions?: (ctx: { photos: PhotoResult[] | null; clear: () => void }) => ReactNode;
   /** แสดงแถบปรับขนาดรูปในแถวหัว (ปิดได้เมื่อหน้านั้นวางแถบไว้ในแถบเครื่องมือของตัวเอง) */
   sizeControl?: boolean;
+  /** "แต่งรูปของคนนี้": เมื่อผลของเงื่อนไขปัจจุบันโหลดเสร็จ เปิดรูปแรกในหน้าแต่งภาพ แล้วแจ้งว่าเปิดได้หรือไม่ (ไม่มีรูปเหลือ) */
+  autoEdit?: boolean;
+  onAutoEditHandled?: (opened: boolean) => void;
 }
 
 /**
  * ผลรูปหนึ่งชุด: โหลด/ผิดพลาด/ว่าง → grid → แถบเลือกหลายรูป → ส่งออก → เปิดตัวดูภาพตามลำดับผลเดิม
  * ใช้ร่วมกันในหน้ากิจกรรม บุคคล และค้นหา เพื่อให้พฤติกรรมการเลือกและเปิดรูปตรงกันทุกหน้า
  */
-export function PhotoResults({ query, label, originLabel, showEvent, selectionKey, empty, summary, selectionActions, sizeControl = true }: PhotoResultsProps) {
+export function PhotoResults({ query, label, originLabel, showEvent, selectionKey, empty, summary, selectionActions, sizeControl = true, autoEdit, onAutoEditHandled }: PhotoResultsProps) {
   const list = usePhotoList(query);
   const viewer = useViewer();
   const [selection, setSelection] = useState<Selection>(EMPTY_SELECTION);
@@ -82,11 +87,29 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
     sync(owner, { ids: items.map((p) => p.id), total, requestMore: hasNextPage ? () => requestMore.current() : undefined });
   }, [sync, owner, items, total, hasNextPage]);
 
+  // เปิดรูปตามลำดับของผลชุดนี้ (edit = เปิดมาที่หน้าแต่งภาพ แล้ว "บันทึก แล้วไปรูปถัดไป" ได้ทั้งชุด)
+  const openPhoto = (photo: PhotoResult, edit = false) =>
+    viewer.open(photo.id, { ids: items.map((p) => p.id), originLabel, total, owner, requestMore: hasNextPage ? () => requestMore.current() : undefined, edit });
+  const first = items[0];
+  const startEditing = first ? () => openPhoto(first, true) : null;
+
+  // "แต่งรูปของคนนี้": รอผลของเงื่อนไขใหม่ (ไม่ใช่ข้อมูลเก่าในแคช) แล้วเปิดรูปแรก
+  const handled = useRef(onAutoEditHandled);
+  handled.current = onAutoEditHandled;
+  const settled = !list.isPending && !list.isFetching;
+  useEffect(() => {
+    if (!autoEdit || !settled) return;
+    startEditing?.();
+    handled.current?.(Boolean(startEditing));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoEdit, settled]);
+
   const meta: PhotoResultsMeta = {
     total: list.total,
     loaded: list.items.length,
     coverage: list.coverage,
     refreshing: list.isFetching && !list.isFetchingNextPage,
+    startEditing,
   };
 
   // แถวหัว: สรุปผลของแต่ละหน้า + แถบปรับขนาดรูป (แสดงเมื่อมีรูปให้ปรับ)
@@ -133,7 +156,7 @@ export function PhotoResults({ query, label, originLabel, showEvent, selectionKe
         label={label}
         selection={selection}
         onSelectionChange={setSelection}
-        onOpen={(photo) => viewer.open(photo.id, { ids, originLabel, total: list.total, owner, requestMore: list.hasNextPage ? () => requestMore.current() : undefined })}
+        onOpen={(photo) => openPhoto(photo)}
         hasMore={Boolean(list.hasNextPage)}
         loadingMore={list.isFetchingNextPage}
         onLoadMore={() => {
