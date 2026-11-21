@@ -795,6 +795,7 @@ pub fn apply_pixels(raw: &mut [u8], width: usize, height: usize, n: usize, a: &A
 }
 
 /// ต้นแบบ (exp/preview-wasm): เหมือน [`apply_pixels`] แต่ขั้นต่อพิกเซลแบ่งแถวให้ทุกแกน (ผลเท่ากันทุกบิต) · Texture/Clarity/Dehaze ยังแกนเดียว
+#[cfg(not(target_arch = "wasm32"))]
 pub fn apply_pixels_par(raw: &mut [u8], width: usize, height: usize, n: usize, a: &Adjust, profile: Profile, long: f64) {
     use rayon::prelude::*;
     if a.is_neutral() || raw.len() < width * height * n {
