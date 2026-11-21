@@ -2,7 +2,7 @@
 //!
 //!   cargo run -p puri-core --example make_fixtures -- <โฟลเดอร์ปลายทาง>
 //!
-//! ได้โฟลเดอร์ `2569/` ที่มีสามงานลงวันที่ รูปวางตรงโฟลเดอร์แม่ รูปแนวตั้งที่หมุนด้วย EXIF ไฟล์เสีย และไฟล์ชนิดที่ยังไม่รองรับ
+//! ได้โฟลเดอร์ `2569/` ที่มีสามงานลงวันที่ รูปวางตรงโฟลเดอร์แม่ รูปแนวตั้งที่หมุนด้วย EXIF ไฟล์เสีย ไฟล์ชนิดที่ยังไม่รองรับ และไฟล์ RAW
 
 use image::{Rgb, RgbImage};
 use std::path::Path;
@@ -84,7 +84,9 @@ fn main() {
         &with_exif(jpeg(&picture(1200, 800, 90, &[(0.5, 0.5)])), 6, "2026:11:18 10:06:00"),
     );
     write(&ai.join("กล้อง B/เสีย.jpg"), b"\xFF\xD8\xFF not a real jpeg");
-    write(&ai.join("กล้อง B/DSC_0103.arw"), b"raw placeholder");
+    write(&ai.join("กล้อง B/DSC_0103.heic"), b"heic placeholder");
+    // RAW (เปิดสวิตช์ "รวมไฟล์ RAW" จึงนำเข้า — e2e ไม่เปิด ไฟล์นี้จึงแค่ถูกนับ)
+    write(&ai.join("กล้อง B/DSC_0104.arw"), b"raw placeholder");
 
     let welcome = root.join("691116 ต้อนรับคณะญาติโยม");
     write(&welcome.join("IMG_0101.jpg"), &shot(240, &[(0.4, 0.4), (0.6, 0.45)], "2026:11:16 08:00:00"));

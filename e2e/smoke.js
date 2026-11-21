@@ -111,7 +111,10 @@
     const titles = rows().map((r) => tid('import-draft-title', r).value);
     expect(titles.includes('งานอบรม AI') && titles.includes('ต้อนรับคณะญาติโยม') && titles.includes('กิจกรรมจุดประทีป'), `ชื่อที่เสนอ: ${titles}`);
     expect(text(tid('import-review')).includes('พ.ย. 2569'), 'วันที่เสนอจากชื่อโฟลเดอร์ 691118 ใต้ 2569');
-    expect(text(tid('import-review')).includes('.arw'), 'รายงานไฟล์ที่ยังไม่รองรับ');
+    expect(text(tid('import-review')).includes('.heic'), 'รายงานไฟล์ที่ยังไม่รองรับ');
+    // ไฟล์ RAW นับแยก มีสวิตช์ "รวมไฟล์ RAW" ปิดไว้ก่อนเพราะโฟลเดอร์มี JPEG ด้วย (DECISIONS ข้อ 25)
+    expect(tid('import-include-raw')?.getAttribute('aria-checked') === 'false', 'สวิตช์รวมไฟล์ RAW ปิดไว้ก่อน');
+    expect(text(tid('import-review')).includes('รวมไฟล์ RAW (1 ไฟล์)'), 'นับไฟล์ RAW แยก');
     expect(tid('import-analyze-faces').disabled, 'สวิตช์วิเคราะห์ใบหน้าปิดใช้งานเมื่อยังไม่มี AI');
     expect((await rpc('list_events')).length === 0, 'ยังไม่มีกิจกรรมถาวรก่อนกดเพิ่ม');
     // แก้ชื่อกิจกรรมหนึ่งงานก่อนเพิ่ม (ไม่เปลี่ยนชื่อโฟลเดอร์จริง)

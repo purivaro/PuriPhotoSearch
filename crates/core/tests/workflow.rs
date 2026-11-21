@@ -2076,3 +2076,33 @@ fn raw_files_are_imported_on_request_developed_edited_and_exported_as_jpeg() {
 
     assert_eq!(tree_state(&root), before, "ไฟล์ RAW และ JPEG ต้นฉบับไม่ถูกแตะ");
 }
+
+/// ไฟล์ RAW เสียหรือกล้องที่ตัวถอดรหัสไม่รู้จัก: ล้มเฉพาะไฟล์นั้นพร้อมเหตุผล ไม่ขวางไฟล์อื่น (เหมือน JPEG เสีย — T07)
+#[test]
+fn a_broken_raw_file_fails_alone_with_a_reason() {
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-21 RAW ปน");
+    std::fs::create_dir_all(&root).unwrap();
+    let scene = puri_core::raw::Linear::from_fn(64, 48, |x, _| image::Rgb([0.2, 0.15, 0.02 + x as f32 / 200.0]));
+    std::fs::write(root.join("good.dng"), puri_core::raw::test_dng(&scene, 1, "2026:11:21 09:00:00")).unwrap();
+    std::fs::write(root.join("broken.ARW"), b"II*\0 not really a raw file").unwrap();
+    let before = tree_state(&root);
+    let preview = lib.preview(&root);
+    assert_eq!(preview["single"]["rawCount"], 2);
+    let drafts = drafts_of(&preview, "single_event", |_| true);
+    let result = lib.call(
+        "commit_import",
+        json!({ "previewId": preview["previewId"], "requestId": new_id(), "mode": "single_event", "drafts": drafts,
+                "analyzeFaces": true, "watch": true, "includeRaw": true }),
+    );
+    lib.run_jobs();
+    let job = lib.call("get_job", json!({ "jobId": result["jobIds"][0] }));
+    assert_eq!((job["counts"]["done"].as_i64(), job["counts"]["failed"].as_i64()), (Some(1), Some(1)), "{job}");
+    let errors = lib.call("list_job_errors", json!({ "jobId": job["id"] }));
+    assert_eq!(errors[0]["filename"], "broken.ARW");
+    assert_eq!(errors[0]["code"], "DECODE_FAILED");
+    assert!(errors[0]["message"].as_str().unwrap().contains("RAW"), "{errors}");
+    let good = lib.call("get_photo_details", json!({ "photoId": lib.photo_id("good.dng") }));
+    assert_eq!(good["thumbStatus"], "ready");
+    assert_eq!(tree_state(&root), before);
+}
