@@ -43,7 +43,8 @@ debug build ที่ตั้ง `PURI_DATA_DIR` จะใช้โฟลเด
 | งาน | `jobs`, `job_errors` | คิวถาวร, ตัวนับ, ข้อผิดพลาดรายไฟล์ |
 | ส่งออก | `selections`, `selection_items` | snapshot ของ "เลือกผลค้นหาทั้งหมด" |
 | | `export_runs`, `export_items` | ผลรายรูปของการส่งออกแต่ละครั้ง |
-| | `photo_edits` | การแต่งภาพต่อรูป (JSON ของ `edit::EditSettings` + `edit_id` ที่ใช้เป็นชื่อ cache) ไฟล์ต้นฉบับไม่ถูกแตะ — DECISIONS ข้อ 17 |
+| | `photo_edits` | การแต่งภาพต่อรูป (JSON ของ `edit::EditSettings` + `edit_id` ที่ใช้เป็นชื่อ cache) ไฟล์ต้นฉบับไม่ถูกแตะ — DECISIONS ข้อ 17 · `fromRaw` = แต่งจากไฟล์ RAW คู่ (ข้อ 26) |
+| | `photo_raw_pairs` | ไฟล์ RAW คู่ของรูป JPEG (schema v10): ตำแหน่งไฟล์ · `lightroom` = กรอบและค่าที่แต่งใน Lightroom จาก XMP (NULL = JPEG จากกล้อง) · `start` = ค่าเริ่มต้นเมื่อแต่งจาก RAW (คิดครั้งแรกที่ใช้) · `available` — RAW ที่เป็นคู่ไม่เป็นรูปแยก — DECISIONS ข้อ 26 |
 | | `edit_presets` | preset ของค่าแสงและสี (JSON ของ `adjust::Adjust`) · `source` = user/lightroom · `unsupported` = ส่วนของ .xmp ที่นำเข้าไม่ได้ (schema v7) — DECISIONS ข้อ 20 |
 | | `ai_images` | ที่มาของภาพที่ผู้ช่วย AI สร้าง ผูกด้วย SHA-256 ของไฟล์: รูปต้นทาง คำสั่ง แม่แบบ AI ที่ใช้ เวลา (schema v8) — DECISIONS ข้อ 23 |
 | | `watermarks` | โลโก้ลายน้ำที่ผู้ใช้เพิ่ม (PNG ในคลัง ด้านยาวไม่เกิน 2048) · `export_runs.watermark` = ลายน้ำของงานส่งออก — DECISIONS ข้อ 16 |

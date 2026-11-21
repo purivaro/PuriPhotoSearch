@@ -29,9 +29,11 @@ pub struct EventDraft {
     pub new_count: usize,
     pub existing_count: usize,
     pub unsupported_count: usize,
-    /// ไฟล์ RAW ในแถวนี้ (ไม่รวมใน `photo_count`) และที่ยังไม่อยู่ในคลัง
+    /// ไฟล์ RAW ที่ไม่มี JPEG คู่ในแถวนี้ (ไม่รวมใน `photo_count` — นำเข้าเมื่อเลือกรวม RAW) และที่ยังไม่อยู่ในคลัง
     pub raw_count: usize,
     pub raw_new_count: usize,
+    /// ไฟล์ RAW ที่เป็นคู่ของ JPEG ในแถวนี้ (DECISIONS ข้อ 26) — รวมกับรูป JPEG เสมอ ไม่เป็นรูปแยก
+    pub raw_paired_count: usize,
     pub readable: bool,
     pub unreadable_reason: Option<String>,
     pub existing_event_id: Option<String>,
@@ -97,9 +99,12 @@ struct Group {
     photos: usize,
     unsupported: usize,
     existing: usize,
-    /// ไฟล์ RAW (นับแยก — นำเข้าเฉพาะเมื่อผู้ใช้เลือกรวม RAW) และที่อยู่ในคลังแล้ว
+    /// ไฟล์ RAW (นับแยก — นำเข้าเฉพาะเมื่อผู้ใช้เลือกรวม RAW) ที่อยู่ในคลังแล้ว และที่เป็นคู่ของ JPEG
     raw: usize,
     raw_existing: usize,
+    raw_paired: usize,
+    /// RAW ในแถวนี้ที่เป็นคู่ของ JPEG ที่ไหนก็ได้ในโฟลเดอร์ที่เลือก (ไม่นับเป็นรูปของแถวตอนเสนอว่าเป็นหลายงาน)
+    raw_paired_any: usize,
     sample: Option<PathBuf>,
     raw_sample: Option<PathBuf>,
     unreadable: Option<String>,
@@ -157,6 +162,9 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
     let mut loose = Group::default();
     let mut groups: BTreeMap<String, Group> = BTreeMap::new();
     let mut unsupported_by_ext: BTreeMap<String, usize> = BTreeMap::new();
+    // สำหรับจับคู่ RAW กับ JPEG: (ไฟล์, แถว — None = วางตรงในโฟลเดอร์หลัก)
+    let mut jpegs: Vec<(PathBuf, Option<String>)> = vec![];
+    let mut raws: Vec<(PathBuf, Option<String>)> = vec![];
 
     let walker = WalkDir::new(&root).min_depth(1).sort_by_file_name().into_iter();
     for entry in walker.filter_entry(|e| !is_hidden(e.file_name())) {
@@ -185,6 +193,7 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
             continue; // ไม่ตาม symlink/alias (Blueprint 9.5)
         }
         let (kind, ext) = media::classify(entry.path());
+        let row = (entry.depth() > 1).then(|| top.clone());
         let group = if entry.depth() == 1 { &mut loose } else { groups.entry(top).or_default() };
         match kind {
             FileKind::Supported => {
@@ -195,11 +204,15 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
                 if group.sample.is_none() {
                     group.sample = Some(entry.path().to_path_buf());
                 }
+                jpegs.push((entry.path().to_path_buf(), row));
             }
             FileKind::Raw => {
                 group.raw += 1;
                 if known.contains(&util::path_key(entry.path())) {
                     group.raw_existing += 1;
+                } else {
+                    // RAW ที่เป็นรูปในคลังอยู่แล้วคงเป็นรูปเดิม ไม่จับคู่ (แบบเดียวกับตอนตรวจรายการ)
+                    raws.push((entry.path().to_path_buf(), row));
                 }
                 if group.raw_sample.is_none() {
                     group.raw_sample = Some(entry.path().to_path_buf());
@@ -210,6 +223,30 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
                 *unsupported_by_ext.entry(ext).or_default() += 1;
             }
             FileKind::Other => {}
+        }
+    }
+
+    // จับคู่ทั้งโฟลเดอร์ครั้งเดียว แล้วนับให้แต่ละแถวเฉพาะคู่ที่ JPEG และ RAW อยู่ในแถวเดียวกัน (DECISIONS ข้อ 26)
+    let raw_paths: Vec<PathBuf> = raws.iter().map(|r| r.0.clone()).collect();
+    let jpeg_paths: Vec<PathBuf> = jpegs.iter().map(|j| j.0.clone()).collect();
+    let matches = if raw_paths.is_empty() { vec![] } else { crate::pair::match_files(&jpeg_paths, &raw_paths) };
+    let (mut paired_any, mut paired_row) = (HashSet::new(), HashSet::new());
+    for (j, found) in matches.iter().enumerate() {
+        if let Some(found) = found {
+            paired_any.insert(found.raw);
+            if jpegs[j].1 == raws[found.raw].1 {
+                paired_row.insert(found.raw);
+            }
+        }
+    }
+    for i in &paired_any {
+        let group = match &raws[*i].1 {
+            Some(name) => groups.entry(name.clone()).or_default(),
+            None => &mut loose,
+        };
+        group.raw_paired_any += 1;
+        if paired_row.contains(i) {
+            group.raw_paired += 1;
         }
     }
 
@@ -228,7 +265,7 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
         };
         let existing = find_covering_event(&conn, folder, recursive)?;
         let new_count = g.photos - g.existing;
-        let raw_new = g.raw - g.raw_existing;
+        let raw_new = g.raw - g.raw_existing - g.raw_paired;
         let readable = g.unreadable.is_none();
         Ok(DraftData {
             draft: EventDraft {
@@ -243,8 +280,9 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
                 new_count,
                 existing_count: g.existing,
                 unsupported_count: g.unsupported,
-                raw_count: g.raw,
+                raw_count: g.raw - g.raw_paired,
                 raw_new_count: raw_new,
+                raw_paired_count: g.raw_paired,
                 readable,
                 unreadable_reason: g.unreadable.clone(),
                 default_selected: readable && (new_count > 0 || (g.photos == 0 && raw_new > 0)),
@@ -264,6 +302,8 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
         existing: loose.existing + groups.values().map(|g| g.existing).sum::<usize>(),
         raw: loose.raw + groups.values().map(|g| g.raw).sum::<usize>(),
         raw_existing: loose.raw_existing + groups.values().map(|g| g.raw_existing).sum::<usize>(),
+        raw_paired: paired_any.len(),
+        raw_paired_any: paired_any.len(),
         sample: loose.sample.clone().or_else(|| groups.values().find_map(|g| g.sample.clone())),
         raw_sample: loose.raw_sample.clone().or_else(|| groups.values().find_map(|g| g.raw_sample.clone())),
         unreadable: None,
@@ -284,9 +324,11 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
 
     // เสนอ "หลายงาน" เมื่อโฟลเดอร์ย่อยดูเป็นงานแยกกัน: มีอย่างน้อยสองโฟลเดอร์ที่มีรูป และ
     // (มีโฟลเดอร์ที่ชื่อบอกวันที่ หรือ โฟลเดอร์ที่เลือกเองไม่บอกวันที่และไม่มีรูปวางตรง ๆ)
-    let has_photos = |d: &EventDraft| d.photo_count > 0 || d.raw_count > 0;
-    let with_photos = children.iter().filter(|c| has_photos(&c.draft)).count();
-    let any_dated = children.iter().any(|c| has_photos(&c.draft) && c.draft.suggested_date.is_some());
+    // แถวที่มีรูปของตัวเอง: JPEG หรือ RAW ที่ไม่ได้เป็นคู่ของ JPEG ที่ไหน (โฟลเดอร์ RAW ของ JPEG ข้างนอกไม่นับเป็นงานแยก)
+    let has_photos = |g: &Group| g.photos > 0 || g.raw > g.raw_paired_any;
+    let with_photos = groups.values().filter(|g| has_photos(g)).count();
+    let any_dated =
+        children.iter().zip(groups.values()).any(|(c, g)| has_photos(g) && c.draft.suggested_date.is_some());
     let suggested_mode = if with_photos >= 2
         && (any_dated || (single.draft.suggested_date.is_none() && loose.photos == 0 && loose.raw == 0))
     {

@@ -251,7 +251,11 @@ pub fn undo(app: &App, turn_id: &str) -> Result<usize> {
     let items: Vec<_> = std::mem::take(&mut *turn.undo.lock().unwrap_or_else(|e| e.into_inner()));
     let mut restored = 0;
     for (photo_id, before) in &items {
-        edit::save(app, photo_id, before.clone().unwrap_or_default())?;
+        match before {
+            Some(settings) => edit::save(app, photo_id, settings.clone())?,
+            // ก่อน AI แก้ไม่ได้แต่ง: กลับเป็นไฟล์ของรูปตามเดิม (รูปคู่ RAW = JPEG ไม่ใช่ RAW ที่ไม่ได้แต่ง)
+            None => edit::reset(app, photo_id)?,
+        };
         restored += 1;
     }
     Ok(restored)

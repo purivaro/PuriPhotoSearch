@@ -1,10 +1,13 @@
 //! เสิร์ฟภาพให้ UI ด้วย ID ทึบ (Blueprint 7.3): ไม่มี path จากฝั่ง UI และไม่เปิดสิทธิ์อ่านทั้งดิสก์
-//!   thumb/{photoId} · photo/{photoId} · original/{photoId} · face/{faceId} · draft/{previewId}/{draftId} · watermark/{watermarkId}
+//!   thumb/{photoId} · photo/{photoId} · original/{photoId} · rawframe/{photoId} · face/{faceId}
+//!   · draft/{previewId}/{draftId} · watermark/{watermarkId}
 //! รูปที่แต่งแล้ว: thumb/photo เป็นภาพที่แต่ง ส่วน original เป็นไฟล์ต้นฉบับเสมอ (ใช้ในหน้าแต่งภาพ)
+//! · rawframe = ภาพจากไฟล์ RAW คู่ในกรอบของ JPEG (ต้นทางของหน้าแต่งภาพเมื่อแต่งจาก RAW — DECISIONS ข้อ 26)
 
 use crate::error::{AppError, Result};
 use crate::{media, App};
 use rusqlite::OptionalExtension;
+use sha2::Digest;
 use std::path::{Path, PathBuf};
 
 pub struct Asset {
@@ -34,6 +37,7 @@ pub fn resolve(app: &App, request_path: &str) -> Result<Asset> {
             }
         }
         ("original", None) => original(app, id),
+        ("rawframe", None) => raw_frame(app, id),
         ("face", None) => face(app, id),
         ("watermark", None) => Ok(Asset {
             bytes: crate::watermark::image_bytes(&app.db(), id)?.ok_or_else(|| AppError::not_found("ลายน้ำ"))?,
@@ -85,6 +89,37 @@ fn raw_view(app: &App, photo_id: &str, path: &Path) -> Result<Asset> {
     Ok(jpeg(bytes))
 }
 
+/// ต้นทางของหน้าแต่งภาพเมื่อแต่งจาก RAW คู่: ภาพจาก RAW ในกรอบของ JPEG โทนตั้งต้น ด้านยาว [`crate::edit::VIEW_EDGE`]
+/// (ตัวอย่างสดถอดกลับเป็นแสงเชิงเส้นแบบเดียวกับรูป RAW) · เก็บใน cache ตาม revision ไฟล์ RAW และกรอบ
+fn raw_frame(app: &App, photo_id: &str) -> Result<Asset> {
+    crate::pair::ensure_start(app, photo_id)?;
+    let (base, revision_id) = {
+        let conn = app.db();
+        let base = match crate::pair::raw_edit(&conn, photo_id)? {
+            crate::pair::RawEdit::Ready(base) => base,
+            crate::pair::RawEdit::Unusable(why) => return Err(AppError::new("SOURCE_UNAVAILABLE", why)),
+            crate::pair::RawEdit::None => return Err(AppError::not_found("ไฟล์ RAW คู่")),
+        };
+        let revision_id: String =
+            conn.query_row("SELECT current_revision_id FROM photos WHERE id = ?1", [photo_id], |r| r.get(0))?;
+        (base, revision_id)
+    };
+    let stamp = media::stamp(&base.raw_path).map_err(|_| AppError::source_unavailable())?;
+    let frame = serde_json::to_vec(&base.frame)?;
+    let key = &crate::util::hex(&sha2::Sha256::digest(&frame))[..12];
+    let cached =
+        app.cache_dir.join("raw").join(format!("{revision_id}-{}-{}-{key}-frame.jpg", stamp.size, stamp.mtime_ns));
+    if let Ok(bytes) = std::fs::read(&cached) {
+        return Ok(jpeg(bytes));
+    }
+    let raw = media::read_file(&base.raw_path).map_err(|_| AppError::source_unavailable())?;
+    let plain = crate::edit::EditSettings { from_raw: true, ..Default::default() };
+    let img = crate::pair::render(&raw, &base, &plain, crate::edit::VIEW_EDGE)?;
+    let bytes = media::encode_jpeg(&image::DynamicImage::ImageRgb8(img), 92)?;
+    let _ = media::write_cache_file(&cached, &bytes);
+    Ok(jpeg(bytes))
+}
+
 /// ภาพที่แต่งแล้ว (เก็บใน cache ตามรหัสการแต่ง): ภาพย่อ หรือภาพสำหรับตัวดูภาพ
 fn edited(app: &App, photo_id: &str, stored: &crate::edit::Stored, kind: &str) -> Result<Asset> {
     let cached = crate::edit::cache_path(&app.cache_dir, photo_id, &stored.edit_id, kind);
@@ -92,6 +127,20 @@ fn edited(app: &App, photo_id: &str, stored: &crate::edit::Stored, kind: &str) -
         return Ok(jpeg(bytes));
     }
     let (edge, quality) = if kind == "thumb" { (media::THUMB_EDGE, 82) } else { (crate::edit::VIEW_EDGE, 90) };
+    if stored.settings.from_raw {
+        crate::pair::ensure_start(app, photo_id)?;
+        let raw = { crate::pair::raw_edit(&app.db(), photo_id)? };
+        if let crate::pair::RawEdit::Ready(base) = raw {
+            if let Ok(raw_bytes) = media::read_file(&base.raw_path) {
+                let img = crate::pair::render(&raw_bytes, &base, &stored.settings, edge)?;
+                let bytes = media::encode_jpeg(&image::DynamicImage::ImageRgb8(img), quality)?;
+                let _ = media::write_cache_file(&cached, &bytes);
+                return Ok(jpeg(bytes));
+            }
+        }
+        // ไฟล์ RAW คู่ไม่พร้อม: แสดง JPEG ตามเดิม (ค่าที่แต่งเป็นของ RAW ใช้กับ JPEG ไม่ได้) — ไม่เก็บลง cache
+        return if kind == "thumb" { plain_thumb(app, photo_id) } else { original(app, photo_id) };
+    }
     let source = PathBuf::from(crate::catalog::photo_path(&app.db(), photo_id)?);
     let profile = profile_of(&source);
     let bytes = match media::read_file(&source) {

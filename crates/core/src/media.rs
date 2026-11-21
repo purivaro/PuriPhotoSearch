@@ -397,6 +397,13 @@ impl Watermark {
     }
 }
 
+/// การแต่งที่ใช้ตอนส่งออก
+pub struct ExportEdit<'a> {
+    pub settings: &'a crate::edit::EditSettings,
+    /// แต่งจากไฟล์ RAW คู่ (DECISIONS ข้อ 26): (ไฟล์ RAW, กรอบของ JPEG) — ภาพมาจาก RAW ส่วน EXIF มาจาก JPEG
+    pub raw: Option<(&'a [u8], &'a crate::pair::RawBase)>,
+}
+
 /// สำเนา JPEG ที่ย่อแล้วจาก bytes ของต้นฉบับ: หมุนให้ตั้งตรงแล้ว และเก็บ EXIF (วันถ่าย กล้อง ฯลฯ)
 /// กับโปรไฟล์สีของต้นฉบับไว้ เพื่อให้แอปรูปภาพอื่นเรียงวันที่และแสดงสีถูก
 ///
@@ -410,34 +417,50 @@ pub fn export_jpeg(
     bytes: &[u8],
     fit: Fit,
     watermark: Option<&Watermark>,
-    edit: Option<&crate::edit::EditSettings>,
+    edit: Option<&ExportEdit>,
 ) -> Result<Vec<u8>> {
+    let pair = edit.and_then(|e| e.raw);
     // RAW: ล้างภาพเสมอ (แต่งหรือไม่ก็ตาม) · EXIF สร้างใหม่จากข้อมูลในไฟล์ RAW
-    let raw = if crate::raw::is_raw_bytes(bytes) { Some(crate::raw::info(bytes)?) } else { None };
+    let raw = if pair.is_none() && crate::raw::is_raw_bytes(bytes) { Some(crate::raw::info(bytes)?) } else { None };
     let plain = crate::edit::EditSettings::default();
-    let edit = edit.or(raw.as_ref().map(|_| &plain));
+    let edit = edit.map(|e| e.settings).or(raw.as_ref().map(|_| &plain));
     let orientation = if edit.is_some() { 1 } else { read_exif(bytes).orientation };
-    let mut meta = match &raw {
-        Some(info) => vec![info.exif_app1()],
-        None => metadata_segments(bytes),
+    let mut meta = match (&raw, pair) {
+        (Some(info), _) => vec![info.exif_app1()],
+        // ภาพจาก RAW คู่เป็น sRGB: เก็บ EXIF ของ JPEG แต่ไม่ติดโปรไฟล์สีของ JPEG (อาจเป็น Adobe RGB)
+        (None, Some(_)) => metadata_segments(bytes)
+            .into_iter()
+            .filter(|s| !s.get(4..).is_some_and(|p| p.starts_with(b"ICC_PROFILE\0")))
+            .collect(),
+        (None, None) => metadata_segments(bytes),
     };
     // ขนาดเต็มของภาพที่จะส่งออก (ก่อนย่อ) และอัตราส่วนกับด้านยาวของต้นฉบับ
     let edited = edit.and_then(|e| {
-        let (w, h) = match &raw {
-            Some(info) => (info.width, info.height),
-            None => upright_dimensions(bytes)?,
+        let (w, h) = match (&raw, pair) {
+            (Some(info), _) => (info.width, info.height),
+            (None, Some((_, base))) => base.jpeg,
+            (None, None) => upright_dimensions(bytes)?,
         };
         let (ow, oh) = crate::edit::Geometry::new(w, h, e).output_size();
         Some((e, (ow, oh), w.max(h) as f64 / ow.max(oh) as f64))
     });
     // ถอดรหัสให้ภาพที่จะส่งออกมีด้านยาวอย่างน้อย `want` (รูปที่แต่ง: ถอดเผื่อส่วนที่ถูกตัดออก)
-    let source = |want: u32| -> Result<DynamicImage> {
+    let source_plain = |want: u32| -> Result<DynamicImage> {
         match edited {
             Some((e, _, _)) if raw.is_some() => Ok(DynamicImage::ImageRgb8(crate::raw::render(bytes, e, want)?)),
             Some((e, _, ratio)) => {
                 Ok(crate::edit::render(decode_upright(bytes, (want as f64 * ratio).ceil() as u32)?, e))
             }
             None => decode_for_export(bytes, want),
+        }
+    };
+    let source = |want: u32| -> Result<DynamicImage> {
+        match (edited, pair) {
+            // ขนาดเต็ม = ขนาดของ JPEG (ภาพที่คลังรู้จัก) แม้ RAW จะใหญ่กว่า JPEG ที่ส่งออกไว้
+            (Some((e, (ow, oh), _)), Some((raw_bytes, base))) => {
+                Ok(DynamicImage::ImageRgb8(crate::pair::render(raw_bytes, base, e, want.min(ow.max(oh)))?))
+            }
+            _ => source_plain(want),
         }
     };
     match fit {

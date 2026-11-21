@@ -125,6 +125,16 @@ export function ViewerInspector({ details, selectedFaceId, onSelectFace, drawMod
                   ไฟล์ RAW — ภาพที่เห็นล้างจากข้อมูลเซนเซอร์ด้วยโทนตั้งต้นของแอป · แต่งได้ละเอียดกว่า JPEG · ส่งออกเป็น JPEG
                 </span>
               )}
+              {details.rawPairInfo && (
+                <span className="block text-[13px] text-muted" data-testid="viewer-raw-pair">
+                  ไฟล์ RAW คู่ “{details.rawPairInfo.filename}” —{' '}
+                  {details.rawPairInfo.editFromRaw && !details.rawPairInfo.problem
+                    ? details.edit
+                      ? 'ภาพที่เห็นแต่งจาก RAW'
+                      : 'ภาพที่เห็นคือ JPEG · กด “แต่งภาพ” เพื่อแต่งจาก RAW'
+                    : (details.rawPairInfo.problem ?? '')}
+                </span>
+              )}
             </dd>
           </div>
           <div className="flex items-start gap-2">

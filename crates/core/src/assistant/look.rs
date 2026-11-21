@@ -68,7 +68,8 @@ fn lab(lin: &[f64; 256], [r, g, b]: [u8; 3]) -> [f64; 3] {
     [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
 }
 
-fn labs(img: &RgbImage) -> Vec<[f64; 3]> {
+/// L* a* b* (D65) ของทุกพิกเซลของภาพ sRGB 8 บิต
+pub(crate) fn labs(img: &RgbImage) -> Vec<[f64; 3]> {
     let lin = srgb_to_linear();
     img.pixels().map(|p| lab(&lin, p.0)).collect()
 }

@@ -126,9 +126,11 @@ export interface EventDraft {
   existingCount: number;
   /** ไฟล์ภาพชนิดที่ build นี้ยังไม่รองรับ */
   unsupportedCount: number;
-  /** ไฟล์ RAW (ไม่รวมใน `photoCount` — นำเข้าเมื่อเลือกรวม RAW) และที่ยังไม่อยู่ในคลัง */
+  /** ไฟล์ RAW ที่ไม่มี JPEG คู่ (ไม่รวมใน `photoCount` — นำเข้าเมื่อเลือกรวม RAW) และที่ยังไม่อยู่ในคลัง */
   rawCount: number;
   rawNewCount: number;
+  /** ไฟล์ RAW ที่เป็นคู่ของ JPEG — รวมกับรูป JPEG เสมอ ไม่เป็นรูปแยก (DECISIONS ข้อ 26) */
+  rawPairedCount: number;
   readable: boolean;
   unreadableReason: string | null;
   /** มีกิจกรรมที่ผูกกับโฟลเดอร์นี้อยู่แล้ว */
@@ -283,6 +285,8 @@ export interface PhotoResult {
   editId: Id | null;
   /** ไฟล์ RAW จากกล้อง — หน้าแต่งภาพใช้สูตรของ RAW */
   raw: boolean;
+  /** ชื่อไฟล์ RAW คู่ของรูปนี้ (null = ไม่มีคู่) */
+  rawPair: string | null;
 }
 
 /** สี่เหลี่ยมเป็นสัดส่วน 0–1 */
@@ -431,6 +435,8 @@ export interface EditSettings {
   crop: UnitRect | null;
   /** แสงและสี (ทำหลังตัด/หมุน) */
   adjust: EditAdjust;
+  /** แต่งจากไฟล์ RAW คู่ — แอปตั้งเองตอนบันทึก */
+  fromRaw?: boolean;
 }
 
 /** ส่วนของการแต่งที่จะวางให้รูปอื่น */
@@ -510,6 +516,23 @@ export interface PhotoDetails extends PhotoResult {
   edit: PhotoEdit | null;
   /** ภาพที่ผู้ช่วย AI สร้าง: ที่มา */
   aiOrigin: AiOrigin | null;
+  /** รูปที่มีไฟล์ RAW คู่ */
+  rawPairInfo: RawPairInfo | null;
+}
+
+/** รูปที่มีไฟล์ RAW คู่ (DECISIONS ข้อ 26) */
+export interface RawPairInfo {
+  filename: string;
+  /** JPEG ที่ส่งออกจาก Lightroom (มีค่าที่แต่งไว้) · false = JPEG จากกล้อง */
+  lightroom: boolean;
+  /** หน้าแต่งภาพแต่งจาก RAW: ภาพต้นทาง `rawframe` และสูตรของ RAW */
+  editFromRaw: boolean;
+  /** ค่าเริ่มต้นเมื่อแต่งจาก RAW — ค่าที่นับว่า "ไม่ได้แต่ง" */
+  start: EditSettings | null;
+  /** ส่วนที่แต่งใน Lightroom แต่ทำตามไม่ได้ */
+  unsupported: string[];
+  /** ใช้ RAW ตอนนี้ไม่ได้: เหตุผล */
+  problem: string | null;
 }
 
 export interface SearchSuggestions {
@@ -1088,7 +1111,7 @@ export type CommandName = keyof Commands;
  *   draft/{previewId}/{draftId} รูปตัวอย่างในหน้าตรวจรายการก่อนเพิ่ม
  *   sample/{sampleId}          ครอปใบหน้าตัวอย่างของบุคคลที่นำเข้าจากรุ่นเดิม
  */
-export type AssetKind = 'thumb' | 'photo' | 'original' | 'face' | 'draft' | 'sample' | 'watermark';
+export type AssetKind = 'thumb' | 'photo' | 'original' | 'rawframe' | 'face' | 'draft' | 'sample' | 'watermark';
 
 /** Event ที่ Rust ส่งหลัง commit สำเร็จ (ในแอป Tauri); UI ต้องทำงานได้แม้ไม่ได้รับ (ใช้ polling) */
 export interface DataChangedEvent {

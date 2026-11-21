@@ -365,6 +365,9 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
     ctx.stage("discovery")?;
     let scan_stamp = util::now();
     let (mut found, mut skipped) = (0i64, 0i64);
+    // ไฟล์ RAW รอจับคู่กับ JPEG หลังเดินครบทุกโฟลเดอร์ของกิจกรรม (DECISIONS ข้อ 26): (path, source, รวม RAW)
+    let mut raws: Vec<(PathBuf, String, bool)> = vec![];
+    let mut jpegs: Vec<PathBuf> = vec![];
     for b in &bindings {
         // โฟลเดอร์ย่อยที่ผูกกับกิจกรรมอื่นอยู่แล้วเป็นของกิจกรรมนั้น: หนึ่งตำแหน่งไฟล์มีหนึ่งกิจกรรมหลัก
         let folder_key = util::path_key(&b.folder);
@@ -393,18 +396,18 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
         });
         for entry in iter {
             let Ok(entry) = entry else { continue };
-            let wanted = match media::classify(entry.path()).0 {
-                FileKind::Supported => true,
-                // RAW เฉพาะกิจกรรมที่เลือกให้รวม (DECISIONS ข้อ 25)
-                FileKind::Raw => b.include_raw,
-                _ => false,
-            };
-            if !entry.file_type().is_file() || !wanted {
+            let kind = media::classify(entry.path()).0;
+            if !entry.file_type().is_file() || !matches!(kind, FileKind::Supported | FileKind::Raw) {
                 continue;
             }
             if loose_taken && entry.depth() == 1 {
                 continue;
             }
+            if kind == FileKind::Raw {
+                raws.push((entry.into_path(), b.source_id.clone(), b.include_raw));
+                continue;
+            }
+            jpegs.push(entry.path().to_path_buf());
             batch.push(entry.into_path());
             if batch.len() >= DISCOVERY_BATCH {
                 let (f, s) = register_batch(ctx, &event_id, &b.source_id, &batch, &scan_stamp)?;
@@ -421,6 +424,26 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
         let (f, s) = register_batch(ctx, &event_id, &b.source_id, &batch, &scan_stamp)?;
         found += f;
         skipped += s;
+    }
+    // RAW ที่ไม่มีคู่: เป็นรูปเมื่อกิจกรรมเลือกรวม RAW (DECISIONS ข้อ 25) หรือเป็นรูปในคลังอยู่แล้ว
+    let mut by_source: Vec<(String, Vec<PathBuf>)> = vec![];
+    for (path, source_id) in pair_raws(ctx, &event_id, &jpegs, raws, &scan_stamp)? {
+        match by_source.iter_mut().find(|(s, _)| *s == source_id) {
+            Some((_, paths)) => paths.push(path),
+            None => by_source.push((source_id, vec![path])),
+        }
+    }
+    for (source_id, paths) in &by_source {
+        for chunk in paths.chunks(DISCOVERY_BATCH) {
+            let (f, s) = register_batch(ctx, &event_id, source_id, chunk, &scan_stamp)?;
+            found += f;
+            skipped += s;
+            ctx.progress(found, ctx.job.done, ctx.job.failed, skipped, false)?;
+            let c = ctx.control()?;
+            if c != Control::Continue {
+                return Ok(JobCtx::outcome_for(c));
+            }
+        }
     }
     // ไฟล์ของกิจกรรมที่รอบนี้ไม่พบ: ทำเครื่องหมายว่าไม่พร้อม แต่ไม่ลบข้อมูล (Missing is not deleted)
     conn.execute(
@@ -607,6 +630,63 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
         Some(c) => JobCtx::outcome_for(c),
         None => Outcome::Done,
     })
+}
+
+/// จับคู่ RAW กับ JPEG ของกิจกรรม (DECISIONS ข้อ 26) แล้วบันทึกคู่ไว้กับรูป JPEG — คืน RAW ที่จะลงทะเบียนเป็นรูป:
+/// RAW ที่ไม่มีคู่ของกิจกรรมที่เลือกรวม RAW และ RAW ที่เป็นรูปในคลังอยู่แล้ว (นำเข้าแยกไว้ก่อนมีการจับคู่ — คงเป็นรูปเดิม
+/// ไม่ย้ายใบหน้า/ชื่อ/การแต่งไปไหน) · คู่ของรูปในกิจกรรมที่รอบนี้ไม่พบไฟล์ RAW ทำเครื่องหมายว่าไม่พร้อม
+fn pair_raws(
+    ctx: &JobCtx,
+    event_id: &str,
+    jpegs: &[PathBuf],
+    raws: Vec<(PathBuf, String, bool)>,
+    scan_stamp: &str,
+) -> Result<Vec<(PathBuf, String)>> {
+    let conn = ctx.conn;
+    let is_photo = |path: &Path| -> Result<bool> {
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM photo_locations WHERE path_key = ?1)",
+            [util::path_key(path)],
+            |r| r.get(0),
+        )?)
+    };
+    let mut keep = vec![];
+    let mut candidates: Vec<(PathBuf, String, bool)> = vec![];
+    for raw in raws {
+        if is_photo(&raw.0)? {
+            keep.push((raw.0, raw.1));
+        } else {
+            candidates.push(raw);
+        }
+    }
+    let paths: Vec<PathBuf> = candidates.iter().map(|c| c.0.clone()).collect();
+    let matches = if paths.is_empty() { vec![] } else { crate::pair::match_files(jpegs, &paths) };
+    let mut paired = vec![false; paths.len()];
+    let tx = conn.unchecked_transaction()?;
+    for (jpeg, found) in jpegs.iter().zip(matches) {
+        let Some(found) = found else { continue };
+        let photo_id: Option<String> = tx
+            .query_row("SELECT photo_id FROM photo_locations WHERE path_key = ?1", [util::path_key(jpeg)], |r| r.get(0))
+            .optional()?;
+        if let Some(photo_id) = photo_id {
+            crate::pair::upsert(&tx, &photo_id, &paths[found.raw], found.lightroom.as_ref(), scan_stamp)?;
+            paired[found.raw] = true;
+        }
+    }
+    tx.execute(
+        "UPDATE photo_raw_pairs SET available = 0
+         WHERE photo_id IN (SELECT photo_id FROM event_photos WHERE event_id = ?1) AND (verified_at IS NULL OR verified_at <> ?2)",
+        params![event_id, scan_stamp],
+    )?;
+    tx.commit()?;
+    keep.extend(
+        candidates
+            .into_iter()
+            .zip(paired)
+            .filter(|((_, _, include), paired)| *include && !paired)
+            .map(|((p, s, _), _)| (p, s)),
+    );
+    Ok(keep)
 }
 
 /// ลงทะเบียนไฟล์หนึ่งชุดใน transaction เดียว; คืน (จำนวนที่พบ, จำนวนที่มีอยู่แล้วและไม่เปลี่ยน)

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Crop, Eye, Info, Palette, Pipette, RotateCcw, RotateCw, ScanFace, Sun, TriangleAlert, Wand2 } from 'lucide-react';
+import { Aperture, Crop, Eye, Info, Palette, Pipette, RotateCcw, RotateCw, ScanFace, Sun, TriangleAlert, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
 import { InlineNotice, Spinner } from '@/components/ui/Feedback';
@@ -9,7 +9,7 @@ import { Tabs } from '@/components/ui/Form';
 import { cn } from '@/lib/cn';
 import { errorMessage, formatCount } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
-import type { EditSettings, PhotoDetails, UnitRect } from '@/lib/ipc/types';
+import type { EditSettings, PhotoDetails, RawPairInfo, UnitRect } from '@/lib/ipc/types';
 import { NEUTRAL, applyToPixels, autoAdjust, histogram, isNeutral, neutralize, type Adjust, type Histogram, type Profile, type SliderKey } from './adjust';
 import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, SliderRow, ToneCurvePanel, VignettePanel } from './AdjustControls';
 import { EditPresets } from './EditPresets';
@@ -74,8 +74,38 @@ const COLOR: SliderSpec[] = [
 
 const sameSettings = (a: EditSettings, b: EditSettings) => JSON.stringify(a) === JSON.stringify(b);
 
-/** ภาพต้นฉบับย่อไว้สำหรับวาดตัวอย่าง (ด้านยาวไม่เกิน 2400 px — วาดซ้ำได้เร็วทุกครั้งที่เลื่อนแถบ) */
-function useSource(photoId: string) {
+/** ส่วนของ Lightroom ที่ทำตามไม่ได้ แบบย่อ: Mask หลายอันนับรวมเป็นหนึ่งรายการ */
+export function unsupportedSummary(items: string[]): string {
+  const masks = items.filter((i) => i.startsWith('Mask '));
+  const rest = items.filter((i) => !i.startsWith('Mask '));
+  return [...rest, ...(masks.length ? [`Mask ${formatCount(masks.length)} อัน`] : [])].join(' · ');
+}
+
+/** รูปที่มีไฟล์ RAW คู่ (DECISIONS ข้อ 26): แต่งจาก RAW หรือบอกเหตุที่ใช้ RAW ไม่ได้ */
+function RawPairNotice({ pair, fromRaw }: { pair: RawPairInfo; fromRaw: boolean }) {
+  if (fromRaw && !pair.problem) {
+    const skipped = unsupportedSummary(pair.unsupported);
+    return (
+      <InlineNotice tone="brand" icon={<Aperture aria-hidden />}>
+        <span data-testid="editor-raw-pair">
+          แต่งจากไฟล์ RAW คู่ “{pair.filename}”
+          {pair.lightroom ? ' · เริ่มจากค่าที่แต่งใน Lightroom ปรับให้สว่างและสีใกล้ JPEG ที่ส่งออกไว้' : ' · เริ่มจากภาพที่ใกล้ JPEG ของกล้อง'}
+        </span>
+        {skipped && <span className="mt-1 block text-[13px] opacity-90">ทำตาม Lightroom ไม่ได้: {skipped} — ภาพจึงต่างจาก JPEG เล็กน้อย</span>}
+      </InlineNotice>
+    );
+  }
+  if (!pair.problem) return null;
+  return (
+    <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />}>
+      <span data-testid="editor-raw-pair">{fromRaw ? pair.problem : `แต่งจาก JPEG — ${pair.problem}`}</span>
+    </InlineNotice>
+  );
+}
+
+/** ภาพต้นฉบับย่อไว้สำหรับวาดตัวอย่าง (ด้านยาวไม่เกิน 2400 px — วาดซ้ำได้เร็วทุกครั้งที่เลื่อนแถบ)
+ *  · รูปที่แต่งจาก RAW คู่ใช้ `rawframe` (ภาพจาก RAW ในกรอบของ JPEG) */
+function useSource(photoId: string, kind: 'original' | 'rawframe') {
   const [source, setSource] = useState<HTMLCanvasElement | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -103,11 +133,11 @@ function useSource(photoId: string) {
     img.onerror = () => {
       if (alive) setFailed(true);
     };
-    img.src = assetUrl('original', photoId);
+    img.src = assetUrl(kind, photoId);
     return () => {
       alive = false;
     };
-  }, [photoId]);
+  }, [photoId, kind]);
   return { source, failed };
 }
 
@@ -171,7 +201,11 @@ interface PhotoEditorProps {
  * เก็บเป็นค่าในคลัง ไฟล์ต้นฉบับไม่ถูกแตะ ใบหน้าและชื่ออยู่ครบเสมอ กลับเป็นต้นฉบับได้ทุกเมื่อ
  */
 export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
-  const saved = details.edit?.settings ?? IDENTITY;
+  // รูปที่มีไฟล์ RAW คู่: แต่งจาก RAW — ค่าที่นับว่าไม่ได้แต่งคือค่าเริ่มต้นจาก Lightroom (DECISIONS ข้อ 26)
+  const pair = details.rawPairInfo;
+  const fromRaw = pair?.editFromRaw ?? false;
+  const unedited = (fromRaw ? pair?.start : null) ?? IDENTITY;
+  const saved = details.edit?.settings ?? unedited;
   const [settings, setSettings] = useState<EditSettings>(saved);
   const [tab, setTab] = useState<Tab>('crop');
   const [aspect, setAspect] = useState<Aspect>('free');
@@ -186,10 +220,12 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
   // ค่าที่วาดบนภาพ: ระหว่างชี้ที่ preset ใช้ค่าของ preset (memo ไว้ ไม่ให้วาดซ้ำทุกครั้งที่ฮิสโตแกรมอัปเดต)
   const shown = useMemo(() => (previewAdjust ? { ...settings, adjust: previewAdjust } : settings), [settings, previewAdjust]);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const { source, failed } = useSource(details.id);
-  // RAW: ภาพต้นทาง (asset original) เป็นโทนตั้งต้นที่แอปล้างไว้ — แสงสีคิดด้วยสูตรของ RAW ให้ตรงกับไฟล์ที่ได้
-  const profile: Profile = details.raw ? 'raw' : 'display';
+  const { source, failed } = useSource(details.id, fromRaw ? 'rawframe' : 'original');
+  // RAW: ภาพต้นทาง (asset original / rawframe) เป็นโทนตั้งต้นที่แอปล้างไว้ — แสงสีคิดด้วยสูตรของ RAW ให้ตรงกับไฟล์ที่ได้
+  const profile: Profile = details.raw || fromRaw ? 'raw' : 'display';
   const dirty = !sameSettings(settings, saved);
+  const atStart = fromRaw ? sameSettings(settings, unedited) : isIdentity(settings);
+  const lightAtStart = fromRaw ? JSON.stringify(settings.adjust) === JSON.stringify(unedited.adjust) : isNeutral(settings.adjust);
 
   const W = details.width;
   const H = details.height;
@@ -272,7 +308,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
           {details.filename}
         </p>
         <div data-tauri-drag-region className="min-w-2 flex-1" />
-        <Button size="sm" variant="ghost" disabled={isIdentity(settings)} onClick={() => setSettings(IDENTITY)} data-testid="editor-reset">
+        <Button size="sm" variant="ghost" disabled={atStart} onClick={() => setSettings(unedited)} data-testid="editor-reset">
           รีเซ็ตทั้งหมด
         </Button>
         <Button size="sm" onClick={() => (dirty ? setConfirmDiscard(true) : onClose())} data-testid="editor-cancel">
@@ -287,6 +323,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
         <EditCanvas
           source={source}
           failed={failed}
+          failMessage={fromRaw ? (pair?.problem ?? 'เปิดไฟล์ RAW คู่ไม่ได้ ตรวจว่าไดรฟ์ต่ออยู่แล้วลองใหม่') : undefined}
           settings={shown}
           frameAspect={frameAspect}
           ratio={ratio}
@@ -334,6 +371,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
             />
           </div>
           <div className="scroll-thin min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
+            {pair && <RawPairNotice pair={pair} fromRaw={fromRaw} />}
             {tab === 'crop' ? (
               <>
                 <section>
@@ -443,7 +481,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
                   <Button size="sm" icon={<Wand2 className="size-4" aria-hidden />} onClick={auto} disabled={!source} className="flex-1" data-testid="editor-auto">
                     ปรับอัตโนมัติ
                   </Button>
-                  <Button size="sm" variant="ghost" disabled={isNeutral(settings.adjust)} onClick={() => setAdjust(NEUTRAL)} data-testid="editor-reset-light">
+                  <Button size="sm" variant="ghost" disabled={lightAtStart} onClick={() => setAdjust(fromRaw ? unedited.adjust : NEUTRAL)} data-testid="editor-reset-light">
                     รีเซ็ต
                   </Button>
                 </div>
@@ -577,6 +615,8 @@ function BeforeButton({ disabled, onHold }: { disabled: boolean; onHold: (holdin
 interface EditCanvasProps {
   source: HTMLCanvasElement | null;
   failed: boolean;
+  /** ข้อความเมื่อเปิดภาพต้นทางไม่ได้ (ค่าเริ่มต้น: ไฟล์ต้นฉบับ) */
+  failMessage?: string;
   settings: EditSettings;
   frameAspect: number;
   ratio: number | null;
@@ -595,7 +635,7 @@ interface EditCanvasProps {
 }
 
 /** ตัวอย่างภาพที่แต่ง: แท็บตัดและหมุนแสดงทั้งกรอบพร้อมกรอบตัดที่ลากได้ · แท็บแสงและสีแสดงเฉพาะส่วนที่ตัดพร้อมแสงสี */
-function EditCanvas({ source, failed, settings, frameAspect, ratio, mode, straightening, before, faces, onCrop, onHistogram, picking, onPick, profile }: EditCanvasProps) {
+function EditCanvas({ source, failed, failMessage, settings, frameAspect, ratio, mode, straightening, before, faces, onCrop, onHistogram, picking, onPick, profile }: EditCanvasProps) {
   const area = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -660,7 +700,7 @@ function EditCanvas({ source, failed, settings, frameAspect, ratio, mode, straig
     <div ref={area} className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden rounded-2xl bg-viewer" data-testid="editor-canvas">
       {!source && (
         <div className="flex flex-col items-center gap-2 text-white/80">
-          {failed ? <p className="text-sm">เปิดไฟล์ต้นฉบับไม่ได้ ตรวจว่าไดรฟ์ต่ออยู่แล้วลองใหม่</p> : <Spinner className="size-6" />}
+          {failed ? <p className="text-sm">{failMessage ?? 'เปิดไฟล์ต้นฉบับไม่ได้ ตรวจว่าไดรฟ์ต่ออยู่แล้วลองใหม่'}</p> : <Spinner className="size-6" />}
         </div>
       )}
       {source && boxW > 0 && (

@@ -36,6 +36,9 @@ pub struct EditSettings {
     pub crop: Option<Rect>,
     /// แสงและสี (ทำหลังตัด/หมุน)
     pub adjust: crate::adjust::Adjust,
+    /// แต่งจากไฟล์ RAW คู่ของรูป (DECISIONS ข้อ 26) — แอปตั้งเองตอนบันทึก ไม่ใช่ค่าที่ผู้ใช้ปรับ
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub from_raw: bool,
 }
 
 pub const MAX_STRAIGHTEN: f64 = 45.0;
@@ -75,6 +78,54 @@ impl EditSettings {
     /// ไม่ได้ตัด หมุน หรือปรับเอียง (ขนาดและตำแหน่งของภาพเท่าเดิม)
     pub fn is_geometry_identity(&self) -> bool {
         self.rotate == 0 && self.straighten == 0.0 && self.crop.is_none_or(|c| c == FULL)
+    }
+
+    /// ภาพที่ได้เท่ากัน (กรอบตัดเต็มภาพ = ไม่ตัด)
+    fn same_as(&self, other: &EditSettings) -> bool {
+        let crop = |s: &EditSettings| s.crop.filter(|c| *c != FULL);
+        self.rotate == other.rotate
+            && self.straighten == other.straighten
+            && crop(self) == crop(other)
+            && self.adjust == other.adjust
+            && self.from_raw == other.from_raw
+    }
+}
+
+/// จุดตั้งต้นของการแต่งของรูป (DECISIONS ข้อ 26)
+/// - รูปที่มีคู่ RAW ใช้ได้และยังไม่แต่ง (หรือแต่งจาก RAW ไว้): แต่งจาก RAW · ค่าที่นับว่า "ไม่ได้แต่ง" คือค่าจาก Lightroom
+/// - การแต่งเดิมที่ทำกับ JPEG ยังเป็นของ JPEG แม้ภายหลังพบคู่ RAW (ค่าเดิมมีความหมายเท่าเดิม)
+pub(crate) struct Origin {
+    pub from_raw: bool,
+    /// บันทึกค่านี้ = ลบการแต่ง (กลับเป็นไฟล์ของรูปตามเดิม) · None = ไม่รู้ตอนนี้ (ไฟล์ RAW ไม่พร้อม) จึงไม่ลบให้
+    pub start: Option<EditSettings>,
+}
+
+pub(crate) fn origin(conn: &Connection, photo_id: &str, stored: Option<&EditSettings>) -> Result<Origin> {
+    if stored.is_some_and(|s| !s.from_raw) {
+        return Ok(Origin { from_raw: false, start: Some(EditSettings::default()) });
+    }
+    Ok(match (crate::pair::raw_edit(conn, photo_id)?, stored) {
+        (crate::pair::RawEdit::Ready(base), _) => Origin { from_raw: true, start: Some(base.start.clone()) },
+        (_, Some(_)) => Origin { from_raw: true, start: None },
+        (_, None) => Origin { from_raw: false, start: Some(EditSettings::default()) },
+    })
+}
+
+impl Origin {
+    /// ค่าปัจจุบันของรูป: ที่แต่งไว้ หรือค่าตั้งต้น
+    pub fn current(&self, stored: Option<&EditSettings>) -> EditSettings {
+        stored.cloned().or_else(|| self.start.clone()).unwrap_or_default()
+    }
+
+    /// ค่าที่จะบันทึก (ตั้ง `from_raw` ตามจุดตั้งต้น) — None = เท่ากับไม่ได้แต่ง ให้ลบการแต่ง
+    pub fn to_store(&self, mut settings: EditSettings) -> Option<EditSettings> {
+        settings.from_raw = self.from_raw;
+        let unedited = match &self.start {
+            Some(start) if self.from_raw => settings.same_as(start),
+            Some(_) => settings.is_identity(),
+            None => false,
+        };
+        (!unedited).then_some(settings)
     }
 }
 
@@ -353,6 +404,51 @@ pub(crate) fn render_small(
     Ok(if img.width().max(img.height()) > max_edge { img.thumbnail(max_edge, max_edge) } else { img })
 }
 
+/// การแต่งของรูปหนึ่งตอนนี้ (สำหรับผู้ช่วย AI)
+pub(crate) struct EditState {
+    /// ที่บันทึกไว้ (None = ไม่ได้แต่ง)
+    pub stored: Option<EditSettings>,
+    /// ค่าปัจจุบัน: ที่บันทึกไว้ หรือค่าที่นับว่าไม่ได้แต่ง
+    pub current: EditSettings,
+    /// ค่าที่นับว่าไม่ได้แต่ง (รูปคู่ RAW = ค่าจาก Lightroom)
+    pub unedited: EditSettings,
+}
+
+pub(crate) fn state(app: &App, photo_id: &str) -> Result<EditState> {
+    crate::pair::ensure_start(app, photo_id)?;
+    let conn = app.db();
+    let stored = load(&conn, photo_id)?.map(|s| s.settings);
+    let origin = origin(&conn, photo_id, stored.as_ref())?;
+    let current = origin.current(stored.as_ref());
+    let unedited = origin.start.unwrap_or_default();
+    Ok(EditState { stored, current, unedited })
+}
+
+/// ภาพของรูปหลังตัด/หมุนตาม `s` แต่ยังไม่ปรับแสงสี ด้านยาวไม่เกิน `max_edge` จากต้นทางที่การแต่งใช้ (ไฟล์ของรูป
+/// หรือ RAW คู่) และสูตรแสงสีที่ใช้กับภาพนั้น — ต้นทางไม่พร้อมใช้ภาพย่อของแอปแทน
+pub(crate) fn render_base(
+    app: &App,
+    photo_id: &str,
+    s: &EditSettings,
+    max_edge: u32,
+) -> Result<(DynamicImage, crate::adjust::Profile)> {
+    let geometry = EditSettings { adjust: Default::default(), ..s.clone() };
+    if s.from_raw {
+        crate::pair::ensure_start(app, photo_id)?;
+        let raw = { crate::pair::raw_edit(&app.db(), photo_id)? };
+        if let crate::pair::RawEdit::Ready(base) = raw {
+            if let Ok(bytes) = media::read_file(&base.raw_path) {
+                let img = crate::pair::render(&bytes, &base, &geometry, max_edge)?;
+                return Ok((DynamicImage::ImageRgb8(img), crate::adjust::Profile::Raw));
+            }
+        }
+    }
+    let path = { crate::catalog::photo_path(&app.db(), photo_id)? };
+    let profile = crate::assets::profile_of(Path::new(&path));
+    let bytes = crate::assets::source_or_plain_thumb(app, photo_id)?;
+    Ok((render_small(&bytes, &geometry, max_edge, profile)?, profile))
+}
+
 /// ส่วนของการแต่งที่จะวางให้รูปอื่น (แบบ "Paste Settings" ของ Lightroom)
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -415,12 +511,16 @@ pub fn apply_many(
     }
     let mut result = ApplyResult { updated: 0, unchanged: 0, not_ready: 0 };
     let mut stale = Vec::new();
+    let rows = { crate::export::load_items(&app.db(), selection)? };
+    if rows.is_empty() {
+        return Err(AppError::invalid("ยังไม่ได้เลือกรูป"));
+    }
+    // ค่าเริ่มต้นของรูปคู่ RAW คิดก่อน (อ่านไฟล์) ไม่ถือฐานข้อมูลระหว่างนั้น
+    for row in &rows {
+        crate::pair::ensure_start(app, &row.photo_id)?;
+    }
     {
         let conn = app.db();
-        let rows = crate::export::load_items(&conn, selection)?;
-        if rows.is_empty() {
-            return Err(AppError::invalid("ยังไม่ได้เลือกรูป"));
-        }
         let tx = conn.unchecked_transaction()?;
         for row in rows {
             if row.width == 0 || row.height == 0 {
@@ -428,21 +528,27 @@ pub fn apply_many(
                 continue;
             }
             let old = load(&tx, &row.photo_id)?;
-            let base = old.as_ref().map(|o| o.settings.clone()).unwrap_or_default();
-            let next = parts.merge(base.clone(), settings);
+            let stored = old.as_ref().map(|o| &o.settings);
+            let origin = origin(&tx, &row.photo_id, stored)?;
+            let base = origin.current(stored);
+            let mut next = parts.merge(base.clone(), settings);
+            next.from_raw = origin.from_raw;
             if next == base {
                 result.unchanged += 1;
                 continue;
             }
-            if next.is_identity() {
-                tx.execute("DELETE FROM photo_edits WHERE photo_id = ?1", [&row.photo_id])?;
-            } else {
-                tx.execute(
-                    "INSERT INTO photo_edits(photo_id, edit_id, settings, updated_at) VALUES (?1, ?2, ?3, ?4)
-                     ON CONFLICT(photo_id) DO UPDATE SET edit_id = excluded.edit_id, settings = excluded.settings,
-                       updated_at = excluded.updated_at",
-                    params![row.photo_id, util::new_id(), serde_json::to_string(&next)?, util::now()],
-                )?;
+            match origin.to_store(next) {
+                None => {
+                    tx.execute("DELETE FROM photo_edits WHERE photo_id = ?1", [&row.photo_id])?;
+                }
+                Some(next) => {
+                    tx.execute(
+                        "INSERT INTO photo_edits(photo_id, edit_id, settings, updated_at) VALUES (?1, ?2, ?3, ?4)
+                         ON CONFLICT(photo_id) DO UPDATE SET edit_id = excluded.edit_id, settings = excluded.settings,
+                           updated_at = excluded.updated_at",
+                        params![row.photo_id, util::new_id(), serde_json::to_string(&next)?, util::now()],
+                    )?;
+                }
             }
             if let Some(old) = old {
                 stale.push((row.photo_id, old.edit_id));
@@ -464,6 +570,21 @@ pub fn apply_many(
 /// บันทึกการแต่งของรูปหนึ่ง (ไม่ได้แต่งอะไร = ลบการแต่ง) — ไฟล์ต้นฉบับไม่ถูกแตะ
 pub fn save(app: &App, photo_id: &str, settings: EditSettings) -> Result<catalog::PhotoDetails> {
     settings.validate()?;
+    crate::pair::ensure_start(app, photo_id)?;
+    store(app, photo_id, |conn, old| Ok(origin(conn, photo_id, old)?.to_store(settings)))
+}
+
+/// ลบการแต่ง กลับเป็นไฟล์ของรูปตามเดิม (รูปที่มีคู่ RAW = JPEG ที่ส่งออกไว้)
+pub fn reset(app: &App, photo_id: &str) -> Result<catalog::PhotoDetails> {
+    store(app, photo_id, |_, _| Ok(None))
+}
+
+/// `decide` ได้การแต่งเดิมแล้วคืนค่าที่จะเก็บ (None = ลบการแต่ง)
+fn store(
+    app: &App,
+    photo_id: &str,
+    decide: impl FnOnce(&Connection, Option<&EditSettings>) -> Result<Option<EditSettings>>,
+) -> Result<catalog::PhotoDetails> {
     {
         let conn = app.db();
         let (w, h): (i64, i64) = conn
@@ -479,16 +600,20 @@ pub fn save(app: &App, photo_id: &str, settings: EditSettings) -> Result<catalog
             return Err(AppError::invalid("รูปนี้ยังเตรียมข้อมูลไม่เสร็จ รอสักครู่แล้วลองใหม่"));
         }
         let old = load(&conn, photo_id)?;
+        let next = decide(&conn, old.as_ref().map(|o| &o.settings))?;
         let tx = conn.unchecked_transaction()?;
-        if settings.is_identity() {
-            tx.execute("DELETE FROM photo_edits WHERE photo_id = ?1", [photo_id])?;
-        } else {
-            tx.execute(
-                "INSERT INTO photo_edits(photo_id, edit_id, settings, updated_at) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(photo_id) DO UPDATE SET edit_id = excluded.edit_id, settings = excluded.settings,
-                   updated_at = excluded.updated_at",
-                params![photo_id, util::new_id(), serde_json::to_string(&settings)?, util::now()],
-            )?;
+        match next {
+            None => {
+                tx.execute("DELETE FROM photo_edits WHERE photo_id = ?1", [photo_id])?;
+            }
+            Some(settings) => {
+                tx.execute(
+                    "INSERT INTO photo_edits(photo_id, edit_id, settings, updated_at) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(photo_id) DO UPDATE SET edit_id = excluded.edit_id, settings = excluded.settings,
+                       updated_at = excluded.updated_at",
+                    params![photo_id, util::new_id(), serde_json::to_string(&settings)?, util::now()],
+                )?;
+            }
         }
         db::bump_revision(&tx)?;
         tx.commit()?;
