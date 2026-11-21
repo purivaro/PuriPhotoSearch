@@ -1930,7 +1930,16 @@ fn library_open_rules() {
         .unwrap()
         .pragma_update(None, "user_version", 999)
         .unwrap();
-    assert_eq!(open(&dir).err().unwrap().code, "LIBRARY_TOO_NEW");
+    // เทสต์อื่นที่รันพร้อมกันอาจ fork process ลูกตอนคลังเดิมกำลังปิด (ลูกถือตัวล็อกไว้ชั่วครู่จนถึง exec): รอล็อกคลายก่อน
+    let mut result = open(&dir);
+    for _ in 0..100 {
+        if !matches!(&result, Err(e) if e.code == "LIBRARY_LOCKED") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        result = open(&dir);
+    }
+    assert_eq!(result.err().unwrap().code, "LIBRARY_TOO_NEW");
     drop(keep);
 }
 
