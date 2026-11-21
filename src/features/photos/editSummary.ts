@@ -3,6 +3,7 @@ import type { EditMask, EditSettings } from '@/lib/ipc/types';
 import { gradingIsActive, hasCurves, hasHsl, hasLevels, hasVignette, type SliderKey } from './adjust';
 import { isGeometryIdentity } from './editGeometry';
 import { maskIsActive } from './masks';
+import { describeRetouch } from './retouch';
 
 /** ชื่อของบริเวณที่ปรับ (แผงปรับเฉพาะส่วน · สรุปการแต่ง) */
 export function maskName(m: EditMask): string {
@@ -46,6 +47,7 @@ export function describeEdit(s: EditSettings) {
   return {
     geometry: geometry.length > 0 ? geometry.join(' · ') : null,
     masks: masks.length > 0 ? `${formatCount(masks.length)} บริเวณ (${masks.map((m) => (m.area.skin ? 'ผิวหน้า' : 'ใบหน้า')).join(', ')})` : null,
+    retouch: describeRetouch(s.retouch),
     light: list(s, LIGHT, [hasLevels(s.adjust) && 'Levels', hasCurves(s.adjust) && 'เส้นโค้งโทน', hasVignette(s.adjust) && 'Vignette']),
     color: list(s, COLOR, [hasHsl(s.adjust) && 'สีแยกช่วง (HSL)', gradingIsActive(s.adjust.grading) && 'Color Grading']),
   };

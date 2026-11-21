@@ -528,11 +528,13 @@ pub fn render(bytes: &[u8], s: &crate::edit::EditSettings, max_edge: u32) -> Res
         _ => u32::MAX,
     };
     let (lin, info) = develop(bytes, need)?;
-    let img = crate::edit::render_geometry(DynamicImage::ImageRgb32F(lin), s).into_rgb32f();
+    // หน้าเรียว/หน้าผอมทำบนภาพเดิมก่อนตัด/หมุน (DECISIONS ข้อ 31)
+    let lin = crate::retouch::warp_image(DynamicImage::ImageRgb32F(lin), s.retouch.as_ref());
+    let img = crate::edit::render_geometry(lin, s).into_rgb32f();
     let img = if max_edge == u32::MAX { img } else { shrink(img, max_edge) };
     let g = crate::edit::Geometry::new(info.width, info.height, s);
     let out = crate::adjust::apply_linear_in_frame(&img, &s.adjust, g.frame_long(img.width(), img.height()));
-    Ok(crate::edit::with_masks(DynamicImage::ImageRgb8(out), &g, s).into_rgb8())
+    Ok(crate::edit::with_local_edits(DynamicImage::ImageRgb8(out), &g, s).into_rgb8())
 }
 
 #[cfg(test)]

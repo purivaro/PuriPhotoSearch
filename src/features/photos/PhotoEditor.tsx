@@ -14,6 +14,8 @@ import { NEUTRAL, histogram, isNeutral, type Adjust, type Histogram } from './ad
 import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, ToneCurvePanel, VignettePanel } from './AdjustControls';
 import { EditPresets } from './EditPresets';
 import { MaskPanel } from './MaskPanel';
+import { RetouchPanel } from './RetouchPanel';
+import { retouchIsActive } from './retouch';
 import { COLOR, LIGHT, PRESENCE, SliderGroup } from './SliderGroup';
 import {
   FULL,
@@ -47,7 +49,8 @@ const ASPECTS: { value: Aspect; label: string; ratio: number | null }[] = [
 const HANDLES: Handle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 
 // ไม่มี Mask กับรายการ Mask ว่าง (ค่าจาก Rust ไม่ส่งช่องที่ว่าง) ถือว่าเหมือนกัน
-const comparable = (s: EditSettings) => JSON.stringify({ ...s, masks: s.masks?.length ? s.masks : undefined });
+const comparable = (s: EditSettings) =>
+  JSON.stringify({ ...s, masks: s.masks?.length ? s.masks : undefined, retouch: retouchIsActive(s.retouch) ? s.retouch : undefined });
 const sameSettings = (a: EditSettings, b: EditSettings) => comparable(a) === comparable(b);
 
 /** ส่วนของ Lightroom ที่ทำตามไม่ได้ แบบย่อ: Mask หลายอันนับรวมเป็นหนึ่งรายการ */
@@ -401,14 +404,20 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
                 <BeforeButton disabled={isNeutral(settings.adjust)} onHold={setBefore} />
               </>
             ) : tab === 'masks' ? (
-              <MaskPanel
-                masks={settings.masks ?? []}
-                faces={details.faces}
-                selected={activeMask}
-                onSelect={setActiveMask}
-                onChange={(masks) => setSettings((s) => ({ ...s, masks }))}
-                onShowArea={setShowArea}
-              />
+              <>
+                <RetouchPanel retouch={settings.retouch ?? null} faces={details.faces} onChange={(retouch) => setSettings((s) => ({ ...s, retouch }))} />
+                <BeforeButton disabled={!retouchIsActive(settings.retouch) && !(settings.masks ?? []).length} onHold={setBefore} label="กดค้างเพื่อดูภาพก่อนรีทัชและปรับ" />
+                <div className="border-t border-line pt-4">
+                  <MaskPanel
+                    masks={settings.masks ?? []}
+                    faces={details.faces}
+                    selected={activeMask}
+                    onSelect={setActiveMask}
+                    onChange={(masks) => setSettings((s) => ({ ...s, masks }))}
+                    onShowArea={setShowArea}
+                  />
+                </div>
+              </>
             ) : (
               <>
                 <EditPresets adjust={settings.adjust} onApply={(adjust) => setSettings((s) => ({ ...s, adjust }))} onPreview={setPreviewAdjust} />
@@ -445,7 +454,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
 }
 
 /** กดค้างเพื่อดูภาพก่อนปรับแสงและสี (เมาส์ หรือ Space ค้าง) */
-function BeforeButton({ disabled, onHold }: { disabled: boolean; onHold: (holding: boolean) => void }) {
+function BeforeButton({ disabled, onHold, label = 'กดค้างเพื่อดูก่อนปรับแสงและสี' }: { disabled: boolean; onHold: (holding: boolean) => void; label?: string }) {
   return (
     <button
       type="button"
@@ -458,7 +467,7 @@ function BeforeButton({ disabled, onHold }: { disabled: boolean; onHold: (holdin
       className="flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-line-strong text-[13px] font-semibold text-ink hover:bg-sunken disabled:opacity-50"
       data-testid="editor-before"
     >
-      <Eye className="size-4" aria-hidden /> กดค้างเพื่อดูก่อนปรับแสงและสี
+      <Eye className="size-4" aria-hidden /> {label}
     </button>
   );
 }
@@ -672,7 +681,7 @@ function EditCanvas({ photoId, sourceKind, onReady, failMessage, settings, frame
         </p>
       )}
       {before && (
-        <p className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-[13px] font-semibold text-white">ก่อนปรับแสงและสี</p>
+        <p className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-[13px] font-semibold text-white">ภาพก่อนปรับ</p>
       )}
       {picking && mode !== 'crop' && (
         <p className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 rounded-full bg-black/75 px-3 py-1 text-[13px] font-semibold text-white">

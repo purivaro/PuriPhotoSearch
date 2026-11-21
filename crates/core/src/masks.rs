@@ -13,7 +13,7 @@ use crate::error::{AppError, Result};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_MASKS: usize = 10;
-const MAX_FACES: usize = 200;
+pub(crate) const MAX_FACES: usize = 200;
 /// วงรีของใบหน้า: รัศมีเทียบกับกรอบใบหน้า — ครึ่งบนสั้น (ไม่ล้นขึ้นไปบนฉากหลังเหนือศีรษะ) ครึ่งล่างยาว (คลุมคางและคอ)
 /// และเลื่อนศูนย์กลางลงเล็กน้อย (สัดส่วนของความสูงกรอบ)
 const FACE_RX: f64 = 0.62;
@@ -121,7 +121,7 @@ fn chroma([r, g, b]: [u8; 3]) -> [f64; 2] {
 }
 
 /// ความเป็นสีผิว 0–1 จาก Cb/Cr ของ YCbCr
-fn skin_weight(rgb: [u8; 3]) -> f64 {
+pub(crate) fn skin_weight(rgb: [u8; 3]) -> f64 {
     let [cb, cr] = chroma(rgb);
     let inside = |v: f64, (lo, hi, below, above): (f64, f64, f64, f64)| {
         smoothstep(lo - below, lo, v) * (1.0 - smoothstep(hi, hi + above, v))
@@ -161,7 +161,7 @@ impl Oval {
     }
 }
 
-fn face_weight(b: &[f64; 4], u: f64, v: f64) -> f64 {
+pub(crate) fn face_weight(b: &[f64; 4], u: f64, v: f64) -> f64 {
     1.0 - smoothstep(FACE_SOFT.0, FACE_SOFT.1, Oval::of(b).distance(u, v))
 }
 
@@ -186,7 +186,7 @@ pub fn area_weight(area: &Area, tones: &[Option<[f64; 2]>], u: f64, v: f64, rgb:
 }
 
 /// ใกล้สีผิวของคนนั้นแค่ไหน (1 = ใกล้ · 0 = สีอื่นที่บังเอิญอยู่ในช่วงสีผิว) — ไม่รู้สีผิว = 1
-fn tone_match(tone: Option<[f64; 2]>, rgb: [u8; 3]) -> f64 {
+pub(crate) fn tone_match(tone: Option<[f64; 2]>, rgb: [u8; 3]) -> f64 {
     let Some([tb, tr]) = tone else { return 1.0 };
     let [cb, cr] = chroma(rgb);
     1.0 - smoothstep(TONE_NEAR, TONE_FAR, ((cb - tb).powi(2) + (cr - tr).powi(2)).sqrt())
@@ -236,7 +236,7 @@ pub fn face_tones(px: &[u8], w: usize, h: usize, stride: usize, g: &Geometry, ar
 }
 
 /// กรอบบนภาพที่แต่ง (พิกเซล x0, y0, x1, y1) ที่ครอบส่วนที่มีน้ำหนัก + ขอบเผื่อ · None = ไม่มีส่วนใดอยู่ในภาพ
-fn bounds(area: &Area, g: &Geometry, w: usize, h: usize, long: f64) -> Option<(usize, usize, usize, usize)> {
+pub(crate) fn bounds(area: &Area, g: &Geometry, w: usize, h: usize, long: f64) -> Option<(usize, usize, usize, usize)> {
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     match area {
         Area::Faces { boxes, .. } => {

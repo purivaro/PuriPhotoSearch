@@ -28,6 +28,7 @@ pub mod preset;
 pub mod preview;
 pub mod raw;
 pub mod relink;
+pub mod retouch;
 pub mod review;
 pub mod setup;
 pub mod shrink;

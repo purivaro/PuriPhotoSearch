@@ -165,8 +165,10 @@ fn view_geometry(src: (u32, u32), s: &EditSettings, view: Rect) -> Geometry {
 }
 
 /// สุ่มส่วนที่เห็นของภาพต้นทางลง canvas `w`×`h` (RGBA) แบบ bilinear จากระดับย่อที่ใกล้ขนาด canvas
-fn sample(src: &Source, g: &Geometry, w: usize, h: usize) -> Vec<u8> {
+/// · หน้าเรียว/หน้าผอมของ `retouch` ใส่ตอนสุ่ม (ภาพที่บันทึกทำบนภาพเดิมก่อนตัด/หมุน — จุดต้นทางเดียวกัน)
+fn sample(src: &Source, g: &Geometry, w: usize, h: usize, retouch: Option<&crate::retouch::Retouch>) -> Vec<u8> {
     let (sw, sh) = src.size();
+    let aspect = sw as f64 / sh as f64;
     // พิกเซลของภาพต้นทางต่อหนึ่งพิกเซลของ canvas (วัดตามแนวนอนและแนวตั้งที่กลางภาพ)
     let at = |x: f64, y: f64| {
         let (u, v) = g.inverse(x / w as f64, y / h as f64);
@@ -183,6 +185,7 @@ fn sample(src: &Source, g: &Geometry, w: usize, h: usize) -> Vec<u8> {
     out.par_chunks_mut(w * 4).enumerate().for_each(|(y, line)| {
         for x in 0..w {
             let (u, v) = g.inverse((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+            let (u, v) = retouch.map_or((u, v), |r| r.source_point(u, v, aspect));
             let fx = (u * lw as f64 - 0.5).clamp(0.0, (lw - 1) as f64);
             let fy = (v * lh as f64 - 0.5).clamp(0.0, (lh - 1) as f64);
             let (x0, y0) = (fx.floor() as u32, fy.floor() as u32);
@@ -241,7 +244,9 @@ pub fn render_image(src: &RgbImage, profile: Profile, req: &Request) -> Vec<u8> 
 fn render_from(src: &Source, req: &Request) -> Vec<u8> {
     let (w, h) = (req.width as usize, req.height as usize);
     let g = view_geometry(src.size(), &req.settings, req.view);
-    let mut px = sample(src, &g, w, h);
+    // "ก่อนปรับ" = ภาพเดิมไม่มีการแต่งใด ๆ รวมรีทัชใบหน้า
+    let retouch = req.settings.retouch.as_ref().filter(|_| req.adjust);
+    let mut px = sample(src, &g, w, h, retouch);
     if req.adjust {
         // รัศมีของ Texture/Clarity/Dehaze และขอบเผื่อของ Mask คิดจากทั้งกรอบ (ส่วนที่เห็นเป็นแค่บางส่วน)
         let long = g.frame_long(req.width, req.height);
@@ -250,6 +255,7 @@ fn render_from(src: &Source, req: &Request) -> Vec<u8> {
             a.vignette = Default::default();
         }
         crate::adjust::apply_pixels(&mut px, w, h, 4, &a, src.profile, long);
+        crate::retouch::smooth_faces(&mut px, w, h, 4, &g, retouch);
         crate::masks::apply_showing(&mut px, w, h, 4, &g, &req.settings.masks, req.show.as_deref());
     }
     px
@@ -267,7 +273,7 @@ fn plain(src: &Source, s: &EditSettings, edge: u32) -> (Vec<u8>, usize, usize) {
         (((edge as f64 * aspect).round() as u32).max(1), edge)
     };
     let g = view_geometry((sw, sh), s, crop);
-    (sample(src, &g, w as usize, h as usize), w as usize, h as usize)
+    (sample(src, &g, w as usize, h as usize, s.retouch.as_ref()), w as usize, h as usize)
 }
 
 /// ปัดแบบ `Math.round` ของ JavaScript (ครึ่งปัดขึ้น) ให้ค่าที่เสนอเท่าเดิมกับก่อนย้ายมา Rust

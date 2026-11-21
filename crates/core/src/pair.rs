@@ -654,7 +654,7 @@ pub fn render(raw_bytes: &[u8], base: &RawBase, s: &EditSettings, max_edge: u32)
     let framed = develop_framed(raw_bytes, base, s, max_edge)?;
     let g = Geometry::new(base.jpeg.0, base.jpeg.1, s);
     let out = crate::adjust::apply_linear_in_frame(&framed, &s.adjust, g.frame_long(framed.width(), framed.height()));
-    Ok(crate::edit::with_masks(image::DynamicImage::ImageRgb8(out), &g, s).into_rgb8())
+    Ok(crate::edit::with_local_edits(image::DynamicImage::ImageRgb8(out), &g, s).into_rgb8())
 }
 
 /// ภาพจาก RAW ในกรอบของ JPEG หลังตัด/หมุนตามที่แต่ง (ยังเป็นแสงเชิงเส้น ยังไม่ปรับแสงสี)
@@ -682,8 +682,11 @@ fn develop_framed(raw_bytes: &[u8], base: &RawBase, s: &EditSettings, max_edge: 
     // วางลงกรอบที่ความละเอียดของภาพที่ล้าง แล้วจึงย่อ (ย่อในแสงเชิงเส้น ไม่เกิด aliasing ของการสุ่มจุด)
     let developed = per * lin.width() as f64 / info.width as f64;
     let (sw, sh) = if developed > z * 1.05 { size(developed) } else { (tw, th) };
+    // หน้าเรียว/หน้าผอม (DECISIONS ข้อ 31) อยู่บนกรอบของ JPEG ซึ่งเป็นพิกัดของใบหน้า
+    let aspect = base.jpeg.0 as f64 / base.jpeg.1.max(1) as f64;
     let framed: Linear = sample(&lin, sw, sh, |a, b| {
         let (u, v) = g.inverse(a, b);
+        let (u, v) = s.retouch.as_ref().map_or((u, v), |r| r.source_point(u, v, aspect));
         base.frame.to_raw(u, v, upright, o)
     });
     Ok(if (sw, sh) == (tw, th) {

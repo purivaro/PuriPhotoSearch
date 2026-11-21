@@ -321,6 +321,23 @@
     expect(back1.every((v, k) => Math.abs(v - back0[k]) <= 1), `ฉากหลังเท่าเดิม ${back0} → ${back1}`);
     await stage('editor-masks', { skin: [skin0, skin1].map((s) => s.map(Math.round)) });
 
+    // รีทัชใบหน้า (DECISIONS ข้อ 31): หน้าผอม "มาก" ดัดเฉพาะขอบหน้า — ภาพรอบขอบหน้าเปลี่ยน กลางหน้าเท่าเดิม
+    const snap = () => {
+      const c = tid('editor-preview');
+      return c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    };
+    const flat0 = snap();
+    const centre0 = canvasAt(0.3, 0.42);
+    await click(tids('retouch-thin-level').find((b) => text(b) === 'มาก'), 'หน้าผอม มาก');
+    await waitFor(() => {
+      const d = snap();
+      for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - flat0[i]) > 8) return true;
+      return null;
+    }, 'ขอบหน้าในตัวอย่างขยับ');
+    const centre1 = canvasAt(0.3, 0.42);
+    expect(centre1.every((v, k) => Math.abs(v - centre0[k]) <= 3), `กลางหน้าไม่ขยับ ${centre0.map(Math.round)} → ${centre1.map(Math.round)}`);
+    await stage('editor-retouch');
+
     await click(tid('editor-save'), 'บันทึกการแต่ง');
     await waitFor(() => !tid('photo-editor'), 'ปิดหน้าแต่งภาพหลังบันทึก');
     const edit = (await rpc('get_photo_details', { photoId: editedId })).edit;
@@ -330,6 +347,8 @@
       edit.settings.masks.length === 1 && mask.area.boxes.length === 2 && mask.adjust.texture === -35 && mask.adjust.exposure === -1,
       `Mask ที่บันทึก: ${JSON.stringify(mask)}`,
     );
+    const retouch = edit.settings.retouch;
+    expect(retouch?.thin === 80 && retouch.faces.length === 2, `รีทัชที่บันทึก: ${JSON.stringify(retouch)}`);
     await waitFor(() => all('[data-testid="viewer-image-box"] img').some((i) => i.naturalWidth > 0), 'ภาพที่แต่งแล้วโหลดในตัวดูภาพ');
     await click(tid('viewer-close'), 'ปิดตัวดูภาพ');
     await waitFor(() => !tid('photo-viewer'), 'ปิดตัวดูภาพแล้ว');
