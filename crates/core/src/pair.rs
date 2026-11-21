@@ -403,6 +403,10 @@ pub struct Pair {
     start: Option<Start>,
 }
 
+/// รุ่นของวิธีคิดค่าเริ่มต้น — เปลี่ยนวิธีคิดเมื่อไร (เช่นทำตามค่าของ Lightroom ได้เพิ่ม) เพิ่มเลขนี้ ค่าที่เก็บไว้จะถูกคิดใหม่
+/// · 3 = อ่านค่าของ Lightroom ใหม่จาก JPEG และทำตาม Texture/Clarity/Dehaze ได้ (DECISIONS ข้อ 27)
+const START_VERSION: u32 = 3;
+
 /// ค่าเริ่มต้นเมื่อแต่งจาก RAW (คิดจากไฟล์ RAW ครั้งแรกที่ต้องใช้ แล้วเก็บไว้)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -410,6 +414,8 @@ struct Start {
     /// None = ใช้ RAW แต่งไม่ได้ (`problem` บอกเหตุ)
     settings: Option<EditSettings>,
     problem: Option<String>,
+    #[serde(default)]
+    version: u32,
 }
 
 fn json<T: serde::de::DeserializeOwned>(v: Option<String>) -> Option<T> {
@@ -426,7 +432,8 @@ pub fn load(conn: &Connection, photo_id: &str) -> Result<Option<Pair>> {
                     raw_path: PathBuf::from(r.get::<_, String>(0)?),
                     filename: r.get(1)?,
                     lightroom: json(r.get(2)?),
-                    start: json(r.get(3)?),
+                    // คิดด้วยวิธีรุ่นก่อน = ยังไม่ได้คิด
+                    start: json::<Start>(r.get(3)?).filter(|s| s.version == START_VERSION),
                     available: r.get(4)?,
                 })
             },
@@ -499,18 +506,31 @@ pub fn ensure_start(app: &crate::App, photo_id: &str) -> Result<()> {
     }
     let Ok(raw) = crate::media::read_file(&pair.raw_path) else { return Ok(()) };
     let jpeg = jpeg_path.and_then(|p| crate::media::read_file(Path::new(&p)).ok());
-    let start = compute_start(&raw, pair.lightroom.as_ref(), dims, jpeg.as_deref());
+    let lightroom = fresh_lightroom(pair.lightroom.as_ref(), jpeg.as_deref());
+    let start = compute_start(&raw, lightroom.as_ref(), dims, jpeg.as_deref());
     // คู่เปลี่ยนระหว่างคิด (ตรวจรูปใหม่พร้อมกัน): ไม่เก็บ
     app.db().execute(
-        "UPDATE photo_raw_pairs SET start = ?2 WHERE photo_id = ?1 AND start IS NULL AND path_key = ?3",
-        params![photo_id, serde_json::to_string(&start)?, crate::util::path_key(&pair.raw_path)],
+        "UPDATE photo_raw_pairs SET start = ?2, lightroom = ?4 WHERE photo_id = ?1 AND path_key = ?3",
+        params![
+            photo_id,
+            serde_json::to_string(&start)?,
+            crate::util::path_key(&pair.raw_path),
+            lightroom.map(|l| serde_json::to_string(&l)).transpose()?
+        ],
     )?;
     Ok(())
 }
 
+/// ค่าของ Lightroom อ่านใหม่จาก XMP ของ JPEG (ตัวอ่านรุ่นใหม่ทำตามได้มากขึ้น เช่น Texture) — อ่านไม่ได้ใช้ค่าที่เก็บไว้ ·
+/// คู่ที่จับจากชื่อ (JPEG จากกล้อง) ไม่มีค่าของ Lightroom
+fn fresh_lightroom(stored: Option<&Lightroom>, jpeg: Option<&[u8]>) -> Option<Lightroom> {
+    let stored = stored?;
+    Some(jpeg.and_then(jpeg_xmp).and_then(|x| Lightroom::from_xmp(&x)).unwrap_or_else(|| stored.clone()))
+}
+
 /// คิดค่าเริ่มต้นจากไฟล์ RAW ครั้งแรกที่ต้องใช้ (อ่านไฟล์ RAW) แล้วเก็บไว้ · ไฟล์ RAW หายไปภายหลัง = ใช้ไม่ได้
 pub fn raw_edit(conn: &Connection, photo_id: &str) -> Result<RawEdit> {
-    let Some(pair) = load(conn, photo_id)? else { return Ok(RawEdit::None) };
+    let Some(mut pair) = load(conn, photo_id)? else { return Ok(RawEdit::None) };
     if !pair.available {
         return Ok(RawEdit::Unusable(format!("ไม่พบไฟล์ RAW คู่ “{}” ในโฟลเดอร์ของกิจกรรม", pair.filename)));
     }
@@ -531,11 +551,17 @@ pub fn raw_edit(conn: &Connection, photo_id: &str) -> Result<RawEdit> {
             let jpeg = crate::catalog::photo_path(conn, photo_id)
                 .ok()
                 .and_then(|p| crate::media::read_file(Path::new(&p)).ok());
-            let start = compute_start(&bytes, pair.lightroom.as_ref(), (w, h), jpeg.as_deref());
+            let lightroom = fresh_lightroom(pair.lightroom.as_ref(), jpeg.as_deref());
+            let start = compute_start(&bytes, lightroom.as_ref(), (w, h), jpeg.as_deref());
             conn.execute(
-                "UPDATE photo_raw_pairs SET start = ?2 WHERE photo_id = ?1",
-                params![photo_id, serde_json::to_string(&start)?],
+                "UPDATE photo_raw_pairs SET start = ?2, lightroom = ?3 WHERE photo_id = ?1",
+                params![
+                    photo_id,
+                    serde_json::to_string(&start)?,
+                    lightroom.as_ref().map(serde_json::to_string).transpose()?
+                ],
             )?;
+            pair.lightroom = lightroom;
             start
         }
     };
@@ -559,7 +585,7 @@ fn compute_start(
     jpeg: (u32, u32),
     jpeg_bytes: Option<&[u8]>,
 ) -> Start {
-    let problem = |p: String| Start { settings: None, problem: Some(p) };
+    let problem = |p: String| Start { settings: None, problem: Some(p), version: START_VERSION };
     let info = match raw::info(raw_bytes) {
         Ok(info) => info,
         Err(e) => return problem(e.message),
@@ -590,7 +616,7 @@ fn compute_start(
     // ค่าที่อยู่นอกช่วงของเรา (เช่นค่าแสงเกิน ±3) ถูกหนีบไว้แล้วตอนอ่าน — ตรวจซ้ำเผื่อไว้
     let settings = EditSettings { adjust, from_raw: true, ..Default::default() };
     match settings.validate() {
-        Ok(()) => Start { settings: Some(settings), problem: None },
+        Ok(()) => Start { settings: Some(settings), problem: None, version: START_VERSION },
         Err(e) => problem(e.message),
     }
 }
@@ -846,7 +872,8 @@ mod tests {
         assert_eq!(lr.frame, Frame { left: 0.013625, top: 0.0, right: 0.967597, bottom: 0.998252, angle: 1.21 });
         assert_eq!(lr.white_balance, Some([4550.0, 7.0]));
         assert_eq!((lr.adjust.exposure, lr.adjust.highlights, lr.adjust.temperature), (0.25, -30.0, 0.0));
-        assert_eq!(lr.unsupported, ["Texture -10", "แก้เลนส์ (Lens Corrections)", "Mask “Hair”"]);
+        assert_eq!(lr.adjust.texture, -10.0, "Texture ทำตามได้แล้ว (ข้อ 27)");
+        assert_eq!(lr.unsupported, ["แก้เลนส์ (Lens Corrections)", "Mask “Hair”"]);
         // ไม่ได้ตัด = ทั้งภาพ · JPEG ที่ไม่มี XMP
         assert_eq!(Frame::from_xmp(r#"crs:HasCrop="False" crs:CropLeft="0.2""#), Frame::FULL);
         assert_eq!(jpeg_xmp(&jpeg_with_xmp("")[..0]), None);

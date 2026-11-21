@@ -267,7 +267,8 @@
     await click(tid('editor-tab-presets'), 'แท็บ Preset');
     await click(await see('preset-import'), 'นำเข้า .xmp');
     const imported = await see('preset-imported', 'หน้าต่างผลการนำเข้า');
-    expect(text(imported).includes('Texture +15') && text(imported).includes('Adobe Vivid'), `บอกส่วนที่นำเข้าไม่ได้ (ได้ "${text(imported)}")`);
+    // Texture นำเข้าได้แล้ว (DECISIONS ข้อ 27) · Profile ยังทำตามไม่ได้
+    expect(text(imported).includes('พื้นผิว +15') && text(imported).includes('Adobe Vivid'), `บอกส่วนที่นำเข้าได้/ไม่ได้ (ได้ "${text(imported)}")`);
     await click(tid('preset-imported-apply'), 'ใช้กับรูปนี้');
     await waitFor(() => tids('preset-item').some((b) => b.getAttribute('aria-pressed') === 'true'), 'preset ที่นำเข้าถูกใช้อยู่');
     // ปรับเพิ่มแล้วบันทึกเป็น preset ของตัวเอง

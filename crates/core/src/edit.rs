@@ -455,7 +455,7 @@ pub(crate) fn render_base(
 pub struct EditParts {
     /// ตัด หมุน ปรับเอียง (แต่ละรูปมักตัดต่างกัน — UI ไม่ติ๊กไว้ก่อน)
     pub geometry: bool,
-    /// ค่าแสง คอนทราสต์ ส่วนสว่าง เงา จุดขาว จุดดำ และเส้นโค้งโทน
+    /// ค่าแสง คอนทราสต์ ส่วนสว่าง เงา จุดขาว จุดดำ Texture Clarity Dehaze และเส้นโค้งโทน
     pub light: bool,
     /// อุณหภูมิสี โทนสี ความสดของสี ความอิ่มสี และ HSL
     pub color: bool,
@@ -471,6 +471,7 @@ impl EditParts {
         if self.light {
             (a.exposure, a.contrast, a.highlights, a.shadows, a.whites, a.blacks) =
                 (f.exposure, f.contrast, f.highlights, f.shadows, f.whites, f.blacks);
+            (a.texture, a.clarity, a.dehaze) = (f.texture, f.clarity, f.dehaze);
             (a.parametric, a.parametric_split) = (f.parametric, f.parametric_split);
             (a.curve, a.curve_red, a.curve_green, a.curve_blue) =
                 (f.curve.clone(), f.curve_red.clone(), f.curve_green.clone(), f.curve_blue.clone());

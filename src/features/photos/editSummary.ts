@@ -9,6 +9,9 @@ const LIGHT: [SliderKey, string][] = [
   ['shadows', 'เงา'],
   ['whites', 'จุดขาว'],
   ['blacks', 'จุดดำ'],
+  ['texture', 'พื้นผิว'],
+  ['clarity', 'ความชัด'],
+  ['dehaze', 'ลดหมอก'],
 ];
 const COLOR: [SliderKey, string][] = [
   ['temperature', 'อุณหภูมิสี'],

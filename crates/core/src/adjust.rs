@@ -27,6 +27,10 @@ pub struct Adjust {
     pub shadows: f64,
     pub whites: f64,
     pub blacks: f64,
+    /// ปรับที่ดูพิกเซลรอบข้าง (DECISIONS ข้อ 27): รายละเอียดเล็ก (ผิว เนื้อผ้า) · มิติช่วงกลาง · หมอก — ลบ = นุ่ม/เติมหมอก
+    pub texture: f64,
+    pub clarity: f64,
+    pub dehaze: f64,
     /// อุณหภูมิสี: บวก = อุ่น (เหลือง) ลบ = เย็น (ฟ้า)
     pub temperature: f64,
     /// โทนสี: บวก = ม่วงแดง ลบ = เขียว
@@ -258,6 +262,9 @@ impl Adjust {
             self.shadows,
             self.whites,
             self.blacks,
+            self.texture,
+            self.clarity,
+            self.dehaze,
             self.temperature,
             self.tint,
             self.vibrance,
@@ -292,6 +299,9 @@ impl Adjust {
             self.shadows,
             self.whites,
             self.blacks,
+            self.texture,
+            self.clarity,
+            self.dehaze,
             self.temperature,
             self.tint,
             self.vibrance,
@@ -564,6 +574,10 @@ pub fn apply_linear(img: &image::Rgb32FImage, a: &Adjust) -> image::RgbImage {
         }
         dst.0 = v.map(|x| (x.clamp(0.0, 1.0) * 255.0).round() as u8);
     }
+    if crate::local::is_active(a) {
+        let (w, h) = (out.width() as usize, out.height() as usize);
+        crate::local::apply(&mut out, w, h, 3, w.max(h) as f32, a);
+    }
     out
 }
 
@@ -729,6 +743,7 @@ pub fn apply_profile(img: DynamicImage, a: &Adjust, profile: Profile) -> Dynamic
     let only_curves = !a.per_pixel() && !vignette;
     let (w, h) = (img.width() as f64, img.height() as f64);
     let width = img.width() as usize;
+    let height = img.height() as usize;
     // ตารางสามช่องที่ปัดเป็น 0–255 แล้ว: กรณีไม่ปรับสีต่อพิกเซล ใช้ตารางตรง ๆ เร็วที่สุด
     let table: [[u8; 256]; 3] = curves.map(|t| t.map(|v| (v * 255.0).round() as u8));
     let alpha = img.color().has_alpha();
@@ -749,6 +764,9 @@ pub fn apply_profile(img: DynamicImage, a: &Adjust, profile: Profile) -> Dynamic
             a.pixel_at(&curves, v, t)
         };
         px[..3].copy_from_slice(&out);
+    }
+    if crate::local::is_active(a) {
+        crate::local::apply(raw, width, height, n, width.max(height) as f32, a);
     }
     if alpha {
         DynamicImage::ImageRgba8(rgba)

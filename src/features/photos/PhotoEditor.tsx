@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Aperture, Crop, Eye, Info, Palette, Pipette, RotateCcw, RotateCw, ScanFace, Sun, TriangleAlert, Wand2 } from 'lucide-react';
+import { Aperture, Crop, Eye, Info, Palette, Pipette, RotateCcw, RotateCw, ScanFace, Sparkle, Sun, TriangleAlert, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
 import { InlineNotice, Spinner } from '@/components/ui/Feedback';
@@ -13,6 +13,7 @@ import type { EditSettings, PhotoDetails, RawPairInfo, UnitRect } from '@/lib/ip
 import { NEUTRAL, applyToPixels, autoAdjust, histogram, isNeutral, neutralize, type Adjust, type Histogram, type Profile, type SliderKey } from './adjust';
 import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, SliderRow, ToneCurvePanel, VignettePanel } from './AdjustControls';
 import { EditPresets } from './EditPresets';
+import { applyLocal, hasLocal } from './local';
 import {
   FULL,
   IDENTITY,
@@ -63,6 +64,13 @@ const LIGHT: SliderSpec[] = [
   { key: 'shadows', label: 'เงา', min: -100, max: 100, step: 1 },
   { key: 'whites', label: 'จุดขาว', min: -100, max: 100, step: 1 },
   { key: 'blacks', label: 'จุดดำ', min: -100, max: 100, step: 1 },
+];
+
+// ปรับที่ดูพิกเซลรอบข้าง (DECISIONS ข้อ 27) — ชื่อเดียวกับ Lightroom ในวงเล็บ
+const PRESENCE: SliderSpec[] = [
+  { key: 'texture', label: 'พื้นผิว (Texture)', min: -100, max: 100, step: 1, ends: ['นุ่ม เนียน', 'คม'] },
+  { key: 'clarity', label: 'ความชัด (Clarity)', min: -100, max: 100, step: 1, ends: ['นวล', 'มีมิติ'] },
+  { key: 'dehaze', label: 'ลดหมอก (Dehaze)', min: -100, max: 100, step: 1, ends: ['เติมหมอก', 'ใส'] },
 ];
 
 const COLOR: SliderSpec[] = [
@@ -173,6 +181,8 @@ function paint(
   const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
   if (adjusting) {
     applyToPixels(pixels.data, s.adjust, frame ? canvas.width : undefined, profile);
+    // รัศมีคิดจากด้านยาวของทั้งกรอบ (ขยายดูบางส่วนก็ได้ผลแบบเดียวกับทั้งภาพ)
+    if (hasLocal(s.adjust)) applyLocal(pixels.data, canvas.width, canvas.height, 4, Math.max(frameW, frameH), s.adjust);
     ctx.putImageData(pixels, 0, 0);
   }
   return wantHistogram ? histogram(pixels.data) : null;
@@ -486,6 +496,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
                   </Button>
                 </div>
                 <SliderGroup title="แสง" icon={<Sun className="size-4 text-muted" aria-hidden />} specs={LIGHT} adjust={settings.adjust} onChange={setAdjust} />
+                <SliderGroup title="รายละเอียด" icon={<Sparkle className="size-4 text-muted" aria-hidden />} specs={PRESENCE} adjust={settings.adjust} onChange={setAdjust} />
                 <LevelsPanel adjust={settings.adjust} onChange={setAdjust} />
                 <ToneCurvePanel adjust={settings.adjust} onChange={setAdjust} />
                 <SliderGroup

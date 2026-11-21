@@ -307,6 +307,10 @@ export interface EditAdjust {
   shadows: number;
   whites: number;
   blacks: number;
+  /** ปรับที่ดูพิกเซลรอบข้าง (−100 ถึง 100): รายละเอียดเล็ก · มิติช่วงกลาง · หมอก — ลบ = นุ่ม/เติมหมอก (DECISIONS ข้อ 27) */
+  texture: number;
+  clarity: number;
+  dehaze: number;
   temperature: number;
   tint: number;
   vibrance: number;
