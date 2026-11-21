@@ -312,6 +312,58 @@ pub fn auto(app: &App, req: &PointRequest) -> Result<serde_json::Value> {
     Ok(serde_json::json!({ "exposure": exposure, "whites": whites, "blacks": blacks }))
 }
 
+/// AI ช่วยจัดองค์ประกอบ (DECISIONS ข้อ 38): ความเอียงจากภาพต้นทาง + กรอบตัดที่เสนอบนภาพที่หมุน/ปรับเอียงตาม `settings`
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompositionRequest {
+    pub photo_id: String,
+    pub source: SourceKind,
+    pub settings: EditSettings,
+    /// สัดส่วนที่ล็อกไว้ (กว้าง/สูง ของภาพผล) — ไม่ส่ง = เสนอสัดส่วนเดิมก่อน แล้วสัดส่วนอื่น
+    #[serde(default)]
+    pub ratio: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Composition {
+    /// ค่าปรับเอียงที่เสนอ (องศา ตามเข็มนาฬิกา แบบ `EditSettings::straighten`) — None = หลักฐานไม่ชัด ไม่เสนอ
+    pub straighten: Option<f64>,
+    pub tilt: Option<crate::compose::Tilt>,
+    pub crops: Vec<crate::compose::CropSuggestion>,
+}
+
+pub fn composition(app: &App, req: &CompositionRequest) -> Result<Composition> {
+    req.settings.validate()?;
+    let src = source(app, &req.photo_id, req.source)?;
+    let tilt = crate::compose::detect_tilt(&src.level(0));
+    // ภาพเล็กพอสำหรับเลือกกรอบ (แผนที่ความเด่นใช้ด้านยาว 192)
+    let mut k = 0;
+    while src.level(k + 1).width().max(src.level(k + 1).height()) >= 480 {
+        k += 1;
+    }
+    let small = src.level(k);
+    let frame_settings = EditSettings { crop: None, ..req.settings.clone() };
+    let frame =
+        crate::edit::render_geometry(image::DynamicImage::ImageRgb8((*small).clone()), &frame_settings).into_rgb8();
+    let g = Geometry::new(small.width(), small.height(), &frame_settings);
+    let boxes: Vec<crate::faces::BBox> = {
+        let conn = app.db();
+        let mut stmt = conn.prepare(
+            "SELECT f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h FROM faces f JOIN photos p ON p.current_revision_id = f.photo_revision_id
+             WHERE p.id = ?1 AND f.status = 'active'",
+        )?;
+        let rows = stmt.query_map([&req.photo_id], |r| {
+            Ok(crate::faces::BBox { x: r.get(0)?, y: r.get(1)?, w: r.get(2)?, h: r.get(3)? })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let faces: Vec<[f64; 4]> = boxes.into_iter().filter_map(|b| g.map_box(b)).map(|b| [b.x, b.y, b.w, b.h]).collect();
+    let crops = crate::compose::suggest_crops(&frame, &faces, req.ratio.filter(|r| r.is_finite() && *r > 0.0));
+    let straighten = tilt.map(|t| (-t.degrees).clamp(-crate::edit::MAX_STRAIGHTEN, crate::edit::MAX_STRAIGHTEN));
+    Ok(Composition { straighten, tilt, crops })
+}
+
 /// ค่าแสง — แตะเฉพาะภาพที่ค่ากลางความสว่างมืดกว่า 30% หรือสว่างกว่า 62% และไม่เกิน ±1 EV · จุดดำ/จุดขาว — ยืดช่วงให้เต็ม
 /// (0.5% และ 99.5% หลังปรับค่าแสง) ไม่เกิน ±60 · นับทุกพิกเซลที่สี่ของภาพ RGBA
 fn auto_light(rgba: &[u8], profile: Profile) -> (f64, f64, f64) {

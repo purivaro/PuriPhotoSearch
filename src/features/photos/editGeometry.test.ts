@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NEUTRAL } from './adjust';
-import { boxToFrame, cutOut, dragCrop, fitAspect, outputSize, rotateCrop, toFrame, turn } from './editGeometry';
+import { boxToFrame, cutOut, dragCrop, fitAspect, levelDelta, outputSize, rotateCrop, toFrame, turn } from './editGeometry';
 
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
 
@@ -54,5 +54,23 @@ describe('คณิตของหน้าแต่งภาพ (ค่าเ�
     expect(near(locked.h, locked.w * 1.5)).toBe(true);
     expect(locked.x + locked.w).toBeLessThanOrEqual(1 + 1e-9);
     expect(locked.y + locked.h).toBeLessThanOrEqual(1 + 1e-9);
+  });
+});
+
+describe('ลากเส้นให้ตรง (DECISIONS ข้อ 38)', () => {
+  const deg = (a: number) => (a * Math.PI) / 180;
+  it('เส้นที่เกือบแนวนอน: ปรับให้เป็นแนวนอน ลากไปทางไหนก็ได้ผลเดียวกัน', () => {
+    // เส้นลาดลงไปทางขวา 3° (เอียงตามเข็ม) → ต้องหมุนทวนเข็ม 3°
+    expect(levelDelta(Math.cos(deg(3)), Math.sin(deg(3)))).toBeCloseTo(-3, 9);
+    expect(levelDelta(-Math.cos(deg(3)), -Math.sin(deg(3)))).toBeCloseTo(-3, 9);
+    expect(levelDelta(1, -Math.tan(deg(2)))).toBeCloseTo(2, 9);
+    expect(levelDelta(10, 0)).toBeCloseTo(0, 9);
+  });
+  it('เส้นที่เกือบแนวตั้ง: ปรับให้เป็นแนวตั้ง', () => {
+    // เสาที่ยอดเอียงไปทางขวา (ล่างไปบน: dx +, dy −) = ภาพเอียงตามเข็ม 4° (แบบเดียวกับเส้นแนวนอนที่ลาดลงทางขวา) → หมุนทวนเข็ม
+    expect(levelDelta(Math.sin(deg(4)), -Math.cos(deg(4)))).toBeCloseTo(-4, 9);
+    expect(levelDelta(-Math.sin(deg(4)), Math.cos(deg(4)))).toBeCloseTo(-4, 9);
+    expect(levelDelta(-Math.sin(deg(2.5)), -Math.cos(deg(2.5)))).toBeCloseTo(2.5, 9);
+    expect(levelDelta(0, 50)).toBeCloseTo(0, 9);
   });
 });

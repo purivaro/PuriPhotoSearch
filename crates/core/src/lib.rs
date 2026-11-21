@@ -10,6 +10,7 @@ pub mod assets;
 pub mod assistant;
 pub mod backup;
 pub mod catalog;
+pub mod compose;
 pub mod cull;
 pub mod db;
 pub mod edit;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Aperture, ChevronRight, Crop, Eye, Info, Palette, Pipette, RotateCcw, RotateCw, ScanFace, Sparkle, Sun, TriangleAlert, Wand2 } from 'lucide-react';
+import { Aperture, ChevronRight, Crop, Eye, Info, Palette, Pipette, RotateCcw, RotateCw, Ruler, ScanFace, Sparkle, Sparkles, Sun, TriangleAlert, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
 import { InlineNotice, Spinner } from '@/components/ui/Feedback';
@@ -9,7 +9,7 @@ import { Tabs } from '@/components/ui/Form';
 import { cn } from '@/lib/cn';
 import { errorMessage, formatCount } from '@/lib/format';
 import { call, renderPreview } from '@/lib/ipc/client';
-import type { EditSettings, PhotoDetails, PreviewRequest, PreviewSource, RawPairInfo, UnitRect } from '@/lib/ipc/types';
+import type { CropSuggestion, EditSettings, PhotoDetails, PreviewRequest, PreviewSource, RawPairInfo, UnitRect } from '@/lib/ipc/types';
 import { NEUTRAL, histogram, isNeutral, type Adjust, type Histogram } from './adjust';
 import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, SharpenPanel, ToneCurvePanel, VignettePanel } from './AdjustControls';
 import { EditPresets } from './EditPresets';
@@ -26,6 +26,7 @@ import {
   dragCrop,
   fitAspect,
   isIdentity,
+  levelDelta,
   outputSize,
   rotateCrop,
   rotatedSize,
@@ -112,6 +113,16 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
   const [aspect, setAspect] = useState<Aspect>('free');
   const [portrait, setPortrait] = useState(false);
   const [straightening, setStraightening] = useState(false);
+  // AI ช่วยจัดองค์ประกอบ (DECISIONS ข้อ 38): กรอบที่เสนอ และโหมดลากเส้นให้ตรง
+  const [suggestions, setSuggestions] = useState<CropSuggestion[] | null>(null);
+  const [leveling, setLeveling] = useState(false);
+  // กรอบที่เสนอคิดบนภาพที่หมุน/เอียงตามค่าขณะนั้น — หมุนหรือเอียงใหม่แล้วใช้ไม่ได้
+  const frameKey = `${settings.rotate}|${settings.straighten}`;
+  const [suggestedFor, setSuggestedFor] = useState(frameKey);
+  if (suggestions && suggestedFor !== frameKey) {
+    setSuggestions(null);
+    setSuggestedFor(frameKey);
+  }
   const [before, setBefore] = useState(false);
   const [hist, setHist] = useState<Histogram | null>(null);
   // หลอดดูดสี: คลิกจุดที่ควรเป็นสีขาว/เทา เพื่อตั้งอุณหภูมิสีและโทนสี
@@ -165,15 +176,16 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
       if (event.key === 'Escape' && !confirmDiscard && !nested) {
         event.preventDefault();
         event.stopPropagation();
-        // Esc ระหว่างใช้หลอดดูดสี = เลิกเลือกจุด ไม่ใช่ปิดหน้าแต่งภาพ
+        // Esc ระหว่างใช้หลอดดูดสี/ลากเส้นให้ตรง = เลิกโหมดนั้น ไม่ใช่ปิดหน้าแต่งภาพ
         if (picking) setPicking(false);
+        else if (leveling) setLeveling(false);
         else if (dirty) setConfirmDiscard('close');
         else onClose();
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [dirty, confirmDiscard, onClose, picking]);
+  }, [dirty, confirmDiscard, onClose, picking, leveling]);
 
   const chooseAspect = (a: Aspect, upright = portrait) => {
     setAspect(a);
@@ -196,6 +208,54 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
     } catch (e) {
       toast.error(errorMessage(e));
     }
+  };
+
+  // AI ช่วยจัดองค์ประกอบ: ความเอียงจากเส้นตรงในภาพ · กรอบตัดที่เสนอ (Rust คิดจากภาพต้นทางและใบหน้าของรูป)
+  const composition = useMutation({
+    mutationFn: (_what: 'tilt' | 'crop') => call('suggest_composition', { photoId: details.id, source: sourceKind, settings, ratio }),
+    onSuccess: (r, what) => {
+      if (what === 'crop') {
+        setSuggestions(r.crops);
+        setSuggestedFor(frameKey);
+        if (r.crops.length === 0) toast.info('ยังหากรอบที่เหมาะกับรูปนี้ไม่ได้ ลองเลือกสัดส่วน “อิสระ” แล้วลองใหม่');
+        return;
+      }
+      if (r.straighten === null) {
+        toast.info('ไม่พบเส้นที่ยืนยันความเอียงได้ชัด', { description: 'ลอง “ลากเส้นให้ตรง” ตามขอบฟ้า ขอบอาคาร หรือเสาแทน' });
+      } else if (Math.abs(r.straighten - settings.straighten) < 0.2) {
+        toast.info('ภาพตรงอยู่แล้วตามเส้นในภาพ');
+      } else {
+        const value = Math.round(r.straighten * 10) / 10;
+        setSettings((s) => ({ ...s, straighten: value }));
+        setSuggestions(null);
+        toast.success(`ปรับเอียง ${value.toFixed(1)}° ตามเส้นตรงในภาพแล้ว`, { description: 'ไม่ตรงใจปรับต่อได้ที่แถบปรับเอียง หรือลากเส้นให้ตรงเอง' });
+      }
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const applySuggestion = (c: CropSuggestion) => {
+    const map: Record<string, [Aspect, boolean] | undefined> = {
+      original: ['original', portrait],
+      '1:1': ['1:1', false],
+      '3:2': ['3:2', false],
+      '2:3': ['3:2', true],
+      '4:3': ['4:3', false],
+      '16:9': ['16:9', false],
+      '4:5': ['4:5', true],
+    };
+    const next = map[c.ratio];
+    if (next) {
+      setAspect(next[0]);
+      setPortrait(next[1]);
+    }
+    setSettings((s) => ({ ...s, crop: c.crop }));
+  };
+  const level = (delta: number) => {
+    const value = Math.max(-MAX_STRAIGHTEN, Math.min(MAX_STRAIGHTEN, Math.round((settings.straighten + delta) * 10) / 10));
+    setLeveling(false);
+    setSuggestions(null);
+    setSettings((s) => ({ ...s, straighten: value }));
+    toast.success(`ปรับเอียงเป็น ${value.toFixed(1)}° ตามเส้นที่ลากแล้ว`);
   };
 
   const faces = details.faces.map((face) => {
@@ -258,6 +318,8 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
           ratio={ratio}
           mode={tab}
           straightening={straightening}
+          leveling={leveling}
+          onLevel={level}
           before={before}
           faces={faces}
           onCrop={(next) => setSettings((s) => ({ ...s, crop: next }))}
@@ -301,6 +363,70 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
             {pair && <RawPairNotice pair={pair} fromRaw={fromRaw} />}
             {tab === 'crop' ? (
               <>
+                <section aria-labelledby="editor-ai-compose" className="rounded-xl border border-brand-line bg-brand-soft/60 p-3">
+                  <h3 id="editor-ai-compose" className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-ink">
+                    <Sparkles className="size-4 text-action" aria-hidden /> ให้ AI ช่วยจัดองค์ประกอบ
+                  </h3>
+                  <p className="mb-2.5 text-[12.5px] leading-snug text-muted">ดูเส้นตรงในภาพ ใบหน้า และตัวคน แล้วเสนอการปรับเอียงและกรอบตัดตามกฎสามส่วน — คิดในเครื่อง</p>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <Button
+                      size="sm"
+                      disabled={!ready}
+                      busy={composition.isPending && composition.variables === 'tilt'}
+                      onClick={() => composition.mutate('tilt')}
+                      data-testid="editor-auto-straighten"
+                    >
+                      ปรับเอียงอัตโนมัติ
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={!ready}
+                      busy={composition.isPending && composition.variables === 'crop'}
+                      onClick={() => composition.mutate('crop')}
+                      data-testid="editor-suggest-crop"
+                    >
+                      เสนอการครอป
+                    </Button>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant={leveling ? 'primary' : 'ghost'}
+                    className="mt-1.5 w-full"
+                    icon={<Ruler className="size-4" aria-hidden />}
+                    disabled={!ready}
+                    aria-pressed={leveling}
+                    onClick={() => setLeveling((v) => !v)}
+                    data-testid="editor-level-line"
+                  >
+                    {leveling ? 'ลากบนภาพ… (Esc ยกเลิก)' : 'ลากเส้นให้ตรงเอง'}
+                  </Button>
+                  {suggestions && suggestions.length > 0 && (
+                    <div className="mt-2.5" role="group" aria-label="กรอบตัดที่ AI เสนอ">
+                      <p className="mb-1.5 text-[12.5px] text-muted">กดเพื่อใช้ · ปรับต่อได้ด้วยการลากกรอบ</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {suggestions.map((c, i) => {
+                          const active = settings.crop !== null && sameRect(settings.crop, c.crop);
+                          return (
+                            <button
+                              key={`${c.ratio}-${i}`}
+                              type="button"
+                              aria-pressed={active}
+                              onClick={() => applySuggestion(c)}
+                              data-testid={`editor-crop-suggestion-${i}`}
+                              className={cn(
+                                'rounded-lg border px-2.5 py-1.5 text-[12.5px] font-semibold transition-colors',
+                                active ? 'border-action bg-action text-on-action' : 'border-line-strong bg-surface text-ink hover:bg-sunken',
+                              )}
+                            >
+                              แบบที่ {i + 1} · {c.ratio === 'original' || c.ratio === 'locked' ? 'สัดส่วนเดิม' : c.ratio}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </section>
+
                 <section>
                   <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-ink">
                     <Crop className="size-4 text-muted" aria-hidden /> สัดส่วน
@@ -525,6 +651,9 @@ interface EditCanvasProps {
   ratio: number | null;
   mode: Tab;
   straightening: boolean;
+  /** ลากเส้นให้ตรง: ลากตามเส้นที่ควรเป็นแนวนอน/แนวตั้งแล้วปล่อย → องศาที่ต้องปรับเพิ่ม */
+  leveling: boolean;
+  onLevel: (delta: number) => void;
   before: boolean;
   faces: { face: PhotoDetails['faces'][number]; box: UnitRect; cut: boolean }[];
   onCrop: (crop: UnitRect) => void;
@@ -538,8 +667,29 @@ interface EditCanvasProps {
 }
 
 /** ตัวอย่างภาพที่แต่ง: แท็บตัดและหมุนแสดงทั้งกรอบพร้อมกรอบตัดที่ลากได้ · แท็บแสงและสีแสดงเฉพาะส่วนที่ตัดพร้อมแสงสี */
-function EditCanvas({ photoId, sourceKind, onReady, failMessage, settings, frameAspect, ratio, mode, straightening, before, faces, onCrop, onHistogram, picking, onPick, overlay }: EditCanvasProps) {
+function EditCanvas({
+  photoId,
+  sourceKind,
+  onReady,
+  failMessage,
+  settings,
+  frameAspect,
+  ratio,
+  mode,
+  straightening,
+  leveling,
+  onLevel,
+  before,
+  faces,
+  onCrop,
+  onHistogram,
+  picking,
+  onPick,
+  overlay,
+}: EditCanvasProps) {
   const area = useRef<HTMLDivElement>(null);
+  // เส้นที่กำลังลาก (พิกเซลในกรอบภาพ)
+  const [line, setLine] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const drag = useRef<{ handle: Handle; x: number; y: number; start: UnitRect } | null>(null);
@@ -712,9 +862,45 @@ function EditCanvas({ photoId, sourceKind, onReady, failMessage, settings, frame
                   />
                 ))}
               </div>
+              {leveling && (
+                <div
+                  className="absolute inset-0 z-20 cursor-crosshair touch-none"
+                  data-testid="editor-level-surface"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                    const r = e.currentTarget.getBoundingClientRect();
+                    const [x, y] = [e.clientX - r.left, e.clientY - r.top];
+                    setLine({ x0: x, y0: y, x1: x, y1: y });
+                  }}
+                  onPointerMove={(e) => {
+                    if (!line) return;
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setLine({ ...line, x1: e.clientX - r.left, y1: e.clientY - r.top });
+                  }}
+                  onPointerUp={() => {
+                    if (line && Math.hypot(line.x1 - line.x0, line.y1 - line.y0) >= 24) onLevel(levelDelta(line.x1 - line.x0, line.y1 - line.y0));
+                    setLine(null);
+                  }}
+                  onPointerCancel={() => setLine(null)}
+                >
+                  {line && (
+                    <svg aria-hidden className="pointer-events-none absolute inset-0 size-full">
+                      <line x1={line.x0} y1={line.y0} x2={line.x1} y2={line.y1} stroke="black" strokeOpacity={0.55} strokeWidth={4} />
+                      <line x1={line.x0} y1={line.y0} x2={line.x1} y2={line.y1} stroke="white" strokeWidth={2} strokeDasharray="7 5" />
+                    </svg>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>
+      )}
+      {mode === 'crop' && leveling && state === 'ready' && (
+        <p className="pointer-events-none absolute top-3 left-1/2 z-30 -translate-x-1/2 rounded-full bg-black/75 px-3 py-1 text-[13px] font-semibold text-white">
+          ลากตามเส้นที่ควรตรง (ขอบฟ้า ขอบอาคาร เสา) แล้วปล่อย · Esc ยกเลิก
+        </p>
       )}
       {mode === 'crop' && faces.length > 0 && state === 'ready' && (
         <p className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-1.5 rounded-md bg-black/65 px-2 py-1 text-[12.5px] text-white">
@@ -731,4 +917,8 @@ function EditCanvas({ photoId, sourceKind, onReady, failMessage, settings, frame
       )}
     </div>
   );
+}
+
+function sameRect(a: UnitRect, b: UnitRect): boolean {
+  return Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6 && Math.abs(a.w - b.w) < 1e-6 && Math.abs(a.h - b.h) < 1e-6;
 }
