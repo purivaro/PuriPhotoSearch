@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { toast } from 'sonner';
-import { Aperture, Calendar, Check, CircleAlert, Folder, FolderPlus, FolderSearch, Image as ImageIcon, Info, Lock, Pencil, SquareArrowOutUpRight, TriangleAlert } from 'lucide-react';
+import { Aperture, Calendar, Check, CircleAlert, Folder, FolderPlus, FolderSearch, Image as ImageIcon, Info, Lock, Pencil, ScanFace, SlidersHorizontal, SquareArrowOutUpRight, TriangleAlert } from 'lucide-react';
 import { Page, PageHeader, useDocumentTitle } from '@/app/PageLayout';
 import { useStartImport, type ImportLocationState } from '@/app/navigation';
 import { Button } from '@/components/ui/Button';
@@ -201,9 +201,10 @@ function ReviewForm({
 }: ReviewFormProps) {
   const [mode, setMode] = useState<SourceMode>(preview.suggestedMode);
   const [edits, setEdits] = useState<DraftEdits>(() => initialEdits(preview));
+  // หาคนในรูปเลย / แต่งก่อน สแกนใบหน้าทีหลัง (หลวงพี่เลือก 21 พ.ย. 2569) — ส่งความตั้งใจนี้ไปเสมอ ยังไม่มีโมเดลก็ตาม
+  // (ดาวน์โหลดเสร็จแล้วแอปวิเคราะห์เฉพาะกิจกรรมที่เลือก "หาคนเลย") · เครื่องที่วิเคราะห์ไม่ได้เลย = ไม่มีตัวเลือก
   const [analyzeFaces, setAnalyzeFaces] = useState(true);
-  // เปิดสวิตช์ได้เมื่อพร้อมใช้ หรือกำลังดาวน์โหลดอยู่ (ดาวน์โหลดเสร็จแล้วแอปจะวิเคราะห์รูปในคลังต่อเอง)
-  const faceAnalysisAvailable = faceState === 'ready' || faceState === 'installing';
+  const faceAnalysisAvailable = faceState !== null && faceState !== 'unsupported';
   const [watch, setWatch] = useState(true);
   // ไฟล์ RAW ที่ไม่มี JPEG คู่: เปิดไว้เมื่อโฟลเดอร์มีแต่ RAW · มี JPEG ด้วยปิดไว้ก่อน (DECISIONS ข้อ 25–26) · RAW ที่เป็นคู่รวมกับ JPEG เสมอ
   const [includeRaw, setIncludeRaw] = useState(() => rawDefault(preview));
@@ -256,9 +257,11 @@ function ReviewForm({
       if (result.createdEvents > 0) parts.push(`เพิ่ม ${formatCount(result.createdEvents)} กิจกรรม`);
       if (result.reusedEvents > 0) parts.push(`ตรวจรูปใหม่ใน ${formatCount(result.reusedEvents)} กิจกรรมเดิม`);
       toast.success(
-        faceAnalysisAvailable && analyzeFaces
+        faceState === 'ready' && analyzeFaces
           ? 'เพิ่มกิจกรรมแล้ว กำลังวิเคราะห์ใบหน้า ใช้รูปที่พร้อมได้ทันที'
-          : `${parts.join(' · ') || 'เพิ่มกิจกรรมแล้ว'} กำลังเตรียมข้อมูลรูป ใช้รูปที่พร้อมได้ทันที`,
+          : faceAnalysisAvailable && !analyzeFaces
+            ? `${parts.join(' · ') || 'เพิ่มกิจกรรมแล้ว'} — คัดและแต่งรูปได้เลย แต่งเสร็จกด “สแกนใบหน้า” ในหน้ากิจกรรม`
+            : `${parts.join(' · ') || 'เพิ่มกิจกรรมแล้ว'} กำลังเตรียมข้อมูลรูป ใช้รูปที่พร้อมได้ทันที`,
       );
       onCommitted(result.eventIds);
     },
@@ -374,22 +377,7 @@ function ReviewForm({
             }
           />
         )}
-        <Switch
-          checked={analyzeFaces && faceAnalysisAvailable}
-          onCheckedChange={setAnalyzeFaces}
-          disabled={!faceAnalysisAvailable}
-          testId="import-analyze-faces"
-          label="วิเคราะห์ใบหน้าเมื่อเพิ่มเสร็จ"
-          description={
-            faceState === 'ready'
-              ? 'ทำเบื้องหลัง ใช้รูปที่พร้อมได้ระหว่างรอ'
-              : faceState === 'installing'
-                ? 'จะเริ่มเองเมื่อดาวน์โหลดตัววิเคราะห์ใบหน้าเสร็จ'
-                : faceState === 'not_installed'
-                  ? 'ยังไม่ได้ดาวน์โหลดตัววิเคราะห์ใบหน้า — กดดาวน์โหลดด้านล่างได้เลย เพิ่มกิจกรรมได้โดยไม่ต้องรอ'
-                  : faceAnalysisReason || 'เครื่องนี้ยังวิเคราะห์ใบหน้าอัตโนมัติไม่ได้ ระบุใบหน้าเองได้จากตัวดูภาพ'
-          }
-        />
+        <FaceChoice value={analyzeFaces && faceAnalysisAvailable} onChange={setAnalyzeFaces} state={faceState} reason={faceAnalysisReason} />
         <Switch
           checked={watch && folderWatchAvailable}
           onCheckedChange={setWatch}
@@ -614,5 +602,76 @@ function DraftRow({
         </p>
       </div>
     </li>
+  );
+}
+
+/** ใบหน้าในรูป: หาคนเลย หรือแต่งก่อนแล้วสแกนทีหลัง (หลวงพี่เลือก 21 พ.ย. 2569 — สแกนจากภาพที่แต่งในคลัง ไม่สร้างไฟล์ใหม่) */
+function FaceChoice({
+  value,
+  onChange,
+  state,
+  reason,
+}: {
+  value: boolean;
+  onChange: (analyzeNow: boolean) => void;
+  state: FaceAnalysisStatus['state'] | null;
+  reason: string;
+}) {
+  if (state === null) return null;
+  if (state === 'unsupported') {
+    return (
+      <p className="flex items-start gap-1.5 text-sm text-muted" data-testid="import-face-unsupported">
+        <ScanFace className="mt-0.5 size-4 shrink-0" aria-hidden />
+        {reason || 'เครื่องนี้ยังวิเคราะห์ใบหน้าอัตโนมัติไม่ได้ ระบุใบหน้าเองได้จากตัวดูภาพ'}
+      </p>
+    );
+  }
+  const now =
+    state === 'ready'
+      ? 'วิเคราะห์ใบหน้าเบื้องหลังทันทีที่เพิ่มเสร็จ ค้นรูปตามคนได้เร็ว ใช้รูปที่พร้อมได้ระหว่างรอ'
+      : state === 'installing'
+        ? 'เริ่มเองเมื่อดาวน์โหลดตัววิเคราะห์ใบหน้าเสร็จ'
+        : 'เริ่มเองเมื่อดาวน์โหลดตัววิเคราะห์ใบหน้า (ปุ่มด้านล่าง) — เพิ่มกิจกรรมได้เลยไม่ต้องรอ';
+  const options = [
+    { analyze: true, title: 'หาคนในรูปเลย', description: now, icon: ScanFace, testId: 'import-faces-now' },
+    {
+      analyze: false,
+      title: 'แต่งก่อน สแกนใบหน้าทีหลัง',
+      description: 'คัดและแต่งรูปก่อน แต่งเสร็จกด “สแกนใบหน้า” ในหน้ากิจกรรม — แอปหาใบหน้าจากภาพที่แต่งแล้ว รูปมืดที่ปรับสว่างหาหน้าเจอดีขึ้น',
+      icon: SlidersHorizontal,
+      testId: 'import-faces-later',
+    },
+  ];
+  return (
+    <fieldset>
+      <legend className="mb-2 text-sm font-semibold text-ink">ใบหน้าในรูป</legend>
+      <div role="radiogroup" aria-label="ใบหน้าในรูป" className="grid gap-2 sm:grid-cols-2" data-testid="import-face-choice">
+        {options.map((o) => {
+          const checked = o.analyze === value;
+          return (
+            <button
+              key={o.testId}
+              type="button"
+              role="radio"
+              aria-checked={checked}
+              onClick={() => onChange(o.analyze)}
+              data-testid={o.testId}
+              className={cn(
+                'flex items-start gap-3 rounded-xl border p-3 text-left transition-colors',
+                checked ? 'border-action bg-brand-soft' : 'border-line-strong bg-surface hover:bg-sunken',
+              )}
+            >
+              <span className={cn('mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg', checked ? 'bg-action text-on-action' : 'bg-sunken text-muted')}>
+                <o.icon className="size-[18px]" aria-hidden />
+              </span>
+              <span className="min-w-0">
+                <span className={cn('block text-[14.5px] font-semibold', checked ? 'text-action' : 'text-ink')}>{o.title}</span>
+                <span className="mt-0.5 block text-[13px] leading-snug text-muted">{o.description}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </fieldset>
   );
 }

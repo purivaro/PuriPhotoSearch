@@ -359,6 +359,12 @@ pub fn analyze(app: &App, event_id: Option<&str>) -> Result<Vec<String>> {
     }
     let ids = {
         let conn = app.db();
+        // ผู้ใช้สั่งสแกนเอง = ต้องการวิเคราะห์ใบหน้าของกิจกรรมนี้ (รวมรูปที่เพิ่มภายหลัง) แม้ตอนเพิ่มโฟลเดอร์เลือก "แต่งก่อน"
+        conn.execute(
+            "UPDATE sources SET analyze_faces = 1
+             WHERE id IN (SELECT source_id FROM event_source_bindings WHERE ?1 IS NULL OR event_id = ?1)",
+            [event_id],
+        )?;
         let ids = enqueue_analysis(&conn, event_id)?;
         db::bump_revision(&conn)?;
         ids

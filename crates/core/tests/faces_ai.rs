@@ -634,3 +634,45 @@ fn merging_duplicate_people_keeps_samples_confirmations_groups_and_pins() {
     let alone = lib.try_call("merge_persons", json!({ "targetId": keep, "sourceIds": [keep], "requestId": new_id() }));
     assert_eq!(alone.unwrap_err().code, "INVALID_INPUT");
 }
+
+#[test]
+fn edit_first_scan_later_finds_faces_on_the_edited_photo() {
+    // แต่งก่อน สแกนทีหลัง (หลวงพี่เลือก 21 พ.ย. 2569): เพิ่มโฟลเดอร์แบบไม่วิเคราะห์ใบหน้า → แต่งรูปมืดให้สว่าง → สแกน
+    // ตัววิเคราะห์เห็นภาพที่แต่งแล้ว (แสงสี ไม่ตัด) · รูปที่ไม่ได้แต่งหาจากไฟล์ตามเดิม · ไฟล์ต้นฉบับไม่ถูกแตะ
+    let lib = Lib::with_ai();
+    publish_fake_model(lib.tmp.path(), false);
+    assert_eq!(lib.install_model()["state"], "completed");
+    let root = lib.photos().join("2026-11-22 แต่งก่อน");
+    write_jpeg(&root.join("dark.jpg"), 6); // สีแดง 6: ตัววิเคราะห์จำลองยังไม่เห็นใบหน้า
+    write_jpeg(&root.join("plain.jpg"), 6);
+    let preview = lib.preview(&root);
+    lib.call(
+        "commit_import",
+        json!({ "previewId": preview["previewId"], "requestId": puri_core::util::new_id(), "mode": "single_event",
+                "drafts": drafts_of(&preview, "single_event", |_| true), "analyzeFaces": false, "watch": false }),
+    );
+    lib.run_jobs();
+    let before = tree_state(&root);
+    let pending = "SELECT COUNT(*) FROM photo_revisions WHERE face_status = 'not_analyzed'";
+    assert_eq!(lib.count(pending), 2, "เลือกแต่งก่อน: ยังไม่วิเคราะห์ใบหน้า แม้โมเดลพร้อม");
+
+    // แต่งรูปมืดให้สว่าง (+ ตัดภาพด้วย — การหาใบหน้าไม่ใช้การตัด จึงไม่พลาดใบหน้านอกกรอบ)
+    let dark = lib.photo_id("dark.jpg");
+    let mut adjust = json!({});
+    adjust["exposure"] = json!(3.0);
+    lib.call(
+        "save_photo_edit",
+        json!({ "photoId": dark, "settings": { "adjust": adjust, "crop": { "x": 0.5, "y": 0.5, "w": 0.5, "h": 0.5 } } }),
+    );
+    let event = lib.query(json!({}))["items"][0]["eventId"].as_str().unwrap().to_string();
+    lib.call("analyze_faces", json!({ "eventId": event }));
+    lib.run_jobs();
+
+    let faces = faces_of(&lib, "dark.jpg");
+    assert_eq!(faces.len(), 1, "รูปที่แต่งสว่างแล้วหาใบหน้าเจอ: {faces:?}");
+    let b = &faces[0]["sourceBbox"];
+    assert_eq!((b["x"].as_f64(), b["y"].as_f64()), (Some(0.3), Some(0.2)), "พิกัดของภาพเดิม (ไม่ใช่ของกรอบที่ตัด)");
+    assert!(faces_of(&lib, "plain.jpg").is_empty(), "รูปที่ไม่ได้แต่งหาจากไฟล์เดิม (มืด) จึงไม่เจอ");
+    assert_eq!(lib.count(pending), 0, "สแกนครบทั้งงาน");
+    assert_eq!(tree_state(&root), before, "ไฟล์ต้นฉบับไม่ถูกแตะ");
+}

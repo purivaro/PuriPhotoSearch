@@ -122,7 +122,8 @@
     // ไฟล์ RAW นับแยก มีสวิตช์ "รวมไฟล์ RAW" ปิดไว้ก่อนเพราะโฟลเดอร์มี JPEG ด้วย (DECISIONS ข้อ 25)
     expect(tid('import-include-raw')?.getAttribute('aria-checked') === 'false', 'สวิตช์รวมไฟล์ RAW ปิดไว้ก่อน');
     expect(text(tid('import-review')).includes('รวมไฟล์ RAW (1 ไฟล์)'), 'นับไฟล์ RAW แยก');
-    expect(tid('import-analyze-faces').disabled, 'สวิตช์วิเคราะห์ใบหน้าปิดใช้งานเมื่อยังไม่มี AI');
+    // เครื่องที่ไม่มีตัววิเคราะห์ใบหน้า (e2e ปิดไว้): ไม่มีตัวเลือก "หาคนเลย / แต่งก่อน" มีแต่คำอธิบาย
+    expect(tid('import-face-unsupported') && !tid('import-face-choice'), 'ไม่มีตัวเลือกสแกนใบหน้าเมื่อเครื่องนี้ยังไม่มี AI');
     expect((await rpc('list_events')).length === 0, 'ยังไม่มีกิจกรรมถาวรก่อนกดเพิ่ม');
     // แก้ชื่อกิจกรรมหนึ่งงานก่อนเพิ่ม (ไม่เปลี่ยนชื่อโฟลเดอร์จริง)
     const lightsRow = rows().find((r) => tid('import-draft-title', r).value === 'กิจกรรมจุดประทีป');
