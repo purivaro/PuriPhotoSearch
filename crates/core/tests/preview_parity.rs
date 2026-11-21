@@ -9,7 +9,7 @@
 //! ดูชุดที่ไม่ตรง: `PURI_PARITY_ONLY=<ids>` · ลองมากขึ้น: `PURI_PARITY_N=20000`
 
 use image::{DynamicImage, Rgb, RgbImage};
-use puri_core::adjust::{Adjust, Grading, Levels, Profile, Vignette, Wheel};
+use puri_core::adjust::{Adjust, Grading, Levels, Profile, Sharpen, Vignette, Wheel};
 use puri_core::edit::{EditSettings, Geometry, Rect};
 use puri_core::masks::{Area, Mask};
 use puri_core::preview::{render_image, Request, SourceKind};
@@ -160,6 +160,14 @@ fn adjust(rng: &mut Rng) -> Adjust {
             midpoint: rng.int(0, 100) as f64,
             feather: rng.int(0, 100) as f64,
             roundness: rng.slider(100.0, 1.0),
+        };
+    }
+    if rng.chance(0.2) {
+        a.sharpen = Sharpen {
+            amount: rng.int(1, 150) as f64,
+            radius: rng.int(5, 30) as f64 / 10.0,
+            detail: rng.int(0, 100) as f64,
+            masking: rng.int(0, 100) as f64,
         };
     }
     a
@@ -331,6 +339,9 @@ fn features(s: &EditSettings, profile: Profile) -> Vec<&'static str> {
     }
     if a.vignette.amount != 0.0 {
         f.push("vignette");
+    }
+    if a.sharpen.is_active() {
+        f.push("sharpen");
     }
     if s.rotate != 0 || s.straighten != 0.0 || s.crop.is_some() {
         f.push("geometry");

@@ -1,7 +1,7 @@
 //! preset ของการแต่งภาพ (DECISIONS ข้อ 20): ค่าแสงและสีที่บันทึกไว้ใช้ซ้ำ และนำเข้าจาก preset `.xmp` ของ Lightroom
 //!
 //! การนำเข้าอ่านเฉพาะค่าที่ตัวแต่งภาพของเราทำได้ (แสงพื้นฐาน Texture Clarity Dehaze ความสด/ความอิ่ม HSL เส้นโค้งโทน Parametric curve
-//! สมดุลแสงขาว ขาวดำ Color Grading Vignette) ที่เหลือ (Profile, Mask, Sharpening …) บันทึกเป็นรายการ "นำเข้าไม่ได้" ให้ผู้ใช้เห็นตามจริง
+//! สมดุลแสงขาว ขาวดำ Color Grading Vignette ความคม) ที่เหลือ (Profile, Mask, ลดนอยส์ …) บันทึกเป็นรายการ "นำเข้าไม่ได้" ให้ผู้ใช้เห็นตามจริง
 //! ผลจึงใกล้เคียงกับ Lightroom ไม่ใช่เท่ากันทุกพิกเซล — สูตรของ Adobe ไม่เปิดเผย
 
 use crate::adjust::{Adjust, Grading, Vignette, Wheel};
@@ -256,6 +256,15 @@ pub fn parse_lightroom(text: &str) -> Result<Parsed> {
         blending: num(text, "ColorGradeBlending").unwrap_or(50.0).clamp(0.0, 100.0),
         balance: clamp(num(text, "SplitToningBalance").unwrap_or(0.0)),
     };
+    // ความคม (DECISIONS ข้อ 36): ค่าเดียวกับ Lightroom
+    if let Some(amount) = num(text, "Sharpness").filter(|v| *v > 0.0) {
+        a.sharpen = crate::adjust::Sharpen {
+            amount: amount.clamp(0.0, 150.0),
+            radius: num(text, "SharpenRadius").unwrap_or(1.0).clamp(0.5, 3.0),
+            detail: num(text, "SharpenDetail").unwrap_or(25.0).clamp(0.0, 100.0),
+            masking: num(text, "SharpenEdgeMasking").unwrap_or(0.0).clamp(0.0, 100.0),
+        };
+    }
     if let Some(amount) = num(text, "PostCropVignetteAmount").filter(|v| *v != 0.0) {
         a.vignette = Vignette {
             amount: clamp(amount),
@@ -272,8 +281,7 @@ pub fn parse_lightroom(text: &str) -> Result<Parsed> {
         }
     }
     // (ชื่อใน xmp, ชื่อที่แสดง, ค่าติดลบได้)
-    for (key, label, bipolar) in
-        [("GrainAmount", "Grain", false), ("LuminanceSmoothing", "ลดนอยส์", false), ("Sharpness", "Sharpening", false)]
+    for (key, label, bipolar) in [("GrainAmount", "Grain", false), ("LuminanceSmoothing", "ลดนอยส์", false)]
     {
         if let Some(v) = num(text, key).filter(|v| *v != 0.0) {
             unsupported.push(format!("{label} {}", if bipolar { signed(v) } else { format!("{v}") }));
@@ -393,6 +401,21 @@ mod tests {
         assert_eq!((a.vignette.amount, a.vignette.midpoint, a.vignette.feather), (-18.0, 35.0, 50.0));
         assert!(a.validate().is_ok());
         assert_eq!(p.unsupported, ["Profile “Adobe Portrait”", "ลดนอยส์ 11", "Mask “Smoothen Face”"]);
+    }
+
+    #[test]
+    fn sharpening_is_imported_with_lightroom_defaults_for_missing_values() {
+        let p = parse_lightroom(r#"<x crs:Sharpness="40" crs:SharpenRadius="+1.0" crs:SharpenDetail="25"/>"#).unwrap();
+        assert_eq!(p.adjust.sharpen, crate::adjust::Sharpen { amount: 40.0, radius: 1.0, detail: 25.0, masking: 0.0 });
+        assert!(p.unsupported.is_empty(), "{:?}", p.unsupported);
+        // ค่าเกินช่วงถูกหนีบ · Sharpness 0 = ไม่ทำ
+        let big =
+            parse_lightroom(r#"<x crs:Sharpness="200" crs:SharpenRadius="9" crs:SharpenEdgeMasking="70"/>"#).unwrap();
+        assert_eq!(
+            (big.adjust.sharpen.amount, big.adjust.sharpen.radius, big.adjust.sharpen.masking),
+            (150.0, 3.0, 70.0)
+        );
+        assert!(!parse_lightroom(r#"<x crs:Sharpness="0"/>"#).unwrap().adjust.sharpen.is_active());
     }
 
     #[test]

@@ -11,7 +11,7 @@ import { errorMessage, formatCount } from '@/lib/format';
 import { call, renderPreview } from '@/lib/ipc/client';
 import type { EditSettings, PhotoDetails, PreviewRequest, PreviewSource, RawPairInfo, UnitRect } from '@/lib/ipc/types';
 import { NEUTRAL, histogram, isNeutral, type Adjust, type Histogram } from './adjust';
-import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, ToneCurvePanel, VignettePanel } from './AdjustControls';
+import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, SharpenPanel, ToneCurvePanel, VignettePanel } from './AdjustControls';
 import { EditPresets } from './EditPresets';
 import { MaskPanel } from './MaskPanel';
 import { RetouchPanel } from './RetouchPanel';
@@ -439,6 +439,7 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
                 <HslPanel adjust={settings.adjust} onChange={setAdjust} />
                 <ColorGradingPanel adjust={settings.adjust} onChange={setAdjust} />
                 <VignettePanel adjust={settings.adjust} onChange={setAdjust} />
+                <SharpenPanel adjust={settings.adjust} onChange={setAdjust} />
                 <BeforeButton disabled={isNeutral(settings.adjust)} onHold={setBefore} />
               </>
             ) : tab === 'masks' ? (

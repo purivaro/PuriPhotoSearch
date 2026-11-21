@@ -9,12 +9,14 @@ import {
   HUE_SWATCHES,
   LEVELS_IDENTITY,
   NEUTRAL,
+  SHARPEN_NEUTRAL,
   VIGNETTE_NEUTRAL,
   curveFunction,
   gradingIsActive,
   hasCurves,
   hasHsl,
   hasLevels,
+  hasSharpen,
   hasVignette,
   type Adjust,
   type Histogram,
@@ -561,6 +563,23 @@ export function ColorGradingPanel({ adjust, onChange }: { adjust: Adjust; onChan
 }
 
 /** ขอบภาพมืด/สว่าง (Vignette หลังตัด) */
+/** ความคมแบบ Lightroom (DECISIONS ข้อ 36) — เห็นชัดในไฟล์ที่ส่งออกขนาดเต็ม ภาพตัวอย่างย่อจึงเห็นน้อย */
+export function SharpenPanel({ adjust, onChange }: { adjust: Adjust; onChange: (patch: Partial<Adjust>) => void }) {
+  const v = adjust.sharpen ?? SHARPEN_NEUTRAL;
+  const set = (patch: Partial<typeof v>) => onChange({ sharpen: { ...v, ...patch } });
+  return (
+    <Collapsible title="ความคม (Sharpening)" active={hasSharpen(adjust)} onReset={() => onChange({ sharpen: SHARPEN_NEUTRAL })} testId="editor-sharpen">
+      <SliderRow id="editor-sharpen-amount" label="ปริมาณ" value={v.amount} min={0} max={150} step={1} defaultValue={0} format={(x) => `${x}`} onChange={(x) => set({ amount: x })} />
+      <SliderRow id="editor-sharpen-radius" label="รัศมี" value={v.radius} min={0.5} max={3} step={0.1} defaultValue={1} format={(x) => x.toFixed(1)} onChange={(x) => set({ radius: x })} />
+      <SliderRow id="editor-sharpen-detail" label="รายละเอียด" value={v.detail} min={0} max={100} step={1} defaultValue={25} format={(x) => `${x}`} ends={['กันขอบเกิน', 'ทุกรายละเอียด']} onChange={(x) => set({ detail: x })} />
+      <SliderRow id="editor-sharpen-masking" label="มาสก์ขอบ" value={v.masking} min={0} max={100} step={1} defaultValue={0} format={(x) => `${x}`} ends={['ทั้งภาพ', 'เฉพาะขอบ']} onChange={(x) => set({ masking: x })} />
+      <p className="text-[12.5px] text-muted">
+        {v.amount === 0 ? 'เลื่อน “ปริมาณ” ก่อน แถบอื่นจึงมีผล · ' : ''}เห็นชัดในไฟล์ที่ส่งออกขนาดเต็ม ภาพตัวอย่างย่ออยู่จึงเห็นน้อย (เหมือน Lightroom ที่ต้องขยาย 1:1)
+      </p>
+    </Collapsible>
+  );
+}
+
 export function VignettePanel({ adjust, onChange }: { adjust: Adjust; onChange: (patch: Partial<Adjust>) => void }) {
   const v = adjust.vignette;
   const set = (patch: Partial<Adjust['vignette']>) => onChange({ vignette: { ...v, ...patch } });

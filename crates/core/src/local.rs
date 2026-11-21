@@ -1,4 +1,4 @@
-//! ปรับที่ต้องดูพิกเซลรอบข้าง (DECISIONS ข้อ 27): Texture, Clarity, Dehaze แบบ Lightroom
+//! ปรับที่ต้องดูพิกเซลรอบข้าง (DECISIONS ข้อ 27, 36): Texture, Clarity, Dehaze และความคม (Sharpening) แบบ Lightroom
 //!
 //! ทำหลังขั้นต่อพิกเซลทั้งหมด บนภาพผล 8 บิต (sRGB) · ตัวอย่างสดในหน้าแต่งภาพใช้ฟังก์ชันเดียวกันนี้ ([`crate::preview`])
 //! · รัศมีเป็นสัดส่วนของด้านยาวของกรอบ: ภาพตัวอย่างเล็กกับไฟล์เต็มขนาดได้ผลแบบเดียวกัน
@@ -25,10 +25,15 @@ const DEHAZE_BLOCK: f64 = 0.01;
 const DEHAZE_EPS: f64 = 0.001;
 /// ความโปร่งต่ำสุด (กันส่วนที่มืดมากถูกขยายจนแตก)
 const MIN_TRANSMISSION: f64 = 0.1;
+/// ด้านยาวของภาพเต็มที่รัศมีของความคมอ้างถึง (พิกเซล) — รัศมี 1 = 1/6000 ของด้านยาวของกรอบ: ไฟล์เต็มขนาดได้รัศมีตามที่ตั้ง
+/// ภาพย่อได้รัศมีเล็กลงตามส่วน (เห็นผลน้อย เหมือน Lightroom ที่ต้องขยาย 1:1 ถึงเห็นความคม)
+const SHARPEN_REFERENCE_LONG: f64 = 6000.0;
+/// รัศมีที่เล็กกว่านี้ (พิกเซลของภาพที่ทำ) แทบไม่เห็นผล — ข้ามไป
+const SHARPEN_MIN_RADIUS: f64 = 0.25;
 
 /// มีขั้นที่ต้องดูพิกเซลรอบข้าง
 pub fn is_active(a: &Adjust) -> bool {
-    a.texture != 0.0 || a.clarity != 0.0 || a.dehaze != 0.0
+    a.texture != 0.0 || a.clarity != 0.0 || a.dehaze != 0.0 || a.sharpen.is_active()
 }
 
 /// ปรับในที่: `px` พิกเซลละ `stride` ไบต์ (3 = RGB, 4 = RGBA — ช่องที่สี่ไม่แตะ) · `long` = ด้านยาวของกรอบก่อนตัดเป็นพิกเซลของ `px`
@@ -45,6 +50,69 @@ pub fn apply(px: &mut [u8], width: usize, height: usize, stride: usize, long: f6
     if a.texture != 0.0 || a.clarity != 0.0 {
         detail(px, width, height, stride, long, a.texture / 100.0, a.clarity / 100.0);
     }
+    if a.sharpen.is_active() {
+        sharpen(px, width, height, stride, long, &a.sharpen);
+    }
+}
+
+/// เกาส์เซียนแยกแกน (แถวแล้วคอลัมน์) — ขอบใช้ค่าที่ขอบ · คิดคู่ขนานทีละแถว ผลเท่าเดิมทุกบิต
+fn gaussian(src: &[f32], w: usize, h: usize, sigma: f64) -> Vec<f32> {
+    let r = (sigma * 3.0).ceil().max(1.0) as isize;
+    let kernel: Vec<f64> = (-r..=r).map(|i| (-((i * i) as f64) / (2.0 * sigma * sigma)).exp()).collect();
+    let total: f64 = kernel.iter().sum();
+    let kernel: Vec<f64> = kernel.iter().map(|k| k / total).collect();
+    let pass = |src: &[f32], w: usize, h: usize| -> Vec<f32> {
+        let mut out = vec![0.0f32; w * h];
+        out.par_chunks_mut(w).enumerate().for_each(|(y, line)| {
+            let row = &src[y * w..y * w + w];
+            for (x, o) in line.iter_mut().enumerate() {
+                let mut s = 0.0f64;
+                for (k, weight) in kernel.iter().enumerate() {
+                    let xx = (x as isize + k as isize - r).clamp(0, w as isize - 1) as usize;
+                    s += weight * row[xx] as f64;
+                }
+                *o = s as f32;
+            }
+        });
+        out
+    };
+    let rows = pass(src, w, h);
+    let cols = pass(&transpose(&rows, w, h), h, w);
+    transpose(&cols, h, w)
+}
+
+/// ความคม: unsharp mask บนความสว่าง · Detail ต่ำ = กดค่าที่ต่างมาก (ขอบแรง) ไม่ให้เกิดเส้นขาว/ดำรอบวัตถุ ·
+/// Masking = คมเฉพาะที่มีขอบ (วัดจากความต่างเฉลี่ยรอบ ๆ)
+fn sharpen(px: &mut [u8], w: usize, h: usize, stride: usize, long: f64, s: &crate::adjust::Sharpen) {
+    let sigma = s.radius * long / SHARPEN_REFERENCE_LONG;
+    if sigma < SHARPEN_MIN_RADIUS {
+        return;
+    }
+    let y: Vec<f32> = px[..w * h * stride].par_chunks_exact(stride).map(|p| luma(p) as f32).collect();
+    let blurred = gaussian(&y, w, h, sigma);
+    // ขนาดของความต่างที่ยังเพิ่มเต็มที่ — Detail 0 ≈ 0.02 (รายละเอียดเล็กเท่านั้น) · Detail 100 ≈ 0.22 (ทุกขอบ แบบ USM ทั่วไป)
+    let knee = 0.02 + 0.2 * s.detail / 100.0;
+    let edges = (s.masking > 0.0).then(|| {
+        let diff: Vec<f32> = y.iter().zip(&blurred).map(|(a, b)| (a - b).abs()).collect();
+        gaussian(&diff, w, h, sigma * 2.0)
+    });
+    let threshold = 0.03 * s.masking / 100.0;
+    let strength = s.amount / 100.0 * 1.5;
+    px[..w * h * stride].par_chunks_mut(w * stride).enumerate().for_each(|(row, line)| {
+        for col in 0..w {
+            let i = row * w + col;
+            let high = (y[i] - blurred[i]) as f64;
+            let high = high / (1.0 + high.abs() / knee);
+            let mask = match &edges {
+                Some(e) if threshold > 0.0 => ((e[i] as f64 - threshold) / threshold + 1.0).clamp(0.0, 1.0),
+                _ => 1.0,
+            };
+            let delta = strength * high * mask;
+            for v in &mut line[col * stride..col * stride + 3] {
+                *v = to_u8(*v as f64 / 255.0 + delta);
+            }
+        }
+    });
 }
 
 fn luma(p: &[u8]) -> f64 {
@@ -350,6 +418,45 @@ pub const LOCAL_EXPECTED: [([f64; 3], [[u8; 3]; 5]); 7] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sharpened(px: &[u8], w: usize, h: usize, sharpen: crate::adjust::Sharpen) -> Vec<u8> {
+        let a = Adjust { sharpen, ..Default::default() };
+        let mut out = px.to_vec();
+        // ด้านยาว 6000 = รัศมีเป็นพิกเซลของภาพทดสอบตรง ๆ
+        apply(&mut out, w, h, 3, SHARPEN_REFERENCE_LONG, &a);
+        out
+    }
+
+    #[test]
+    fn sharpening_lifts_the_contrast_at_an_edge_and_leaves_flat_areas() {
+        let (w, h) = (32, 6);
+        let px: Vec<u8> = (0..w * h).flat_map(|i| if i % w < 16 { [80u8; 3] } else { [160u8; 3] }).collect();
+        let s = crate::adjust::Sharpen { amount: 100.0, radius: 1.0, detail: 100.0, masking: 0.0 };
+        let out = sharpened(&px, w, h, s);
+        let at = |x: usize| out[(2 * w + x) * 3];
+        assert!(at(15) < 80 && at(16) > 160, "ขอบเข้มขึ้นทั้งสองฝั่ง ({}, {})", at(15), at(16));
+        assert_eq!((at(2), at(29)), (80, 160), "ไกลจากขอบไม่เปลี่ยน");
+        // ไม่ทำ = ภาพเดิม · พื้นเรียบไม่เปลี่ยน
+        assert_eq!(sharpened(&px, w, h, crate::adjust::Sharpen::default()), px);
+        let flat = vec![120u8; w * h * 3];
+        assert_eq!(sharpened(&flat, w, h, s), flat);
+    }
+
+    #[test]
+    fn low_detail_tames_halos_and_masking_spares_soft_texture() {
+        let (w, h) = (32, 6);
+        let edge: Vec<u8> = (0..w * h).flat_map(|i| if i % w < 16 { [40u8; 3] } else { [220u8; 3] }).collect();
+        let s = |detail, masking| crate::adjust::Sharpen { amount: 100.0, radius: 1.0, detail, masking };
+        let overshoot = |out: &[u8]| 40 - out[(2 * w + 15) * 3] as i32;
+        assert!(
+            overshoot(&sharpened(&edge, w, h, s(0.0, 0.0))) < overshoot(&sharpened(&edge, w, h, s(100.0, 0.0))),
+            "Detail ต่ำ ขอบแรงเกินน้อยกว่า"
+        );
+        // ลายจาง ๆ (ต่างกัน 4 ระดับ) — Masking สูงไม่ทำให้คม
+        let soft: Vec<u8> = (0..w * h).flat_map(|i| if (i % w) % 2 == 0 { [118u8; 3] } else { [122u8; 3] }).collect();
+        let change = |out: &[u8]| out.iter().zip(&soft).map(|(a, b)| (*a as i32 - *b as i32).abs()).sum::<i32>();
+        assert!(change(&sharpened(&soft, w, h, s(25.0, 100.0))) < change(&sharpened(&soft, w, h, s(25.0, 0.0))));
+    }
 
     fn adjust(texture: f64, clarity: f64, dehaze: f64) -> Adjust {
         Adjust { texture, clarity, dehaze, ..Default::default() }

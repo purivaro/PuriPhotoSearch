@@ -3,7 +3,7 @@
  * — ภาพทุกแบบ (ตัวอย่างสดในหน้าแต่งภาพ ภาพย่อ ตัวดูภาพ สำเนาที่ส่งออก) Rust วาดด้วย `adjust.rs` ชุดเดียว (DECISIONS ข้อ 30)
  */
 
-import type { EditAdjust, Grading, Levels, Vignette, Wheel } from '@/lib/ipc/types';
+import type { EditAdjust, Grading, Levels, Sharpen, Vignette, Wheel } from '@/lib/ipc/types';
 
 export type Adjust = EditAdjust;
 
@@ -11,6 +11,8 @@ export const LEVELS_IDENTITY: Levels = { inBlack: 0, inWhite: 255, gamma: 1, out
 const NO_WHEEL: Wheel = { hue: 0, sat: 0, lum: 0 };
 export const GRADING_NEUTRAL: Grading = { shadows: NO_WHEEL, midtones: NO_WHEEL, highlights: NO_WHEEL, global: NO_WHEEL, blending: 50, balance: 0 };
 export const VIGNETTE_NEUTRAL: Vignette = { amount: 0, midpoint: 50, feather: 50, roundness: 0 };
+/** ความคม: ไม่ทำ (ค่ารัศมี/รายละเอียดตั้งไว้ตามค่าเริ่มต้นของ Lightroom ให้เลื่อนปริมาณแล้วได้ผลแบบเดียวกัน) */
+export const SHARPEN_NEUTRAL: Sharpen = { amount: 0, radius: 1, detail: 25, masking: 0 };
 
 export const HUE_NAMES = ['แดง', 'ส้ม', 'เหลือง', 'เขียว', 'ฟ้าน้ำทะเล', 'น้ำเงิน', 'ม่วง', 'ม่วงแดง'];
 /** สีของจุดหน้าชื่อช่วงสี */
@@ -47,6 +49,7 @@ export const NEUTRAL: Adjust = {
   levelsBlue: LEVELS_IDENTITY,
   grading: GRADING_NEUTRAL,
   vignette: VIGNETTE_NEUTRAL,
+  sharpen: SHARPEN_NEUTRAL,
 };
 
 const SLIDERS = ['exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks', 'texture', 'clarity', 'dehaze', 'temperature', 'tint', 'vibrance', 'saturation'] as const;
@@ -68,10 +71,13 @@ export const levelsIsIdentity = (l: Levels) =>
 export const hasLevels = (a: Adjust) => ![a.levels, a.levelsRed, a.levelsGreen, a.levelsBlue].every(levelsIsIdentity);
 export const gradingIsActive = (g: Grading) => [g.shadows, g.midtones, g.highlights, g.global].some((w) => w.sat !== 0 || w.lum !== 0);
 export const hasVignette = (a: Adjust) => a.vignette.amount !== 0;
+export const hasSharpen = (a: Adjust) => (a.sharpen?.amount ?? 0) > 0;
 
 export function isNeutral(a: Adjust): boolean {
   // ช่องที่ไม่มีในค่าที่บันทึกก่อนรุ่นนี้ (เช่น texture) = 0
-  return SLIDERS.every((k) => (a[k] ?? 0) === 0) && !hasHsl(a) && !hasCurves(a) && !hasLevels(a) && !gradingIsActive(a.grading) && !hasVignette(a);
+  return (
+    SLIDERS.every((k) => (a[k] ?? 0) === 0) && !hasHsl(a) && !hasCurves(a) && !hasLevels(a) && !gradingIsActive(a.grading) && !hasVignette(a) && !hasSharpen(a)
+  );
 }
 
 /** เส้นโค้งผ่านจุดแบบ monotone cubic (Fritsch–Carlson): ไม่แกว่งเกินจุด — ค่านอกช่วงจุดแรก/สุดท้ายเท่าจุดปลาย */

@@ -546,6 +546,7 @@ impl EditParts {
             (a.levels, a.levels_red, a.levels_green, a.levels_blue) =
                 (f.levels, f.levels_red, f.levels_green, f.levels_blue);
             a.vignette = f.vignette;
+            a.sharpen = f.sharpen;
         }
         if self.color {
             (a.temperature, a.tint, a.vibrance, a.saturation) = (f.temperature, f.tint, f.vibrance, f.saturation);
