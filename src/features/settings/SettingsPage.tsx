@@ -136,9 +136,13 @@ function GeneralTab({ capabilities }: { capabilities: Capabilities }) {
             ['รุ่นฐานข้อมูลของคลัง', String(capabilities.schemaVersion)],
             ['ระบบที่ใช้งาน', capabilities.platform],
             ['ชนิดไฟล์รูปที่เปิดได้', capabilities.imageFormats.map((f) => `.${f}`).join('  ') || 'ไม่มี'],
+            ['ไฟล์ RAW จากกล้อง', capabilities.rawFormats.map((f) => `.${f}`).join('  ') || 'ไม่มี'],
           ]}
         />
-        <p className="mt-2 text-[13px] text-muted">ไฟล์ภาพชนิดอื่นจะถูกนับและรายงานว่า “ไม่รองรับ” ตอนเพิ่มโฟลเดอร์ ไม่ถูกแก้ไขหรือซ่อนหาย</p>
+        <p className="mt-2 text-[13px] text-muted">
+          ไฟล์ RAW นำเข้าเมื่อเลือก “รวมไฟล์ RAW” ตอนเพิ่มโฟลเดอร์ (กล้องบางรุ่นอาจยังเปิดไม่ได้ — แจ้งเป็นรายไฟล์) · ไฟล์ภาพชนิดอื่นจะถูกนับและรายงานว่า “ไม่รองรับ”
+          ตอนเพิ่มโฟลเดอร์ ไม่ถูกแก้ไขหรือซ่อนหาย
+        </p>
       </section>
     </>
   );

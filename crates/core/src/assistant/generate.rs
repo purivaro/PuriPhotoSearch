@@ -440,6 +440,7 @@ fn register_folder(
                     }],
                     analyze_faces: true,
                     watch: true,
+                    include_raw: false,
                 },
             )?;
         }

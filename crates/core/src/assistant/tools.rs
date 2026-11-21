@@ -618,8 +618,10 @@ impl PhotoTools {
         // คิดจากรูปหลังตัด/หมุนแต่ก่อนปรับแสงสี: ค่าที่เสนอเป็นค่าจริง เรียกซ้ำหลังใส่แล้วได้คำตอบเดิม (ไม่สะสม)
         let bytes = crate::assets::source_or_plain_thumb(&self.app, id).map_err(|e| e.message)?;
         let geometry_only = EditSettings { adjust: Default::default(), ..current.clone() };
-        let base = edit::render_small(&bytes, &geometry_only, 256).map_err(|e| e.message)?;
-        let s = look::suggest(&base, &current.adjust, &reference, style.as_ref());
+        let path = { crate::catalog::photo_path(&self.app.db(), id).map_err(|e| e.message)? };
+        let profile = crate::assets::profile_of(std::path::Path::new(&path));
+        let base = edit::render_small(&bytes, &geometry_only, 256, profile).map_err(|e| e.message)?;
+        let s = look::suggest(&base, &current.adjust, &reference, style.as_ref(), profile);
         let (gap_now, gap_after) = (look::distance(&s.now, &reference), look::distance(&s.after, &reference));
         let mut notes = String::new();
         if s.copied {

@@ -174,8 +174,14 @@ function parametric(x: number, amounts: number[], splits: number[]): number {
 /** เส้นโค้งผ่านจุดแบบ monotone cubic (Fritsch–Carlson): ไม่แกว่งเกินจุด — ค่านอกช่วงจุดแรก/สุดท้ายเท่าจุดปลาย */
 function spline(points: [number, number][]): (x: number) => number {
   if (points.length < 2 || curveIsIdentity(points)) return (x) => x;
-  const xs = points.map((p) => p[0] / 255);
-  const ys = points.map((p) => p[1] / 255);
+  return splineXY(
+    points.map((p) => p[0] / 255),
+    points.map((p) => p[1] / 255),
+  );
+}
+
+/** เหมือน `spline` แต่รับจุดใดก็ได้ (x เพิ่มขึ้น) อย่างน้อยสองจุด — สูตรเดียวกับ `Spline::from_xy` ใน Rust */
+function splineXY(xs: number[], ys: number[]): (x: number) => number {
   const n = xs.length;
   const d = Array.from({ length: n - 1 }, (_, k) => (ys[k + 1]! - ys[k]!) / (xs[k + 1]! - xs[k]!));
   const ms = new Array<number>(n).fill(0);
@@ -237,16 +243,85 @@ export function histogram(data: Uint8ClampedArray): Histogram {
  * สมดุลแสงขาวจากจุดที่ควรเป็นสีเทา (หลอดดูดสี): อุณหภูมิสี/โทนสีที่ทำให้สีของจุดนั้นเป็นกลาง
  * แก้สมการของ `curves` (คูณในแสงเชิงเส้น): แดง × (1 + 0.25T) = น้ำเงิน × (1 − 0.25T) = เขียว × (1 − 0.2Ti)
  */
-export function neutralize(r: number, g: number, b: number): { temperature: number; tint: number } {
-  const [rl, gl, bl] = [r, g, b].map((v) => Math.max(toLinear(v / 255), 1e-4)) as [number, number, number];
+export function neutralize(r: number, g: number, b: number, profile: Profile = 'display'): { temperature: number; tint: number } {
+  const decode = profile === 'raw' ? rawToneInverse : toLinear;
+  const [rl, gl, bl] = [r, g, b].map((v) => Math.max(decode(v / 255), 1e-4)) as [number, number, number];
   const t = Math.min(Math.max((bl - rl) / (0.25 * (rl + bl)), -1), 1);
   const target = rl * (1 + 0.25 * t);
   const ti = Math.min(Math.max((1 - target / gl) / 0.2, -1), 1);
   return { temperature: Math.round(t * 100), tint: Math.round(ti * 100) };
 }
 
+/**
+ * ชนิดของภาพต้นทาง: ภาพทั่วไป (sRGB) หรือ RAW — ภาพที่หน้าแต่งภาพใช้ของรูป RAW คือโทนตั้งต้น 8 บิต ซึ่งถอดกลับเป็นแสงเชิงเส้น
+ * ด้วย `rawToneInverse` แล้วจึงปรับค่าแสง/สมดุลแสงขาวก่อนทำโทนซ้ำ (DECISIONS ข้อ 25) — สูตรเดียวกับ `Profile` ใน Rust
+ */
+export type Profile = 'display' | 'raw';
+
+/** เส้นโค้งโทนตั้งต้นของ RAW: (log2 ของแสงเชิงเส้นเทียบระดับขาวของเซนเซอร์, ค่าที่แสดง) — ค่าเดียวกับ `RAW_TONE` ใน adjust.rs */
+const RAW_TONE: [number, number][] = [
+  [-10, 0.012],
+  [-9, 0.018],
+  [-8, 0.028],
+  [-7, 0.054],
+  [-6, 0.107],
+  [-5, 0.21],
+  [-4, 0.356],
+  [-3, 0.558],
+  [-2.5, 0.66],
+  [-2, 0.756],
+  [-1.5, 0.842],
+  [-1, 0.909],
+  [-0.5, 0.958],
+  [0, 0.993],
+  [1, 1],
+];
+/** ค่าเชิงเส้นสูงสุดที่เก็บไว้เหนือระดับขาวของเซนเซอร์ (เท่า `raw::HEADROOM`) */
+const RAW_HEADROOM = 2;
+let rawSpline: ((x: number) => number) | null = null;
+
+/** โทนตั้งต้นของ RAW: แสงเชิงเส้น (1 = ระดับขาวของเซนเซอร์) → ค่าที่แสดง 0–1 */
+export function rawTone(x: number): number {
+  if (!(x > 0)) return 0;
+  const l = Math.log2(x);
+  const [first] = RAW_TONE[0]!;
+  if (l <= first) return (RAW_TONE[0]![1] * x) / Math.pow(2, first);
+  if (l >= RAW_TONE[RAW_TONE.length - 1]![0]) return 1;
+  rawSpline ??= splineXY(
+    RAW_TONE.map((p) => p[0]),
+    RAW_TONE.map((p) => p[1]),
+  );
+  return rawSpline(l);
+}
+
+/** ย้อน `rawTone` (ค้นแบบแบ่งครึ่ง) */
+export function rawToneInverse(v: number): number {
+  if (v <= 0) return 0;
+  if (v >= 1) return RAW_HEADROOM;
+  let lo = 0;
+  let hi = RAW_HEADROOM;
+  for (let i = 0; i < 60; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (rawTone(mid) < v) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+let rawDecoded: Float64Array | null = null;
+
+/** ค่าเข้า 8 บิต → แสงเชิงเส้น ตามชนิดของภาพต้นทาง */
+function decodeTable(profile: Profile): Float64Array {
+  if (profile === 'raw') {
+    rawDecoded ??= Float64Array.from({ length: 256 }, (_, i) => rawToneInverse(i / 255));
+    return rawDecoded;
+  }
+  return Float64Array.from({ length: 256 }, (_, i) => toLinear(i / 255));
+}
+
 /** ตารางของขั้นที่แยกต่อช่องสีได้: [แดง, เขียว, น้ำเงิน][ค่าเข้า 0–255] → ค่าออก 0–1 */
-export function curves(a: Adjust): [Float64Array, Float64Array, Float64Array] {
+export function curves(a: Adjust, profile: Profile = 'display'): [Float64Array, Float64Array, Float64Array] {
+  const decoded = decodeTable(profile);
   const gains = [1 + (0.25 * a.temperature) / 100, 1 - (0.2 * a.tint) / 100, 1 - (0.25 * a.temperature) / 100];
   const light = Math.pow(2, a.exposure);
   const black = (-0.1 * a.blacks) / 100;
@@ -261,7 +336,8 @@ export function curves(a: Adjust): [Float64Array, Float64Array, Float64Array] {
     const gain = gains[c] ?? 1;
     const own = channel[c]!;
     for (let i = 0; i < 256; i += 1) {
-      let x = toSrgb(clamp01(toLinear(i / 255) * gain * light));
+      const linear = decoded[i]! * gain * light;
+      let x = profile === 'raw' ? rawTone(linear) : toSrgb(clamp01(linear));
       x = clamp01((x - black) / (white - black));
       x += ((0.25 * a.shadows) / 100) * 6.75 * x * (1 - x) * (1 - x);
       x += ((0.25 * a.highlights) / 100) * 6.75 * x * x * (1 - x);
@@ -360,9 +436,10 @@ export function pixelAt(a: Adjust, tables: [Float64Array, Float64Array, Float64A
  * ปรับพิกเซลของ canvas ทั้งหมด (RGBA) — ตัวอย่างสดต้องเร็ว: ใช้ตารางตรง ๆ เมื่อไม่มีขั้นต่อพิกเซล
  * `width` = ความกว้างของภาพ เมื่อภาพนี้คือกรอบหลังตัดทั้งกรอบ (ให้คิด Vignette ได้) · ไม่ส่ง = ไม่ใส่ Vignette
  */
-export function applyToPixels(data: Uint8ClampedArray, a: Adjust, width?: number): void {
+export function applyToPixels(data: Uint8ClampedArray, a: Adjust, width?: number, profile: Profile = 'display'): void {
+  // ไม่ได้แต่ง = ภาพเดิม ทั้งภาพทั่วไปและภาพโทนตั้งต้นของ RAW
   if (isNeutral(a)) return;
-  const [cr, cg, cb] = curves(a);
+  const [cr, cg, cb] = curves(a, profile);
   const withHsl = hasHsl(a);
   const withVignette = hasVignette(a) && width !== undefined && width > 0;
   const perPixel = withHsl || gradingIsActive(a.grading);
@@ -416,7 +493,7 @@ export function applyToPixels(data: Uint8ClampedArray, a: Adjust, width?: number
  * ค่าแสง — แตะเฉพาะภาพที่ค่ากลางความสว่างมืดกว่า 30% หรือสว่างกว่า 62% และไม่เกิน ±1 EV
  * จุดดำ/จุดขาว — ยืดช่วงให้เต็ม (0.5% และ 99.5% หลังปรับค่าแสง) ไม่เกิน ±60 · ค่าสีอื่นไม่แตะ
  */
-export function autoAdjust(data: Uint8ClampedArray): Adjust {
+export function autoAdjust(data: Uint8ClampedArray, profile: Profile = 'display'): Adjust {
   const hist = new Float64Array(256);
   let count = 0;
   for (let i = 0; i < data.length; i += 16) {
@@ -436,9 +513,11 @@ export function autoAdjust(data: Uint8ClampedArray): Adjust {
   const round = (v: number, step: number) => Math.round(v / step) * step;
   const median = Math.min(Math.max(percentile(hist, 0.5), 0.02), 0.98);
   const target = median < 0.3 ? 0.36 : median > 0.62 ? 0.56 : median;
-  const exposure = Math.min(Math.max(round(Math.log2(toLinear(target) / toLinear(median)), 0.05), -1), 1);
+  // ค่าแสงทำในแสงเชิงเส้น: RAW ถอดกลับด้วยเส้นโค้งโทนตั้งต้น
+  const decode = profile === 'raw' ? rawToneInverse : toLinear;
+  const exposure = Math.min(Math.max(round(Math.log2(decode(target) / decode(median)), 0.05), -1), 1);
   // ฮิสโตแกรมหลังปรับค่าแสง แล้วจึงหาจุดดำ/จุดขาว
-  const [table] = curves({ ...NEUTRAL, exposure });
+  const [table] = curves({ ...NEUTRAL, exposure }, profile);
   const shifted = new Float64Array(256);
   hist.forEach((n, v) => {
     shifted[Math.round(table[v]! * 255)]! += n;

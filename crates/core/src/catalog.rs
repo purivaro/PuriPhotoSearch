@@ -339,6 +339,8 @@ pub struct PhotoResult {
     pub rejected_faces: Vec<String>,
     /// รหัสการแต่งล่าสุด (None = ไม่ได้แต่ง) — ใช้เป็นรุ่นของภาพย่อใน UI
     pub edit_id: Option<String>,
+    /// ไฟล์ RAW จากกล้อง: หน้าแต่งภาพใช้สูตรของ RAW (DECISIONS ข้อ 25)
+    pub raw: bool,
 }
 
 /// การแต่งของรูป (DECISIONS ข้อ 17)
@@ -401,10 +403,12 @@ const PHOTO_COLS: &str = "p.id, r.id, l.filename, e.id, e.title, r.taken_at_loca
                           r.thumbnail_status, l.available, l.os_path, r.size, e.event_date, r.decode_error, pe.edit_id";
 
 fn photo_from_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoResult> {
+    let filename: String = r.get(2)?;
     Ok(PhotoResult {
         id: r.get(0)?,
         revision_id: r.get(1)?,
-        filename: r.get(2)?,
+        raw: crate::raw::is_raw_path(std::path::Path::new(&filename)),
+        filename,
         event_id: r.get(3)?,
         event_title: r.get(4)?,
         taken_at: r.get(5)?,

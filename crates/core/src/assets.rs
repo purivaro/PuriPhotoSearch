@@ -63,7 +63,26 @@ pub fn resolve(app: &App, request_path: &str) -> Result<Asset> {
 
 fn original(app: &App, photo_id: &str) -> Result<Asset> {
     let path = PathBuf::from(crate::catalog::photo_path(&app.db(), photo_id)?);
+    if crate::raw::is_raw_path(&path) {
+        return raw_view(app, photo_id, &path);
+    }
     Ok(Asset { bytes: std::fs::read(&path)?, mime: media::mime_for(&path) })
+}
+
+/// "ต้นฉบับ" ของรูป RAW สำหรับ UI: โทนตั้งต้น JPEG ด้านยาว [`crate::edit::VIEW_EDGE`] (WebView เปิดไฟล์ RAW ไม่ได้)
+/// — ตัวดูภาพใช้แสดง และหน้าแต่งภาพใช้เป็นต้นทางของตัวอย่างสด (DECISIONS ข้อ 25) · เก็บใน cache ตาม revision
+fn raw_view(app: &App, photo_id: &str, path: &Path) -> Result<Asset> {
+    let revision_id: String =
+        app.db().query_row("SELECT current_revision_id FROM photos WHERE id = ?1", [photo_id], |r| r.get(0))?;
+    let cached = app.cache_dir.join("raw").join(format!("{revision_id}-view.jpg"));
+    if let Ok(bytes) = std::fs::read(&cached) {
+        return Ok(jpeg(bytes));
+    }
+    let original = media::read_file(path).map_err(|_| AppError::source_unavailable())?;
+    let (img, _) = crate::raw::base_image(&original, crate::edit::VIEW_EDGE)?;
+    let bytes = media::encode_jpeg(&image::DynamicImage::ImageRgb8(img), 92)?;
+    let _ = media::write_cache_file(&cached, &bytes);
+    Ok(jpeg(bytes))
 }
 
 /// ภาพที่แต่งแล้ว (เก็บใน cache ตามรหัสการแต่ง): ภาพย่อ หรือภาพสำหรับตัวดูภาพ
@@ -74,16 +93,26 @@ fn edited(app: &App, photo_id: &str, stored: &crate::edit::Stored, kind: &str) -
     }
     let (edge, quality) = if kind == "thumb" { (media::THUMB_EDGE, 82) } else { (crate::edit::VIEW_EDGE, 90) };
     let source = PathBuf::from(crate::catalog::photo_path(&app.db(), photo_id)?);
+    let profile = profile_of(&source);
     let bytes = match media::read_file(&source) {
-        Ok(original) => crate::edit::preview_jpeg(&original, &stored.settings, edge, quality)?,
+        Ok(original) => crate::edit::preview_jpeg(&original, &stored.settings, edge, quality, profile)?,
         // ต้นฉบับไม่พร้อม (ไดรฟ์ไม่ได้ต่อ): แต่งจากภาพย่อของแอปแทน ภาพเล็กลงแต่ตัด/หมุนถูก — ไม่เก็บลง cache
         Err(_) => {
             let thumb = plain_thumb(app, photo_id)?;
-            return Ok(jpeg(crate::edit::preview_jpeg(&thumb.bytes, &stored.settings, edge, quality)?));
+            return Ok(jpeg(crate::edit::preview_jpeg(&thumb.bytes, &stored.settings, edge, quality, profile)?));
         }
     };
     let _ = media::write_cache_file(&cached, &bytes);
     Ok(jpeg(bytes))
+}
+
+/// ชนิดของภาพต้นทางจากนามสกุลไฟล์ (ภาพ 8 บิตของรูป RAW เช่นภาพย่อ ต้องแต่งด้วยสูตรของ RAW)
+pub(crate) fn profile_of(path: &Path) -> crate::adjust::Profile {
+    if crate::raw::is_raw_path(path) {
+        crate::adjust::Profile::Raw
+    } else {
+        crate::adjust::Profile::Display
+    }
 }
 
 /// ไฟล์ต้นฉบับ หรือภาพย่อเดิมของแอป (หมุนตั้งตรงแล้ว ยังไม่แต่ง) เมื่อต้นฉบับไม่พร้อม — สำหรับคำนวณจากภาพก่อนแต่ง

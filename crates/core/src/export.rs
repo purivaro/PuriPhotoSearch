@@ -290,7 +290,9 @@ pub fn preview(
     let (mut bytes, mut source_bytes) = (0u64, 0u64);
     for SourceRow { photo_id, revision_id, filename, source_path, size, width, height, edited } in rows {
         let planned_name = if Path::new(&source_path).is_file() {
-            let fit = fit_with(resize, watermark.is_some() || edited, size, width, height);
+            // RAW ส่งออกเป็น JPEG เสมอ (ผู้รับเปิดไฟล์ RAW ไม่ได้) — เหมือนรูปที่แต่ง
+            let raw = crate::raw::is_raw_path(Path::new(&filename));
+            let fit = fit_with(resize, watermark.is_some() || edited || raw, size, width, height);
             let wanted = if fit.is_some() { jpeg_name(&filename) } else { filename.clone() };
             let name = unique_name(&wanted, &mut taken);
             planned += 1;
@@ -552,7 +554,8 @@ fn copy_one(
     // เขียนไฟล์ชั่วคราวในปลายทางก่อน แล้วค่อยเปลี่ยนเป็นชื่อจริงเมื่อครบ: ไฟล์ชื่อจริงจึงสมบูรณ์เสมอ
     // วิธีย่อตัดสินจากข้อมูลของ revision เดียวกับตอนวางแผน จึงตรงกับนามสกุลที่วางแผนไว้
     let tmp = dest.join(format!(".puri-export-{}.part", util::new_id()));
-    let written = match fit_with(resize, watermark.is_some() || edit.is_some(), size as u64, width, height) {
+    let reencode = watermark.is_some() || edit.is_some() || crate::raw::is_raw_path(src);
+    let written = match fit_with(resize, reencode, size as u64, width, height) {
         Some(fit) => write_resized(src, stamp, sha.as_deref(), fit, watermark, edit, &tmp),
         None => write_copy(src, stamp, sha.as_deref(), &tmp),
     };

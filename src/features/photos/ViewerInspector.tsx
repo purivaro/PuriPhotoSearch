@@ -120,6 +120,11 @@ export function ViewerInspector({ details, selectedFaceId, onSelectFace, drawMod
                   แต่งแล้ว {formatCount(details.edit.width)} × {formatCount(details.edit.height)} · ไฟล์ต้นฉบับไม่ถูกแตะ
                 </span>
               )}
+              {details.raw && (
+                <span className="block text-[13px] text-muted" data-testid="viewer-raw">
+                  ไฟล์ RAW — ภาพที่เห็นล้างจากข้อมูลเซนเซอร์ด้วยโทนตั้งต้นของแอป · แต่งได้ละเอียดกว่า JPEG · ส่งออกเป็น JPEG
+                </span>
+              )}
             </dd>
           </div>
           <div className="flex items-start gap-2">

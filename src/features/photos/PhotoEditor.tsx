@@ -10,7 +10,7 @@ import { cn } from '@/lib/cn';
 import { errorMessage, formatCount } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
 import type { EditSettings, PhotoDetails, UnitRect } from '@/lib/ipc/types';
-import { NEUTRAL, applyToPixels, autoAdjust, histogram, isNeutral, neutralize, type Adjust, type Histogram, type SliderKey } from './adjust';
+import { NEUTRAL, applyToPixels, autoAdjust, histogram, isNeutral, neutralize, type Adjust, type Histogram, type Profile, type SliderKey } from './adjust';
 import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, SliderRow, ToneCurvePanel, VignettePanel } from './AdjustControls';
 import { EditPresets } from './EditPresets';
 import {
@@ -115,7 +115,16 @@ function useSource(photoId: string) {
  * วาดภาพที่แต่งเฉพาะส่วน `view` (สัดส่วนของกรอบหลังปรับเอียง) ลง canvas ทั้งผืน
  * `frame` = canvas นี้คือกรอบหลังตัดทั้งกรอบ (คิด Vignette ได้) · คืนฮิสโตแกรมของภาพที่วาดเมื่อขอ
  */
-function paint(canvas: HTMLCanvasElement, source: HTMLCanvasElement, s: EditSettings, view: UnitRect, withAdjust: boolean, frame = false, wantHistogram = false): Histogram | null {
+function paint(
+  canvas: HTMLCanvasElement,
+  source: HTMLCanvasElement,
+  s: EditSettings,
+  view: UnitRect,
+  withAdjust: boolean,
+  frame = false,
+  wantHistogram = false,
+  profile: Profile = 'display',
+): Histogram | null {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   const r = rotatedSize(source.width, source.height, s.rotate);
@@ -133,7 +142,7 @@ function paint(canvas: HTMLCanvasElement, source: HTMLCanvasElement, s: EditSett
   if (!adjusting && !wantHistogram) return null;
   const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
   if (adjusting) {
-    applyToPixels(pixels.data, s.adjust, frame ? canvas.width : undefined);
+    applyToPixels(pixels.data, s.adjust, frame ? canvas.width : undefined, profile);
     ctx.putImageData(pixels, 0, 0);
   }
   return wantHistogram ? histogram(pixels.data) : null;
@@ -178,6 +187,8 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
   const shown = useMemo(() => (previewAdjust ? { ...settings, adjust: previewAdjust } : settings), [settings, previewAdjust]);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const { source, failed } = useSource(details.id);
+  // RAW: ภาพต้นทาง (asset original) เป็นโทนตั้งต้นที่แอปล้างไว้ — แสงสีคิดด้วยสูตรของ RAW ให้ตรงกับไฟล์ที่ได้
+  const profile: Profile = details.raw ? 'raw' : 'display';
   const dirty = !sameSettings(settings, saved);
 
   const W = details.width;
@@ -243,7 +254,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
     paint(probe, source, settings, crop, false);
     const data = probe.getContext('2d')?.getImageData(0, 0, probe.width, probe.height).data;
     if (!data) return;
-    const suggested = autoAdjust(data);
+    const suggested = autoAdjust(data, profile);
     setAdjust({ exposure: suggested.exposure, whites: suggested.whites, blacks: suggested.blacks });
   };
 
@@ -285,6 +296,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
           faces={faces}
           onCrop={(next) => setSettings((s) => ({ ...s, crop: next }))}
           onHistogram={setHist}
+          profile={profile}
           picking={picking}
           onPick={(fx, fy) => {
             setPicking(false);
@@ -298,7 +310,7 @@ export function PhotoEditor({ details, onClose, onSaved }: PhotoEditorProps) {
             paint(probe, source, settings, crop, false);
             const rgb = sampleAround(probe, fx, fy);
             if (!rgb) return;
-            setAdjust(neutralize(...rgb));
+            setAdjust(neutralize(...rgb, profile));
             toast.success('ตั้งสมดุลแสงขาวจากจุดที่เลือกแล้ว');
           }}
         />
@@ -578,10 +590,12 @@ interface EditCanvasProps {
   /** โหมดหลอดดูดสี: คลิกบนภาพแล้วส่งตำแหน่ง (สัดส่วนของภาพที่แสดง) */
   picking: boolean;
   onPick: (fx: number, fy: number) => void;
+  /** สูตรของภาพต้นทาง (RAW: ภาพต้นทางคือโทนตั้งต้น 8 บิต — DECISIONS ข้อ 25) */
+  profile: Profile;
 }
 
 /** ตัวอย่างภาพที่แต่ง: แท็บตัดและหมุนแสดงทั้งกรอบพร้อมกรอบตัดที่ลากได้ · แท็บแสงและสีแสดงเฉพาะส่วนที่ตัดพร้อมแสงสี */
-function EditCanvas({ source, failed, settings, frameAspect, ratio, mode, straightening, before, faces, onCrop, onHistogram, picking, onPick }: EditCanvasProps) {
+function EditCanvas({ source, failed, settings, frameAspect, ratio, mode, straightening, before, faces, onCrop, onHistogram, picking, onPick, profile }: EditCanvasProps) {
   const area = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -618,9 +632,9 @@ function EditCanvas({ source, failed, settings, frameAspect, ratio, mode, straig
         el.width = w;
         el.height = h;
       }
-      onHistogram(paint(el, source, settings, view, !before, mode !== 'crop', true));
+      onHistogram(paint(el, source, settings, view, !before, mode !== 'crop', true, profile));
     });
-  }, [source, settings, view, before, boxW, boxH, mode, onHistogram]);
+  }, [source, settings, view, before, boxW, boxH, mode, onHistogram, profile]);
   useEffect(() => {
     redraw();
     return () => cancelAnimationFrame(frame.current);

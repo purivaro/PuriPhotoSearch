@@ -15,7 +15,7 @@ import { assetUrl, call } from '@/lib/ipc/client';
 import type { EventDraft, FaceAnalysisStatus, ImportPreview, SourceMode } from '@/lib/ipc/types';
 import { FaceModelNotice } from '@/features/faces/FaceModelNotice';
 import { invalidateCatalog, useCapabilities } from '@/lib/queries';
-import { buildCommit, draftsForMode, initialEdits, isSelectable, summarize, type DraftEdit, type DraftEdits } from './importModel';
+import { buildCommit, draftsForMode, initialEdits, isSelectable, rawDefault, summarize, type DraftEdit, type DraftEdits } from './importModel';
 
 /** S02–S03 — เพิ่มโฟลเดอร์: เลือกแหล่งรูป แล้วตรวจสอบและยืนยัน (สองขั้นเท่านั้น) */
 export function ImportReviewPage() {
@@ -205,13 +205,16 @@ function ReviewForm({
   // เปิดสวิตช์ได้เมื่อพร้อมใช้ หรือกำลังดาวน์โหลดอยู่ (ดาวน์โหลดเสร็จแล้วแอปจะวิเคราะห์รูปในคลังต่อเอง)
   const faceAnalysisAvailable = faceState === 'ready' || faceState === 'installing';
   const [watch, setWatch] = useState(true);
+  // ไฟล์ RAW: เปิดไว้เมื่อโฟลเดอร์มีแต่ RAW · มี JPEG ด้วยปิดไว้ก่อน (มักเป็นไฟล์ที่ export จาก RAW เดียวกัน — DECISIONS ข้อ 25)
+  const [includeRaw, setIncludeRaw] = useState(() => rawDefault(preview));
+  const rawTotal = preview.single.rawCount;
   const [showTitleErrors, setShowTitleErrors] = useState(false);
   // requestId เดียวต่อการยืนยันชุดเดิม: กดซ้ำ/ลองใหม่ไม่สร้างกิจกรรมซ้ำ; แก้รายการแล้วจึงเป็นคำขอใหม่
   const requestId = useRef<string | null>(null);
 
   const rows = useMemo(() => draftsForMode(preview, mode), [preview, mode]);
-  const summary = useMemo(() => summarize(rows, edits), [rows, edits]);
-  const selectable = rows.filter(isSelectable);
+  const summary = useMemo(() => summarize(rows, edits, includeRaw), [rows, edits, includeRaw]);
+  const selectable = rows.filter((d) => isSelectable(d, includeRaw));
   const selectedCount = selectable.filter((d) => edits[d.draftId]?.selected).length;
   const hasChildren = preview.children.length > 0;
   const unsupported = Object.entries(preview.unsupportedByExt).sort((a, b) => b[1] - a[1]);
@@ -237,7 +240,15 @@ function ReviewForm({
   const commit = useMutation({
     mutationFn: () => {
       requestId.current ??= newRequestId();
-      return call('commit_import', buildCommit(preview, mode, edits, { requestId: requestId.current, analyzeFaces: analyzeFaces && faceAnalysisAvailable, watch: watch && folderWatchAvailable }));
+      return call(
+        'commit_import',
+        buildCommit(preview, mode, edits, {
+          requestId: requestId.current,
+          analyzeFaces: analyzeFaces && faceAnalysisAvailable,
+          watch: watch && folderWatchAvailable,
+          includeRaw: includeRaw && rawTotal > 0,
+        }),
+      );
     },
     onSuccess: (result) => {
       const parts = [];
@@ -315,6 +326,7 @@ function ReviewForm({
                 key={draft.draftId}
                 previewId={preview.previewId}
                 draft={draft}
+                includeRaw={includeRaw}
                 edit={edits[draft.draftId] as DraftEdit}
                 showTitleError={showTitleErrors}
                 onChange={(change) => patch(draft.draftId, change)}
@@ -332,6 +344,22 @@ function ReviewForm({
       )}
 
       <div className="mt-4 flex flex-wrap items-start gap-x-8 gap-y-3">
+        {rawTotal > 0 && (
+          <Switch
+            checked={includeRaw}
+            onCheckedChange={(on) => {
+              requestId.current = null;
+              setIncludeRaw(on);
+            }}
+            testId="import-include-raw"
+            label={`รวมไฟล์ RAW (${formatCount(rawTotal)} ไฟล์)`}
+            description={
+              preview.single.photoCount > 0
+                ? 'โฟลเดอร์นี้มีทั้ง JPEG และ RAW — ถ้า JPEG เป็นไฟล์ที่ export มาจาก RAW เดียวกัน รูปจะซ้ำกัน · แต่งจาก RAW ได้ละเอียดที่สุด'
+                : 'แต่งจากข้อมูล RAW ได้ละเอียดที่สุด · ไฟล์ RAW ไม่ถูกแก้ไข ส่งออกเป็น JPEG'
+            }
+          />
+        )}
         <Switch
           checked={analyzeFaces && faceAnalysisAvailable}
           onCheckedChange={setAnalyzeFaces}
@@ -430,8 +458,26 @@ function ModeRadio({ value, current, onChange, label, disabled, testId }: { valu
   );
 }
 
-function DraftRow({ previewId, draft, edit, showTitleError, onChange }: { previewId: string; draft: EventDraft; edit: DraftEdit; showTitleError: boolean; onChange: (change: Partial<DraftEdit>) => void }) {
-  const selectable = isSelectable(draft);
+function DraftRow({
+  previewId,
+  draft,
+  includeRaw,
+  edit,
+  showTitleError,
+  onChange,
+}: {
+  previewId: string;
+  draft: EventDraft;
+  includeRaw: boolean;
+  edit: DraftEdit;
+  showTitleError: boolean;
+  onChange: (change: Partial<DraftEdit>) => void;
+}) {
+  const selectable = isSelectable(draft, includeRaw);
+  const raw = includeRaw ? draft.rawCount : 0;
+  const rawNew = includeRaw ? draft.rawNewCount : 0;
+  const total = draft.photoCount + raw;
+  const existingTotal = draft.existingCount + raw - rawNew;
   const [sampleFailed, setSampleFailed] = useState(false);
   const existing = Boolean(draft.existingEventId);
   const titleMissing = showTitleError && edit.selected && !edit.title.trim();
@@ -534,18 +580,21 @@ function DraftRow({ previewId, draft, edit, showTitleError, onChange }: { previe
       <div className="text-right">
         <p className="flex items-center justify-end gap-1.5 text-[15.5px] font-semibold text-ink">
           <ImageIcon className="size-4 text-muted" aria-hidden />
-          {formatCount(draft.photoCount)} รูป
+          {formatCount(total)} รูป
         </p>
         <p className="text-[12.5px] text-muted">
           {!draft.readable
             ? 'ตรวจไม่ได้'
-            : draft.photoCount === 0
-              ? 'ไม่มีไฟล์รูปที่รองรับ'
-              : draft.existingCount > 0
-                ? `ใหม่ ${formatCount(draft.newCount)} · มีแล้ว ${formatCount(draft.existingCount)}`
+            : total === 0
+              ? draft.rawCount > 0
+                ? 'มีแต่ไฟล์ RAW'
+                : 'ไม่มีไฟล์รูปที่รองรับ'
+              : existingTotal > 0
+                ? `ใหม่ ${formatCount(draft.newCount + rawNew)} · มีแล้ว ${formatCount(existingTotal)}`
                 : edit.selected
                   ? 'จะเพิ่มใหม่ทั้งหมด'
                   : 'ยังไม่เลือก'}
+          {draft.rawCount > 0 ? ` · RAW ${formatCount(draft.rawCount)}${includeRaw ? '' : ' (ไม่รวม)'}` : ''}
           {draft.unsupportedCount > 0 ? ` · ไม่รองรับ ${formatCount(draft.unsupportedCount)}` : ''}
         </p>
       </div>

@@ -23,7 +23,12 @@ pub struct Lib {
 pub struct FakeAnalyzer;
 
 fn fake_face(image_bytes: &[u8]) -> Option<(Vec<f32>, f32)> {
-    let img = image::load_from_memory(image_bytes).ok()?.to_rgb8();
+    // RAW: ใช้ตัวล้างภาพของแอป (ภาพตั้งตรงแล้ว) · ไฟล์อื่นอ่านตรง ๆ เหมือนเดิม
+    let img = if puri_core::raw::is_raw_bytes(image_bytes) {
+        puri_core::media::decode_upright(image_bytes, 512).ok()?.to_rgb8()
+    } else {
+        image::load_from_memory(image_bytes).ok()?.to_rgb8()
+    };
     let red = img.get_pixel(img.width() / 2, img.height() / 2)[0] as f32;
     let person = (red / 20.0).round() as usize;
     if person == 0 {

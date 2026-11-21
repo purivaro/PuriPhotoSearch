@@ -325,6 +325,8 @@ struct Binding {
     source_id: String,
     folder: PathBuf,
     recursive: bool,
+    /// นำไฟล์ RAW เข้าด้วย
+    include_raw: bool,
 }
 
 struct ThumbItem {
@@ -342,10 +344,15 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
     let event_id = ctx.job.event_id.clone().ok_or_else(|| AppError::internal("งานไม่มีกิจกรรม"))?;
     let bindings: Vec<Binding> = conn
         .prepare(
-            "SELECT source_id, folder_path, recursive FROM event_source_bindings WHERE event_id = ?1 AND active = 1",
+            "SELECT source_id, folder_path, recursive, include_raw FROM event_source_bindings WHERE event_id = ?1 AND active = 1",
         )?
         .query_map([&event_id], |r| {
-            Ok(Binding { source_id: r.get(0)?, folder: PathBuf::from(r.get::<_, String>(1)?), recursive: r.get(2)? })
+            Ok(Binding {
+                source_id: r.get(0)?,
+                folder: PathBuf::from(r.get::<_, String>(1)?),
+                recursive: r.get(2)?,
+                include_raw: r.get(3)?,
+            })
         })?
         .collect::<rusqlite::Result<_>>()?;
     for b in &bindings {
@@ -386,7 +393,13 @@ fn run_catalog(ctx: &JobCtx) -> Result<Outcome> {
         });
         for entry in iter {
             let Ok(entry) = entry else { continue };
-            if !entry.file_type().is_file() || media::classify(entry.path()).0 != FileKind::Supported {
+            let wanted = match media::classify(entry.path()).0 {
+                FileKind::Supported => true,
+                // RAW เฉพาะกิจกรรมที่เลือกให้รวม (DECISIONS ข้อ 25)
+                FileKind::Raw => b.include_raw,
+                _ => false,
+            };
+            if !entry.file_type().is_file() || !wanted {
                 continue;
             }
             if loose_taken && entry.depth() == 1 {

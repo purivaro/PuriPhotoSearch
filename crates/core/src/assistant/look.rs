@@ -9,7 +9,7 @@
 //! · ส่วนสีเทาของรูปที่จะแต่งเลือกครั้งเดียวก่อนค้นหา (สีเทาจริงเท่านั้น) แล้ววัดส่วนเดิมทุกครั้ง ผลจึงเปลี่ยนตามค่าที่ลองอย่างราบรื่น
 //! · ช่วงที่ค้นจำกัดไว้ — เป็นจุดเริ่ม: ฉากต่างกันจึงต้องดูด้วยตาประกอบ
 
-use crate::adjust::{self, Adjust, Wheel};
+use crate::adjust::{self, Adjust, Profile, Wheel};
 use image::{DynamicImage, RgbImage};
 use serde_json::{json, Value};
 use std::fmt::Write as _;
@@ -280,16 +280,28 @@ const GRADING_MAX: f64 = 60.0;
 /// · `style` = ค่าแสงสีของภาพตัวอย่างเมื่อเป็นรูปในคลังที่แต่งในแอป: คัดลอกมาทั้งชุดแล้วปรับเฉพาะค่าแสงและสมดุลแสงขาวให้เข้ากับรูปนี้
 /// — คอนทราสต์และความอิ่มสีที่วัดจากภาพขึ้นกับเนื้อหามาก (เจอจริง: ภาพตัวอย่างลดความอิ่มสี −25 แต่รูปที่จะแต่งสีจืดกว่า
 /// การวัดจึงเสนอเพิ่มความอิ่มสี +30 สวนทางกับสไตล์) เมื่อรู้ค่าที่แต่งจริงจึงใช้ค่านั้นแทนการเดาจากตัวเลขของภาพ
-pub fn suggest(base: &DynamicImage, current: &Adjust, reference: &Look, style: Option<&Adjust>) -> Suggestion {
+pub fn suggest(
+    base: &DynamicImage,
+    current: &Adjust,
+    reference: &Look,
+    style: Option<&Adjust>,
+    profile: Profile,
+) -> Suggestion {
+    let render = |d: &Adjust| labs(&adjust::apply_profile(base.clone(), d, profile).to_rgb8());
     match style {
-        Some(style) => suggest_from_style(base, current, reference, style),
-        None => suggest_by_measuring(base, current, reference),
+        Some(style) => suggest_from_style(base, &render, current, reference, style),
+        None => suggest_by_measuring(base, &render, current, reference),
     }
 }
 
 /// คัดลอกแสงสีของภาพตัวอย่าง แล้วหาค่าแสง (ความสว่างกลาง) และสมดุลแสงขาว (ส่วนสีเทาจริง) ให้รูปนี้
-fn suggest_from_style(base: &DynamicImage, current: &Adjust, reference: &Look, style: &Adjust) -> Suggestion {
-    let render = |d: &Adjust| labs(&adjust::apply(base.clone(), d).to_rgb8());
+fn suggest_from_style(
+    base: &DynamicImage,
+    render: &dyn Fn(&Adjust) -> Vec<[f64; 3]>,
+    current: &Adjust,
+    reference: &Look,
+    style: &Adjust,
+) -> Suggestion {
     let total = (base.width() * base.height()).max(1) as f64;
     // สีเทาจริงเลือกจากรูปก่อนแต่ง (การทำโทนของสไตล์ทำให้ส่วนสีเทาไม่เทาแล้ว)
     let grays = select_grays(&render(&Adjust::default()), TARGET_NEUTRAL_CHROMA, TARGET_NEUTRAL_RATIO);
@@ -320,8 +332,12 @@ fn suggest_from_style(base: &DynamicImage, current: &Adjust, reference: &Look, s
 }
 
 /// ไม่รู้ค่าที่แต่งของภาพตัวอย่าง: ค้นหาค่าจากตัวเลขของภาพ
-fn suggest_by_measuring(base: &DynamicImage, current: &Adjust, reference: &Look) -> Suggestion {
-    let render = |d: &Adjust| labs(&adjust::apply(base.clone(), d).to_rgb8());
+fn suggest_by_measuring(
+    base: &DynamicImage,
+    render: &dyn Fn(&Adjust) -> Vec<[f64; 3]>,
+    current: &Adjust,
+    reference: &Look,
+) -> Suggestion {
     let total = (base.width() * base.height()).max(1) as f64;
     // รูปตอนยังไม่ได้ปรับค่าที่ค้นหา (สีของเงา/ส่วนสว่างด้วย — ไม่งั้นค่าที่ใส่ไปแล้วทำให้คำตอบรอบถัดไปเปลี่ยน)
     // เลือกส่วนสีเทาจริงจากภาพนี้ครั้งเดียว
@@ -505,7 +521,7 @@ mod tests {
         let original = scene(0);
         let wanted = Adjust { exposure: 0.5, temperature: 25.0, saturation: -20.0, ..Default::default() };
         let reference = measure(&adjust::apply(original.clone(), &wanted).to_rgb8());
-        let s = suggest(&original, &Adjust::default(), &reference, None);
+        let s = suggest(&original, &Adjust::default(), &reference, None, Profile::Display);
         let d = &s.adjust;
         assert!(s.white_balance);
         assert!((d.exposure - 0.5).abs() <= 0.2, "exposure {}", d.exposure);
@@ -531,9 +547,9 @@ mod tests {
         wanted.grading.shadows = Wheel { hue: 200.0, sat: 35.0, lum: 0.0 };
         let reference = measure(&adjust::apply(scene(0), &wanted).to_rgb8());
         let mine = Adjust { shadows: 30.0, vibrance: 10.0, ..Default::default() };
-        let first = suggest(&original, &mine, &reference, None);
+        let first = suggest(&original, &mine, &reference, None, Profile::Display);
         assert_eq!((first.adjust.shadows, first.adjust.vibrance), (30.0, 10.0), "ค่าที่ไม่ได้ค้นหาคงเดิม");
-        let second = suggest(&original, &first.adjust, &reference, None);
+        let second = suggest(&original, &first.adjust, &reference, None, Profile::Display);
         assert_eq!(second.adjust, first.adjust);
         assert_eq!(patch(&second), patch(&first));
         // หลังใส่ค่าแล้ว "ตอนนี้" = "เมื่อใช้ค่าที่เสนอ"
@@ -544,7 +560,7 @@ mod tests {
     #[test]
     fn colors_of_the_subject_are_not_mistaken_for_a_color_tone() {
         // ภาพตัวอย่างเป็นอีกฉากที่สีของสิ่งของต่างกันมาก แต่ไม่ได้แต่งโทนสีใด ๆ (ส่วนสีเทาเป็นกลางทั้งคู่)
-        let s = suggest(&scene(0), &Adjust::default(), &measure(&scene(90).to_rgb8()), None);
+        let s = suggest(&scene(0), &Adjust::default(), &measure(&scene(90).to_rgb8()), None, Profile::Display);
         assert!(
             s.adjust.temperature.abs() <= 8.0 && s.adjust.tint.abs() <= 8.0,
             "temperature {} tint {}",
@@ -560,6 +576,7 @@ mod tests {
             &Adjust { temperature: 12.0, ..Default::default() },
             &measure(&scene(0).to_rgb8()),
             None,
+            Profile::Display,
         );
         assert!(!s.white_balance);
         assert_eq!((s.adjust.temperature, s.adjust.tint), (12.0, 0.0));
@@ -586,7 +603,7 @@ mod tests {
             "ฉากนี้มีสีอ่อนที่เกณฑ์ของภาพตัวอย่างนับเป็นสีเทาจริง (เงื่อนไขที่ทำให้พลาดเดิม)"
         );
         let reference = measure(&scene(0).to_rgb8());
-        let s = suggest(&room, &Adjust::default(), &reference, None);
+        let s = suggest(&room, &Adjust::default(), &reference, None, Profile::Display);
         assert!(!s.white_balance, "ไม่มีสีเทาจริง = ไม่อ่านสมดุลแสงขาว");
         assert_eq!((s.adjust.temperature, s.adjust.tint), (0.0, 0.0));
         assert!(s.adjust.saturation >= -SATURATION_RANGE);
@@ -605,7 +622,7 @@ mod tests {
         // รูปที่จะแต่งเป็นฉากเดียวกันแต่ถ่ายมืดกว่า 0.5 EV และสีจืดกว่า
         let darker = adjust::apply(scene(0), &Adjust { exposure: -0.5, saturation: -40.0, ..Default::default() });
         let mine = Adjust { vibrance: 30.0, temperature: -20.0, ..Default::default() };
-        let s = suggest(&darker, &mine, &reference, Some(&film));
+        let s = suggest(&darker, &mine, &reference, Some(&film), Profile::Display);
         assert!(s.copied && s.white_balance);
         let d = &s.adjust;
         assert_eq!((d.contrast, d.saturation, d.vibrance), (-10.0, -25.0, 0.0), "คัดลอกจากภาพตัวอย่าง ค่าเดิมของรูปไม่ค้าง");
@@ -617,7 +634,7 @@ mod tests {
         let p = patch(&s);
         assert_eq!(p["vibrance"], json!(0.0));
         assert_eq!(p["saturation"], json!(-25.0));
-        let again = suggest(&darker, &s.adjust, &reference, Some(&film));
+        let again = suggest(&darker, &s.adjust, &reference, Some(&film), Profile::Display);
         assert_eq!(again.adjust, s.adjust);
         // คำอธิบายสั้นมีเฉพาะช่องที่แต่ง
         let c = compact(&film);
@@ -632,7 +649,7 @@ mod tests {
         wanted.grading.shadows = Wheel { hue: 210.0, sat: 45.0, lum: 0.0 };
         wanted.grading.highlights = Wheel { hue: 40.0, sat: 35.0, lum: 0.0 };
         let reference = measure(&adjust::apply(original.clone(), &wanted).to_rgb8());
-        let s = suggest(&original, &Adjust::default(), &reference, None);
+        let s = suggest(&original, &Adjust::default(), &reference, None, Profile::Display);
         let g = s.adjust.grading;
         assert!(g.shadows.sat > 10.0 && (150.0..=270.0).contains(&g.shadows.hue), "shadows {:?}", g.shadows);
         assert!(g.highlights.sat > 5.0 && (0.0..=90.0).contains(&g.highlights.hue), "highlights {:?}", g.highlights);

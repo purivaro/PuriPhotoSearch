@@ -29,6 +29,9 @@ pub struct EventDraft {
     pub new_count: usize,
     pub existing_count: usize,
     pub unsupported_count: usize,
+    /// ไฟล์ RAW ในแถวนี้ (ไม่รวมใน `photo_count`) และที่ยังไม่อยู่ในคลัง
+    pub raw_count: usize,
+    pub raw_new_count: usize,
     pub readable: bool,
     pub unreadable_reason: Option<String>,
     pub existing_event_id: Option<String>,
@@ -94,7 +97,11 @@ struct Group {
     photos: usize,
     unsupported: usize,
     existing: usize,
+    /// ไฟล์ RAW (นับแยก — นำเข้าเฉพาะเมื่อผู้ใช้เลือกรวม RAW) และที่อยู่ในคลังแล้ว
+    raw: usize,
+    raw_existing: usize,
     sample: Option<PathBuf>,
+    raw_sample: Option<PathBuf>,
     unreadable: Option<String>,
 }
 
@@ -189,6 +196,15 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
                     group.sample = Some(entry.path().to_path_buf());
                 }
             }
+            FileKind::Raw => {
+                group.raw += 1;
+                if known.contains(&util::path_key(entry.path())) {
+                    group.raw_existing += 1;
+                }
+                if group.raw_sample.is_none() {
+                    group.raw_sample = Some(entry.path().to_path_buf());
+                }
+            }
             FileKind::UnsupportedImage => {
                 group.unsupported += 1;
                 *unsupported_by_ext.entry(ext).or_default() += 1;
@@ -212,6 +228,7 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
         };
         let existing = find_covering_event(&conn, folder, recursive)?;
         let new_count = g.photos - g.existing;
+        let raw_new = g.raw - g.raw_existing;
         let readable = g.unreadable.is_none();
         Ok(DraftData {
             draft: EventDraft {
@@ -226,16 +243,18 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
                 new_count,
                 existing_count: g.existing,
                 unsupported_count: g.unsupported,
+                raw_count: g.raw,
+                raw_new_count: raw_new,
                 readable,
                 unreadable_reason: g.unreadable.clone(),
-                default_selected: readable && new_count > 0,
+                default_selected: readable && (new_count > 0 || (g.photos == 0 && raw_new > 0)),
                 existing_event_id: existing.as_ref().map(|e| e.0.clone()),
                 existing_event_title: existing.map(|e| e.1),
-                has_sample: g.sample.is_some(),
+                has_sample: g.sample.is_some() || g.raw_sample.is_some(),
             },
             folder: folder.to_path_buf(),
             recursive,
-            sample: g.sample.clone(),
+            sample: g.sample.clone().or_else(|| g.raw_sample.clone()),
         })
     };
 
@@ -243,7 +262,10 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
         photos: loose.photos + groups.values().map(|g| g.photos).sum::<usize>(),
         unsupported: loose.unsupported + groups.values().map(|g| g.unsupported).sum::<usize>(),
         existing: loose.existing + groups.values().map(|g| g.existing).sum::<usize>(),
+        raw: loose.raw + groups.values().map(|g| g.raw).sum::<usize>(),
+        raw_existing: loose.raw_existing + groups.values().map(|g| g.raw_existing).sum::<usize>(),
         sample: loose.sample.clone().or_else(|| groups.values().find_map(|g| g.sample.clone())),
+        raw_sample: loose.raw_sample.clone().or_else(|| groups.values().find_map(|g| g.raw_sample.clone())),
         unreadable: None,
     };
     let parent_name = root.parent().map(util::file_name);
@@ -253,7 +275,7 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
     for (name, g) in &groups {
         children.push(make("folder", name, &root.join(name), true, g, Some(&root_name))?);
     }
-    let root_loose = if loose.photos > 0 || (loose.unsupported > 0 && !children.is_empty()) {
+    let root_loose = if loose.photos > 0 || loose.raw > 0 || (loose.unsupported > 0 && !children.is_empty()) {
         Some(make("root_loose", &root_name, &root, false, &loose, None)?)
     } else {
         None
@@ -262,14 +284,16 @@ pub fn preview(app: &App, path: &str) -> Result<ImportPreview> {
 
     // เสนอ "หลายงาน" เมื่อโฟลเดอร์ย่อยดูเป็นงานแยกกัน: มีอย่างน้อยสองโฟลเดอร์ที่มีรูป และ
     // (มีโฟลเดอร์ที่ชื่อบอกวันที่ หรือ โฟลเดอร์ที่เลือกเองไม่บอกวันที่และไม่มีรูปวางตรง ๆ)
-    let with_photos = children.iter().filter(|c| c.draft.photo_count > 0).count();
-    let any_dated = children.iter().any(|c| c.draft.photo_count > 0 && c.draft.suggested_date.is_some());
-    let suggested_mode =
-        if with_photos >= 2 && (any_dated || (single.draft.suggested_date.is_none() && loose.photos == 0)) {
-            "child_events"
-        } else {
-            "single_event"
-        };
+    let has_photos = |d: &EventDraft| d.photo_count > 0 || d.raw_count > 0;
+    let with_photos = children.iter().filter(|c| has_photos(&c.draft)).count();
+    let any_dated = children.iter().any(|c| has_photos(&c.draft) && c.draft.suggested_date.is_some());
+    let suggested_mode = if with_photos >= 2
+        && (any_dated || (single.draft.suggested_date.is_none() && loose.photos == 0 && loose.raw == 0))
+    {
+        "child_events"
+    } else {
+        "single_event"
+    };
 
     let preview = ImportPreview {
         preview_id: util::new_id(),
@@ -323,6 +347,9 @@ pub struct CommitArgs {
     pub analyze_faces: bool,
     #[serde(default = "yes")]
     pub watch: bool,
+    /// นำไฟล์ RAW เข้าด้วย (จำไว้กับกิจกรรม ใช้ทุกครั้งที่ตรวจรูปใหม่)
+    #[serde(default)]
+    pub include_raw: bool,
 }
 fn yes() -> bool {
     true
@@ -417,6 +444,13 @@ pub fn commit(app: &App, args: CommitArgs) -> Result<CommitResult> {
             let (event_id, title) = match find_covering_event(&tx, &data.folder, data.recursive)? {
                 Some((id, existing_title)) => {
                     result.reused_events += 1;
+                    // เพิ่มโฟลเดอร์เดิมอีกครั้งพร้อมเลือกรวม RAW = กิจกรรมเดิมรวม RAW ตั้งแต่นี้ (ไม่มีทางกลับ — ไม่ลบรูปที่นำเข้าแล้ว)
+                    if args.include_raw {
+                        tx.execute(
+                            "UPDATE event_source_bindings SET include_raw = 1 WHERE event_id = ?1 AND active = 1",
+                            [&id],
+                        )?;
+                    }
                     (id, existing_title)
                 }
                 None => {
@@ -431,9 +465,9 @@ pub fn commit(app: &App, args: CommitArgs) -> Result<CommitResult> {
                         params![id, title, util::text_key(title), date, date_source, now],
                     )?;
                     tx.execute(
-                        "INSERT INTO event_source_bindings(event_id, source_id, folder_path, folder_key, recursive)
-                         VALUES (?1, ?2, ?3, ?3, ?4)",
-                        params![id, source_id, util::path_key(&data.folder), data.recursive],
+                        "INSERT INTO event_source_bindings(event_id, source_id, folder_path, folder_key, recursive, include_raw)
+                         VALUES (?1, ?2, ?3, ?3, ?4, ?5)",
+                        params![id, source_id, util::path_key(&data.folder), data.recursive, args.include_raw],
                     )?;
                     result.created_events += 1;
                     (id, title.clone())
