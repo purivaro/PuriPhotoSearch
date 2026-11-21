@@ -15,5 +15,11 @@ kamadak-exif = "0.6.2"
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
 ort = "=2.0.0-rc.15"
 
+# Mac Apple Silicon: ONNX Runtime ใช้ CoreML เองอยู่แล้ว (ตัวสำเร็จรูปมีแบบเดียวคือแบบที่มี CoreML) —
+# เปิด feature เพื่อกำหนดที่เก็บโมเดลที่ CoreML แปลงแล้ว (ดู `coreml` ใน src/lib.rs) และใช้ libc ตรวจว่าโปรแกรมยังทำงานอยู่
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+ort = { version = "=2.0.0-rc.15", features = ["coreml"] }
+libc = "0.2.191"
+
 [dev-dependencies]
 rusqlite = { version = "0.43.0", features = ["bundled"] }
