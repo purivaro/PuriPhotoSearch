@@ -104,7 +104,14 @@ pub struct EventSummary {
 #[serde(rename_all = "camelCase")]
 pub struct PersonCount {
     pub person: PersonRef,
+    /// รูปในงานนี้ที่มีคนนี้: ยืนยันแล้ว + ที่ AI จัดให้ (DECISIONS ข้อ 9) นับรูปไม่ซ้ำ
     pub photo_count: i64,
+    /// ในจำนวนนั้น รูปที่มีแค่ AI จัดให้ (ยังไม่มีคนตรวจ)
+    pub ai_photo_count: i64,
+    /// ในจำนวนนั้น รูปที่ยังไม่ได้แต่งในแอป (แต่งตามคน — DECISIONS ข้อ 32)
+    pub unedited_photo_count: i64,
+    /// ปักหมุดไว้ (คนสำคัญ) — ขึ้นก่อนในรายชื่อของงาน
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -176,20 +183,37 @@ pub fn list_events(conn: &Connection, text: Option<&str>) -> Result<Vec<EventSum
     Ok(rows.into_iter().map(|r| r.0).collect())
 }
 
+/// ผู้เรียกต้องเรียก `review::ensure_matches` ก่อน (คนในงานนับรูปที่ AI จัดให้ด้วย)
 pub fn get_event(conn: &Connection, event_id: &str) -> Result<EventDetail> {
     let (summary, notes) = conn
         .query_row(&format!("{} AND e.id = ?1", event_select()), [event_id], event_from_row)
         .optional()?
         .ok_or_else(|| AppError::not_found("กิจกรรม"))?;
+    // คนในงาน: ยืนยันแล้ว + ที่ AI จัดให้ — คนที่ปักหมุดขึ้นก่อน (เลือกแต่งรูปให้คนสำคัญก่อนได้ง่าย)
     let people = conn
         .prepare(&format!(
-            "SELECT pe.id, pe.display_name, {PERSON_COVER_SQL}, COUNT(DISTINCT v.photo_id) AS n
-             FROM v_confirmed v JOIN persons pe ON pe.id = v.person_id
-             WHERE v.event_id = ?1 AND pe.catalog_state = 'active'
-             GROUP BY pe.id ORDER BY n DESC, pe.name_key, pe.id"
+            "SELECT pe.id, pe.display_name, {PERSON_COVER_SQL}, COUNT(DISTINCT x.photo_id) AS n,
+               COUNT(DISTINCT x.photo_id) - COUNT(DISTINCT CASE WHEN x.confirmed = 1 THEN x.photo_id END),
+               COUNT(DISTINCT CASE WHEN ed.photo_id IS NULL THEN x.photo_id END),
+               EXISTS(SELECT 1 FROM pinned_persons pp WHERE pp.person_id = pe.id) AS pinned
+             FROM (SELECT v.person_id, v.photo_id, 1 AS confirmed FROM v_confirmed v WHERE v.event_id = ?1
+                   UNION ALL
+                   SELECT m.person_id, p.id, 0 FROM temp.ai_matches m
+                     JOIN photos p ON p.current_revision_id = m.revision_id AND p.catalog_state = 'active'
+                     JOIN event_photos ep ON ep.photo_id = p.id AND ep.event_id = ?1) x
+             JOIN persons pe ON pe.id = x.person_id
+             LEFT JOIN photo_edits ed ON ed.photo_id = x.photo_id
+             WHERE pe.catalog_state = 'active'
+             GROUP BY pe.id ORDER BY pinned DESC, n DESC, pe.name_key, pe.id"
         ))?
         .query_map([event_id], |r| {
-            Ok(PersonCount { person: PersonRef::new(r.get(0)?, r.get(1)?, r.get(2)?), photo_count: r.get(3)? })
+            Ok(PersonCount {
+                person: PersonRef::new(r.get(0)?, r.get(1)?, r.get(2)?),
+                photo_count: r.get(3)?,
+                ai_photo_count: r.get(4)?,
+                unedited_photo_count: r.get(5)?,
+                pinned: r.get(6)?,
+            })
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(EventDetail { summary, notes, people, jobs: jobs::list_for_event(conn, event_id)? })
@@ -213,6 +237,7 @@ pub struct UpdateEventArgs {
 
 /// แก้ข้อมูลกิจกรรมในแอปเท่านั้น: ไม่เปลี่ยนชื่อโฟลเดอร์จริง และไม่แตะ EXIF
 pub fn update_event(app: &App, a: UpdateEventArgs) -> Result<EventDetail> {
+    crate::review::ensure_matches(app)?;
     let detail = {
         let mut conn = app.db();
         let tx = conn.transaction()?;
@@ -263,6 +288,7 @@ pub fn update_event(app: &App, a: UpdateEventArgs) -> Result<EventDetail> {
 }
 
 pub fn set_event_cover(app: &App, event_id: &str, photo_id: &str) -> Result<EventDetail> {
+    crate::review::ensure_matches(app)?;
     let detail = {
         let conn = app.db();
         let n = conn.execute(
@@ -308,6 +334,8 @@ pub struct SearchParams {
     pub include_suggested: bool,
     /// เฉพาะรูปที่ผู้ใช้แจ้งว่า "ไม่ใช่" บุคคลนี้ (ใช้ดูและคืนรูปที่แจ้งผิด); ผลบอกใบหน้าใน `rejectedFaces`
     pub rejected_person_id: Option<String>,
+    /// การแต่งในแอป (DECISIONS ข้อ 32): any = ทั้งหมด, edited = แต่งแล้ว, unedited = ยังไม่แต่ง
+    pub edit_filter: Option<String>,
 }
 
 /// บุคคลที่อยู่ในรูปตามที่ AI จัดให้ พร้อมใบหน้าที่เป็นเหตุ (ใช้แจ้งว่า "ไม่ใช่คนนี้")
@@ -382,6 +410,8 @@ pub struct Coverage {
     pub with_confirmed_people: i64,
     pub faces_analyzed: i64,
     pub faces_pending: i64,
+    /// รูปที่แต่งในแอปแล้ว (ไม่นับตัวกรองการแต่ง — ใช้บอกความคืบหน้า "แต่งแล้ว X จาก Y")
+    pub edited: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -569,6 +599,17 @@ fn build_filter(p: &SearchParams) -> Result<Filter> {
     Ok(f)
 }
 
+/// ตัวกรองการแต่ง แยกจาก `build_filter` เพื่อให้นับ "แต่งแล้ว X จาก Y" ของทั้งขอบเขตได้ขณะกรองอยู่
+fn edit_filter_sql(p: &SearchParams) -> Result<&'static str> {
+    // `pe` = photo_edits ใน PHOTO_FROM: มีแถว = แต่งแล้ว (ค่าที่เท่ากับไม่ได้แต่งถูกลบแถวทิ้งตอนบันทึก)
+    Ok(match p.edit_filter.as_deref().unwrap_or("any") {
+        "any" => "",
+        "edited" => " AND pe.edit_id IS NOT NULL",
+        "unedited" => " AND pe.edit_id IS NULL",
+        _ => return Err(AppError::invalid("ตัวกรองการแต่งไม่ถูกต้อง")),
+    })
+}
+
 fn order_sql(sort: Option<&str>) -> Result<&'static str> {
     Ok(match sort.unwrap_or("taken_desc") {
         "taken_desc" => "r.taken_at_local IS NULL, r.taken_at_local DESC, l.filename_key, p.id",
@@ -635,14 +676,17 @@ fn attach_suggested(conn: &Connection, items: &mut [PhotoResult]) -> Result<()> 
 
 pub fn query_photos(conn: &Connection, p: &SearchParams) -> Result<PhotoPage> {
     let f = build_filter(p)?;
+    let edits = edit_filter_sql(p)?;
     let order = order_sql(p.sort.as_deref())?;
     let limit = p.limit.unwrap_or(100).clamp(1, 200);
     let offset: i64 = p.cursor.as_deref().and_then(|c| c.parse().ok()).filter(|o| *o >= 0).unwrap_or(0);
 
+    // ตัวเลขของขอบเขตนับก่อนกรองการแต่ง: บอกได้ว่า "แต่งแล้ว X จาก Y" ขณะดูเฉพาะรูปที่ยังไม่แต่ง
     let coverage_sql = format!(
         "SELECT COUNT(*), COALESCE(SUM(r.thumbnail_status = 'ready'), 0), COALESCE(SUM(r.thumbnail_status = 'pending'), 0),
            COALESCE(SUM(r.thumbnail_status = 'failed'), 0), COALESCE(SUM(EXISTS (SELECT 1 {CONFIRMED_ON_PHOTO})), 0),
-           COALESCE(SUM(r.face_status = 'done'), 0), COALESCE(SUM(r.face_status = 'not_analyzed'), 0)
+           COALESCE(SUM(r.face_status = 'done'), 0), COALESCE(SUM(r.face_status = 'not_analyzed'), 0),
+           COALESCE(SUM(pe.edit_id IS NOT NULL), 0)
          {PHOTO_FROM}{}",
         f.sql
     );
@@ -655,6 +699,7 @@ pub fn query_photos(conn: &Connection, p: &SearchParams) -> Result<PhotoPage> {
             with_confirmed_people: r.get(4)?,
             faces_analyzed: r.get(5)?,
             faces_pending: r.get(6)?,
+            edited: r.get(7)?,
         })
     })?;
 
@@ -662,7 +707,7 @@ pub fn query_photos(conn: &Connection, p: &SearchParams) -> Result<PhotoPage> {
     args.push(Value::Integer(limit));
     args.push(Value::Integer(offset));
     let sql = format!(
-        "SELECT {PHOTO_COLS} {PHOTO_FROM}{} ORDER BY {order} LIMIT ?{} OFFSET ?{}",
+        "SELECT {PHOTO_COLS} {PHOTO_FROM}{}{edits} ORDER BY {order} LIMIT ?{} OFFSET ?{}",
         f.sql,
         args.len() - 1,
         args.len()
@@ -684,7 +729,11 @@ pub fn query_photos(conn: &Connection, p: &SearchParams) -> Result<PhotoPage> {
         }
     }
 
-    let total = coverage.eligible_photos;
+    let total = match p.edit_filter.as_deref() {
+        Some("edited") => coverage.edited,
+        Some("unedited") => coverage.eligible_photos - coverage.edited,
+        _ => coverage.eligible_photos,
+    };
     let next = offset + items.len() as i64;
     Ok(PhotoPage {
         next_cursor: (next < total && !items.is_empty()).then(|| next.to_string()),
@@ -710,6 +759,7 @@ pub fn create_selection(app: &App, p: &SearchParams) -> Result<SelectionSnapshot
         crate::review::ensure_matches(app)?;
     }
     let f = build_filter(p)?;
+    let edits = edit_filter_sql(p)?;
     let order = order_sql(p.sort.as_deref())?;
     let mut conn = app.db();
     let tx = conn.transaction()?;
@@ -729,7 +779,7 @@ pub fn create_selection(app: &App, p: &SearchParams) -> Result<SelectionSnapshot
     args.push(Value::Text(token.clone()));
     let sql = format!(
         "INSERT INTO selection_items(token, ord, photo_id, revision_id)
-         SELECT ?{}, ROW_NUMBER() OVER (ORDER BY {order}), p.id, r.id {PHOTO_FROM}{}",
+         SELECT ?{}, ROW_NUMBER() OVER (ORDER BY {order}), p.id, r.id {PHOTO_FROM}{}{edits}",
         args.len(),
         f.sql
     );

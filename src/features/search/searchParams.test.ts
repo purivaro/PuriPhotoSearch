@@ -21,13 +21,15 @@ describe('เงื่อนไขค้นหา ↔ URL', () => {
       includeUnknownDate: true,
       faceFilter: 'no_person' as const,
       sort: 'filename' as const,
+      editFilter: 'unedited' as const,
     };
     const round = parseFilters(new URLSearchParams(filtersToSearch(filters).toString()));
     expect(round).toEqual(filters);
   });
 
   it('ตัด ID ซ้ำ และไม่รับค่าที่ไม่รู้จัก', () => {
-    const parsed = parseFilters(new URLSearchParams('p=a,b,a,,b&pm=weird&sort=drop&face=x&from=18/11/2026'));
+    const parsed = parseFilters(new URLSearchParams('p=a,b,a,,b&pm=weird&sort=drop&face=x&from=18/11/2026&ed=done'));
+    expect(parsed.editFilter).toBe('any');
     expect(parsed.personIds).toEqual(['a', 'b']);
     expect(parsed.personMode).toBe('all');
     expect(parsed.sort).toBe('taken_desc');
@@ -47,6 +49,14 @@ describe('เงื่อนไข → คำขอไป Rust', () => {
     expect(query.text).toBe('ภูริ');
     expect(query.date).toBeUndefined();
     expect(query.limit).toBe(100);
+  });
+
+  it('ตัวกรองการแต่ง: ส่งเฉพาะเมื่อเลือก และนับเป็นเงื่อนไข (ล้างได้)', () => {
+    expect(filtersToQuery(DEFAULT_FILTERS, 100).editFilter).toBeUndefined();
+    const unedited = { ...DEFAULT_FILTERS, editFilter: 'unedited' as const };
+    expect(filtersToQuery(unedited, 100).editFilter).toBe('unedited');
+    expect(filtersToSearch(unedited).toString()).toBe('ed=unedited');
+    expect(hasActiveFilters(unedited)).toBe(true);
   });
 
   it('ส่งช่วงวันที่ตาม field ที่เลือก', () => {

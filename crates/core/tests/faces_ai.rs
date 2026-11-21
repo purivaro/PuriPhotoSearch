@@ -246,6 +246,36 @@ fn ai_matches_count_as_the_persons_photos_until_the_user_says_no() {
         5
     );
 
+    // หน้ากิจกรรม (แต่งตามคน — DECISIONS ข้อ 32): คนในงานนับรูปที่ AI จัดให้ด้วย บอกว่ายังไม่แต่งกี่รูป คนที่ปักหมุดขึ้นก่อน
+    let event_id = lib.call("list_events", json!({}))[0]["id"].clone();
+    let people_of = || lib.call("get_event", json!({ "eventId": event_id }))["people"].clone();
+    let counts = |p: &Value| {
+        (p["photoCount"].as_i64(), p["aiPhotoCount"].as_i64(), p["uneditedPhotoCount"].as_i64(), p["pinned"].as_bool())
+    };
+    let people = people_of();
+    assert_eq!(
+        arr(&people).iter().map(|p| p["person"]["displayName"].as_str().unwrap()).collect::<Vec<_>>(),
+        ["คุณกานต์", "คุณเมย์"]
+    );
+    assert_eq!(counts(&people[0]), (Some(3), Some(2), Some(3), Some(false)));
+    assert_eq!(counts(&people[1]), (Some(2), Some(1), Some(2), Some(false)));
+    lib.call("save_photo_edit", json!({ "photoId": lib.photo_id("a2.jpg"), "settings": { "rotate": 90 } }));
+    lib.call("set_person_pinned", json!({ "personId": may, "pinned": true }));
+    let people = people_of();
+    assert_eq!(people[0]["person"]["id"], may.as_str(), "คนสำคัญ (ปักหมุด) ขึ้นก่อนแม้มีรูปน้อยกว่า");
+    // หน้าหลัก: คนที่ปักหมุดบอกว่ายังไม่แต่งกี่รูป (b1 ยืนยัน + b2 AI จัดให้) · รายชื่อหน้าบุคคลไม่คิดตัวเลขนี้
+    assert_eq!(lib.call("list_home_people", json!({}))["pinned"][0]["uneditedPhotoCount"], 2);
+    assert!(arr(&lib.call("list_people", json!({})))[0].get("uneditedPhotoCount").is_none());
+    assert_eq!(counts(&people[1]), (Some(3), Some(2), Some(2), Some(false)), "แต่ง a2 แล้ว เหลือ 2 รูปที่ยังไม่แต่ง");
+    assert_eq!(
+        names(&lib.query(
+            json!({ "personIds": [kan], "includeSuggested": true, "editFilter": "unedited", "sort": "filename" })
+        )),
+        ["a1.jpg", "a3.jpg"]
+    );
+    lib.call("reset_photo_edit", json!({ "photoId": lib.photo_id("a2.jpg") }));
+    lib.call("set_person_pinned", json!({ "personId": may, "pinned": false }));
+
     // แจ้งว่าไม่ใช่: รูปนั้นหลุดจากรูปของคุณกานต์ทันทีและไม่กลับมา โดยไม่มีคำยืนยันใดถูกสร้างแทนผู้ใช้
     lib.call("reject_suggestions", json!({ "faceIds": [a2_face], "personId": kan }));
     assert_eq!(names(&lib.query(with_ai)), ["a1.jpg", "a3.jpg"]);

@@ -474,7 +474,10 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         CommitImport(a) => ok(import::commit(app, a)?),
 
         ListEvents { text } => ok(catalog::list_events(&app.db(), text.as_deref())?),
-        GetEvent { event_id } => ok(catalog::get_event(&app.db(), &event_id)?),
+        GetEvent { event_id } => {
+            review::ensure_matches(app)?;
+            ok(catalog::get_event(&app.db(), &event_id)?)
+        }
         UpdateEvent(a) => ok(catalog::update_event(app, a)?),
         RescanEvent { event_id } => ok(jobs::rescan_event(app, &event_id)?),
         SetEventCover { event_id, photo_id } => ok(catalog::set_event_cover(app, &event_id, &photo_id)?),

@@ -1199,6 +1199,64 @@ fn edit_crop_and_rotate_keep_faces_names_and_the_original_file() {
 }
 
 #[test]
+fn edit_filter_lists_what_is_left_to_edit_for_a_person_and_counts_progress() {
+    // แต่งตามคน (DECISIONS ข้อ 32): รูปของคนนี้ที่ยังไม่แต่ง · แต่งแล้ว X จาก Y · เลือกผลทั้งหมดได้เฉพาะที่กรองอยู่
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-21 แต่งตามคน");
+    std::fs::create_dir_all(&root).unwrap();
+    for name in ["a.jpg", "b.jpg", "c.jpg", "d.jpg"] {
+        std::fs::write(root.join(name), jpeg_with_exif(400, 300, 1, "2026:11:21 09:00:00")).unwrap();
+    }
+    lib.import(&root, "single_event", |_| true);
+    let id = |name: &str| lib.photo_id(name);
+    let person = lib.call(
+        "create_manual_face",
+        json!({ "requestId": new_id(), "photoId": id("a.jpg"), "bbox": { "x": 0.1, "y": 0.2, "w": 0.1, "h": 0.2 }, "newPersonName": "คุณสำคัญ" }),
+    )["faces"][0]["person"]["id"]
+        .clone();
+    for name in ["b.jpg", "c.jpg"] {
+        lib.call(
+            "create_manual_face",
+            json!({ "requestId": new_id(), "photoId": id(name), "bbox": { "x": 0.1, "y": 0.2, "w": 0.1, "h": 0.2 }, "personId": person }),
+        );
+    }
+    // b แต่งแล้ว · d (ไม่มีคนนี้) แต่งแล้ว · บันทึกค่าที่เท่ากับไม่ได้แต่งของ c ไม่นับว่าแต่ง
+    lib.call("save_photo_edit", json!({ "photoId": id("b.jpg"), "settings": { "rotate": 90 } }));
+    lib.call("save_photo_edit", json!({ "photoId": id("d.jpg"), "settings": { "rotate": 180 } }));
+    assert!(lib.call("save_photo_edit", json!({ "photoId": id("c.jpg"), "settings": {} }))["editId"].is_null());
+
+    let of_person = |filter: &str| lib.query(json!({ "personIds": [person], "editFilter": filter }));
+    let names_of = |page: &Value| {
+        arr(&page["items"]).iter().map(|i| i["filename"].as_str().unwrap().to_string()).collect::<Vec<_>>()
+    };
+    let left = of_person("unedited");
+    assert_eq!(names_of(&left), ["a.jpg", "c.jpg"]);
+    assert_eq!(left["total"], 2, "จำนวนของรายการที่กรอง (ใช้แบ่งหน้า)");
+    assert_eq!(
+        (left["coverage"]["eligiblePhotos"].as_i64(), left["coverage"]["edited"].as_i64()),
+        (Some(3), Some(1)),
+        "แต่งแล้ว 1 จาก 3 รูปของคนนี้"
+    );
+    let done = of_person("edited");
+    assert_eq!((names_of(&done), done["total"].as_i64()), (vec!["b.jpg".to_string()], Some(1)));
+    assert!(arr(&done["items"])[0]["editId"].is_string());
+    assert_eq!(names_of(&of_person("any")), ["a.jpg", "b.jpg", "c.jpg"]);
+    assert_eq!(lib.filenames(json!({ "editFilter": "unedited" })), ["a.jpg", "c.jpg"], "ทั้งคลัง: d แต่งแล้วจึงไม่อยู่");
+
+    // เลือกผลทั้งหมดขณะกรอง = เฉพาะรูปที่ยังไม่แต่ง
+    let snapshot = lib.call(
+        "create_selection",
+        json!({ "personIds": [person], "personMode": "all", "eventIds": [], "faceFilter": "any", "sort": "filename", "limit": 3, "editFilter": "unedited" }),
+    );
+    assert_eq!(snapshot["count"], 2);
+    assert_eq!(lib.try_call("query_photos", json!({ "personIds": [], "personMode": "all", "eventIds": [], "faceFilter": "any", "sort": "filename", "limit": 10, "editFilter": "done" })).unwrap_err().code, "INVALID_INPUT");
+
+    // กลับเป็นต้นฉบับ = กลับไปอยู่ในรายการที่ยังไม่แต่ง
+    lib.call("reset_photo_edit", json!({ "photoId": id("b.jpg") }));
+    assert_eq!(names_of(&of_person("unedited")), ["a.jpg", "b.jpg", "c.jpg"]);
+}
+
+#[test]
 fn edit_light_and_color_change_views_and_exports_but_not_faces_or_the_file() {
     let lib = Lib::new();
     let root = lib.photos().join("2026-11-21 แสงสี");

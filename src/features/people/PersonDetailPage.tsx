@@ -2,17 +2,19 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Link, useParams, useSearchParams } from 'react-router';
-import { Archive, ArchiveRestore, Calendar, CircleCheck, EllipsisVertical, Image as ImageIcon, Merge, Pencil, Pin, Sparkles, Undo2, UserRoundSearch, Users, UserX } from 'lucide-react';
+import { Archive, ArchiveRestore, Calendar, CircleCheck, EllipsisVertical, Image as ImageIcon, Merge, Pencil, Pin, SlidersHorizontal, Sparkles, Undo2, UserRoundSearch, Users, UserX } from 'lucide-react';
 import { Page, PageHeader, useDocumentTitle } from '@/app/PageLayout';
 import { Button, IconButton } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
 import { EmptyState, ErrorState, InlineNotice, LoadingBlock, StatusBadge } from '@/components/ui/Feedback';
 import { Select, Tabs } from '@/components/ui/Form';
 import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/Overlay';
+import { EditFilterSelect, EditProgress } from '@/features/photos/EditProgress';
 import { PhotoResults } from '@/features/photos/PhotoResults';
+import { parseEditFilter } from '@/features/search/searchParams';
 import { errorMessage, formatCount, formatThaiDate, isErrorCode } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
-import type { PersonDetail, PhotoResult, SearchParams } from '@/lib/ipc/types';
+import type { EditFilter, PersonDetail, PhotoResult, SearchParams } from '@/lib/ipc/types';
 import { invalidatePeopleData, PHOTO_PAGE_SIZE, qk, usePeople, type PhotoQuery } from '@/lib/queries';
 import { CoappearanceList } from './CoappearanceList';
 import { FaceAvatar } from './FaceAvatar';
@@ -33,6 +35,8 @@ export function PersonDetailPage() {
   const [editing, setEditing] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [merging, setMerging] = useState<'pick' | 'same' | null>(null);
+  // "แต่งรูปของคนนี้": เปิดรูปแรกที่ยังไม่แต่งในหน้าแต่งภาพเมื่อรายการพร้อม (DECISIONS ข้อ 32)
+  const [autoEdit, setAutoEdit] = useState(false);
   useDocumentTitle(person.data?.displayName);
   // คนอื่นที่ชื่อเหมือนกันทุกตัวอักษร: มักเป็นคนเดียวกันที่ถูกเพิ่มซ้ำ (เช่น ข้อมูลจากรุ่นเดิม) — เสนอให้รวม
   const name = person.data?.displayName.trim() ?? '';
@@ -54,6 +58,21 @@ export function PersonDetailPage() {
     if (value === 'photos') next.delete('tab');
     else next.set('tab', value);
     setParams(next, { replace: true });
+  };
+  const editFilter = parseEditFilter(params.get('ed'));
+  const setEditFilter = (value: EditFilter) => {
+    const next = new URLSearchParams(params);
+    if (value === 'any') next.delete('ed');
+    else next.set('ed', value);
+    setParams(next, { replace: true });
+  };
+  const editThisPerson = () => {
+    // แท็บรูป + เฉพาะที่ยังไม่แต่ง (คงกิจกรรมที่เลือกไว้) แล้วเปิดรูปแรกเมื่อรายการใหม่พร้อม
+    const next = new URLSearchParams(params);
+    next.delete('tab');
+    next.set('ed', 'unedited');
+    setParams(next, { replace: true });
+    setAutoEdit(true);
   };
 
   if (person.isPending) {
@@ -132,6 +151,14 @@ export function PersonDetailPage() {
           >
             {data.pinned ? 'ปักหมุดอยู่' : 'ปักหมุด'}
           </Button>
+          <Button
+            icon={<SlidersHorizontal className="size-4" aria-hidden />}
+            onClick={editThisPerson}
+            title="เปิดรูปของคนนี้ที่ยังไม่แต่งทีละรูป บันทึกแล้วไปรูปถัดไปได้เลย"
+            data-testid="person-edit-photos"
+          >
+            แต่งรูปของคนนี้
+          </Button>
           <Button icon={<Pencil className="size-4" aria-hidden />} onClick={() => setEditing(true)} data-testid="person-edit">
             แก้ไขข้อมูล
           </Button>
@@ -190,12 +217,26 @@ export function PersonDetailPage() {
         className="mb-4"
       />
 
-      {tab === 'photos' && <PersonPhotos person={data} eventId={params.get('event')} onEventChange={(id) => {
-        const next = new URLSearchParams(params);
-        if (id) next.set('event', id);
-        else next.delete('event');
-        setParams(next, { replace: true });
-      }} />}
+      {tab === 'photos' && (
+        <PersonPhotos
+          person={data}
+          eventId={params.get('event')}
+          onEventChange={(id) => {
+            const next = new URLSearchParams(params);
+            if (id) next.set('event', id);
+            else next.delete('event');
+            setParams(next, { replace: true });
+          }}
+          editFilter={editFilter}
+          onEditFilterChange={setEditFilter}
+          // เริ่มเมื่อ URL เปลี่ยนเป็น "ยังไม่แต่ง" แล้วจริง (react-router เปลี่ยน URL แบบ transition ช้ากว่า state นี้)
+          autoEdit={autoEdit && editFilter === 'unedited'}
+          onAutoEditHandled={(opened) => {
+            setAutoEdit(false);
+            if (!opened) toast.success(`รูปของ ${data.displayName}${params.get('event') ? 'ในกิจกรรมที่เลือก' : ''} แต่งครบทุกรูปแล้ว`);
+          }}
+        />
+      )}
       {tab === 'events' && <PersonEvents person={data} />}
       {tab === 'together' && (
         <div className="max-w-[560px] rounded-card border border-line bg-surface p-5 shadow-card">
@@ -220,16 +261,36 @@ export function PersonDetailPage() {
   );
 }
 
-function PersonPhotos({ person, eventId, onEventChange }: { person: PersonDetail; eventId: string | null; onEventChange: (id: string | null) => void }) {
+function PersonPhotos({
+  person,
+  eventId,
+  onEventChange,
+  editFilter,
+  onEditFilterChange,
+  autoEdit,
+  onAutoEditHandled,
+}: {
+  person: PersonDetail;
+  eventId: string | null;
+  onEventChange: (id: string | null) => void;
+  editFilter: EditFilter;
+  onEditFilterChange: (value: EditFilter) => void;
+  autoEdit: boolean;
+  onAutoEditHandled: (opened: boolean) => void;
+}) {
   const [sort, setSort] = useState<SearchParams['sort']>('taken_desc');
   // ค่าเริ่มต้น: รวมรูปที่ AI จัดให้ ผู้ใช้ไล่ดูแล้วแจ้งเฉพาะรูปที่ไม่ใช่
   const [chosen, setScope] = useState<PhotoScope>('all');
+  // "แต่งรูปของคนนี้" ขณะดูรูปที่แจ้งว่าไม่ใช่: กลับไปรูปของคนนี้ก่อน (ไม่แต่งรูปของคนอื่น)
+  useEffect(() => {
+    if (autoEdit && chosen === 'rejected') setScope('all');
+  }, [autoEdit, chosen]);
   // รูปที่แจ้งว่าไม่ใช่ถูกคืนจนหมด: กลับไปมุมมองปกติ
   const scope: PhotoScope = chosen === 'rejected' && person.rejectedPhotoCount === 0 ? 'all' : chosen;
   const query = useMemo<PhotoQuery>(() => {
-    const base = { personMode: 'all' as const, eventIds: eventId ? [eventId] : [], faceFilter: 'any' as const, sort, limit: PHOTO_PAGE_SIZE };
+    const base = { personMode: 'all' as const, eventIds: eventId ? [eventId] : [], faceFilter: 'any' as const, sort, limit: PHOTO_PAGE_SIZE, editFilter };
     return scope === 'rejected' ? { ...base, personIds: [], rejectedPersonId: person.id } : { ...base, personIds: [person.id], includeSuggested: scope === 'all' };
-  }, [person.id, eventId, sort, scope]);
+  }, [person.id, eventId, sort, scope, editFilter]);
   return (
     <div>
       <div className="mb-3.5 flex flex-wrap items-center gap-2.5">
@@ -247,6 +308,7 @@ function PersonPhotos({ person, eventId, onEventChange }: { person: PersonDetail
           <option value="added_desc">เพิ่มล่าสุด</option>
           <option value="filename">ชื่อไฟล์</option>
         </Select>
+        <EditFilterSelect value={editFilter} onChange={onEditFilterChange} />
         {(person.aiPhotoCount > 0 || person.rejectedPhotoCount > 0) && (
           <Tabs<PhotoScope>
             label="ขอบเขตของรูป"
@@ -277,19 +339,36 @@ function PersonPhotos({ person, eventId, onEventChange }: { person: PersonDetail
         label={scope === 'rejected' ? `รูปที่แจ้งว่าไม่ใช่ ${person.displayName}` : `รูปของ ${person.displayName}`}
         originLabel="กลับไปบุคคล"
         showEvent={!eventId}
-        selectionKey={`${person.id}|${eventId ?? ''}|${scope}`}
+        selectionKey={`${person.id}|${eventId ?? ''}|${scope}|${editFilter}`}
+        autoEdit={autoEdit && scope !== 'rejected'}
+        onAutoEditHandled={onAutoEditHandled}
         selectionActions={({ photos, clear }) =>
           scope === 'rejected' ? <GiveBack person={person} photos={photos} onDone={clear} /> : <NotThisPerson person={person} photos={photos} onDone={clear} />
         }
         summary={(meta) =>
-          meta.total > 0 ? (
-            <p className="text-sm text-muted" aria-live="polite">
-              {formatCount(meta.total)} รูป{eventId ? ' ในกิจกรรมที่เลือก' : ' จากทุกกิจกรรม'}
-            </p>
+          meta.total > 0 || (meta.coverage?.eligiblePhotos ?? 0) > 0 ? (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <p className="text-sm text-muted" aria-live="polite">
+                {formatCount(meta.total)} รูป{editFilter === 'unedited' ? 'ที่ยังไม่แต่ง' : editFilter === 'edited' ? 'ที่แต่งแล้ว' : ''}
+                {eventId ? ' ในกิจกรรมที่เลือก' : ' จากทุกกิจกรรม'}
+              </p>
+              {scope !== 'rejected' && <EditProgress meta={meta} />}
+            </div>
           ) : null
         }
         empty={
-          eventId ? (
+          editFilter !== 'any' ? (
+            <EmptyState
+              icon={editFilter === 'unedited' ? <CircleCheck aria-hidden /> : <SlidersHorizontal aria-hidden />}
+              title={editFilter === 'unedited' ? `แต่งรูปของ ${person.displayName} ครบแล้ว` : 'ยังไม่มีรูปที่แต่งแล้ว'}
+              description={
+                editFilter === 'unedited'
+                  ? `ไม่มีรูปที่ยังไม่แต่ง${eventId ? 'ในกิจกรรมที่เลือก' : ''} — รูปที่แต่งแล้วมีป้าย “แต่งแล้ว” กำกับ`
+                  : `กด “แต่งรูปของคนนี้” เพื่อเริ่มแต่งทีละรูป${eventId ? ' (เฉพาะกิจกรรมที่เลือก)' : ''}`
+              }
+              action={<Button onClick={() => onEditFilterChange('any')}>ดูทุกรูป</Button>}
+            />
+          ) : eventId ? (
             <EmptyState icon={<UserRoundSearch aria-hidden />} title="ไม่มีรูปของบุคคลนี้ในกิจกรรมที่เลือก" action={<Button onClick={() => onEventChange(null)}>ดูทุกกิจกรรม</Button>} />
           ) : (
             <EmptyState

@@ -44,6 +44,8 @@ export interface ViewerSession {
   owner?: string;
   /** ขอให้หน้าที่มาโหลดรูปหน้าถัดไป (มีเมื่อยังโหลดไม่ครบ) */
   requestMore?: () => void;
+  /** เปิดมาที่หน้าแต่งภาพเลย (แต่งทีละรูป — DECISIONS ข้อ 32) ตัวดูภาพใช้ครั้งเดียวแล้วล้าง */
+  edit?: boolean;
 }
 
 export interface ViewerLocationState {

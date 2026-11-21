@@ -1,5 +1,5 @@
 import { forwardRef } from 'react';
-import { Eye, Pin, Sparkles } from 'lucide-react';
+import { Eye, Pin, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import type { PersonSummary } from '@/lib/ipc/types';
@@ -37,7 +37,7 @@ export const PersonCard = forwardRef<HTMLDivElement, PersonCardProps>(function P
       <button
         type="button"
         data-testid="person-card-open"
-        aria-label={`${person.displayName} ${formatCount(person.confirmedPhotoCount + person.aiPhotoCount)} รูป${person.aiPhotoCount > 0 ? ` (AI จัดให้ ${formatCount(person.aiPhotoCount)} รูป)` : ''} เปิดรายละเอียด (กด Space เพื่อดูเร็ว)`}
+        aria-label={`${person.displayName} ${formatCount(person.confirmedPhotoCount + person.aiPhotoCount)} รูป${person.aiPhotoCount > 0 ? ` (AI จัดให้ ${formatCount(person.aiPhotoCount)} รูป)` : ''}${person.uneditedPhotoCount ? ` ยังไม่แต่ง ${formatCount(person.uneditedPhotoCount)} รูป` : ''} เปิดรายละเอียด (กด Space เพื่อดูเร็ว)`}
         onClick={() => onOpen(person)}
         onKeyDown={(event) => {
           if (event.key === ' ') {
@@ -66,6 +66,13 @@ export const PersonCard = forwardRef<HTMLDivElement, PersonCardProps>(function P
             {person.nickname ? ` · ${person.nickname}` : ''}
             {person.archived ? ' · เก็บไว้' : ''}
           </span>
+          {/* หน้าหลัก: รูปของคนนี้ที่ยังไม่แต่ง (แต่งตามคน — DECISIONS ข้อ 32) */}
+          {person.uneditedPhotoCount !== undefined && person.confirmedPhotoCount + person.aiPhotoCount > 0 && (
+            <span className={cn('mt-0.5 flex items-center gap-1 pr-7 text-[12.5px]', person.uneditedPhotoCount > 0 ? 'text-muted' : 'text-ok')} data-testid="person-unedited">
+              <SlidersHorizontal className="size-3.5 shrink-0" aria-hidden />
+              <span className="truncate">{person.uneditedPhotoCount > 0 ? `ยังไม่แต่ง ${formatCount(person.uneditedPhotoCount)} รูป` : 'แต่งครบแล้ว'}</span>
+            </span>
+          )}
         </span>
       </button>
 

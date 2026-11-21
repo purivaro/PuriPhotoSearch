@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Check, CloudOff, Sparkles, Users } from 'lucide-react';
+import { Check, CloudOff, SlidersHorizontal, Sparkles, Users } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Feedback';
 import { cn } from '@/lib/cn';
@@ -117,17 +117,31 @@ export function PhotoGrid({ items, label, selection, onSelectionChange, onOpen, 
                   </span>
                 )}
                 <PeopleBadge photo={photo} />
-                {(photo.raw || photo.rawPair) && (
-                  <span
-                    title={
-                      photo.rawPair
-                        ? `มีไฟล์ RAW คู่ (${photo.rawPair}) — ภาพที่เห็นคือ JPEG แต่งจาก RAW ได้`
-                        : 'ไฟล์ RAW จากกล้อง — แต่งจากข้อมูลเซนเซอร์ ส่งออกเป็น JPEG'
-                    }
-                    data-testid="photo-card-raw"
-                    className="absolute top-1.5 right-1.5 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-bold tracking-wide text-white"
-                  >
-                    {photo.rawPair ? 'RAW+JPEG' : 'RAW'}
+                {(photo.editId || photo.raw || photo.rawPair) && (
+                  <span className="absolute top-1.5 right-1.5 flex items-center gap-1">
+                    {photo.editId && (
+                      <span
+                        title="แต่งในแอปแล้ว — ไฟล์ต้นฉบับไม่ถูกแตะ"
+                        data-testid="photo-card-edited"
+                        className="inline-flex items-center gap-1 rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-semibold text-white"
+                      >
+                        <SlidersHorizontal className="size-3 shrink-0" aria-hidden />
+                        {compact ? <span className="sr-only">แต่งแล้ว</span> : 'แต่งแล้ว'}
+                      </span>
+                    )}
+                    {(photo.raw || photo.rawPair) && (
+                      <span
+                        title={
+                          photo.rawPair
+                            ? `มีไฟล์ RAW คู่ (${photo.rawPair}) — ภาพที่เห็นคือ JPEG แต่งจาก RAW ได้`
+                            : 'ไฟล์ RAW จากกล้อง — แต่งจากข้อมูลเซนเซอร์ ส่งออกเป็น JPEG'
+                        }
+                        data-testid="photo-card-raw"
+                        className="rounded-md bg-black/65 px-1.5 py-0.5 text-[11px] font-bold tracking-wide text-white"
+                      >
+                        {photo.rawPair ? 'RAW+JPEG' : 'RAW'}
+                      </span>
+                    )}
                   </span>
                 )}
               </button>
