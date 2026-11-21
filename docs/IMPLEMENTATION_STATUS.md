@@ -61,7 +61,7 @@ PersonQuickView (S05/S08): **ทำแล้ว ทดสอบแล้ว** �
 | W02 Folder preview | ทำแล้ว ทดสอบแล้ว (ไม่มีตัวนับระหว่างตรวจ) |
 | W03 Catalog + jobs | ทำแล้ว ทดสอบแล้ว — ยกเว้นการ kill process กลางงานจริง (ทดสอบด้วยการจำลองสถานะในฐาน) |
 | W04 People + manual labels | ทำแล้ว ทดสอบแล้ว — ยกเว้นหน้าจัดกลุ่ม |
-| W05 AI pipeline | ทำแล้ว ทดสอบแล้ว (Apple Silicon; Windows x64 เฉพาะบน runner ของ CI) — `buffalo_l` ผ่าน ONNX Runtime, ติดตั้งโมเดลในแอป, วิเคราะห์ในงานเบื้องหลัง; Mac Intel ไม่มีตัววิเคราะห์; ยังไม่มี CoreML และการเปลี่ยนรุ่นโมเดล |
+| W05 AI pipeline | ทำแล้ว ทดสอบแล้ว (Apple Silicon; Windows x64 เฉพาะบน runner ของ CI) — `buffalo_l` ผ่าน ONNX Runtime, ติดตั้งโมเดลในแอป, วิเคราะห์ในงานเบื้องหลัง; Mac Intel ไม่มีตัววิเคราะห์; Apple Silicon ใช้ CoreML (ONNX Runtime เปิดเอง) โดยเก็บโมเดลที่แปลงแล้วในโฟลเดอร์โมเดล ไม่ทิ้งไฟล์ใน `$TMPDIR` (21 พ.ย. 69 — DECISIONS ข้อ 9); ยังไม่มีการเปลี่ยนรุ่นโมเดล |
 | W06 Review + correction | บางส่วน — ยืนยัน/ปฏิเสธข้อเสนอ, เปลี่ยนคน, ไม่ใช่ใบหน้า, คิวตรวจสอบ; ไม่มี merge/split/undo |
 | W07 Advanced search | บางส่วน — AND/OR, ปรากฏร่วม→AND, ภาษาไทย; ไม่มีค้นด้วยใบหน้าตัวอย่าง |
 | W08 Sources + recovery | บางส่วน — ออฟไลน์/ต่อกลับ, เชื่อมตำแหน่งโฟลเดอร์ใหม่; ไม่มี archive, watcher |

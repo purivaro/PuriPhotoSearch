@@ -52,16 +52,20 @@ pub struct FaceEngine {
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 impl FaceEngine {
     pub fn load(model_dir: &Path, detector: &str, embedder: &str, threads: usize) -> Result<Self> {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        coreml::remove_stale_temp_files(&std::env::temp_dir());
         let env = ort::init().with_name("puri-faces").build()?;
         let open = |file: &str| -> Result<Session> {
             let path = model_dir.join(file);
             if !path.is_file() {
                 return Err(format!("ไม่พบไฟล์โมเดล {}", path.display()).into());
             }
-            Ok(Session::builder(&env)?
-                .with_intra_threads(threads.max(1))
-                .map_err(|e| e.to_string())?
-                .commit_from_file(path)?)
+            let mut builder = Session::builder(&env)?.with_intra_threads(threads.max(1)).map_err(|e| e.to_string())?;
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            {
+                builder = coreml::configure(builder, model_dir, &path)?;
+            }
+            Ok(builder.commit_from_file(path)?)
         };
         Ok(Self { detector: open(detector)?, embedder: open(embedder)?, _env: env })
     }
@@ -150,6 +154,137 @@ impl FaceEngine {
             return Err(format!("โมเดลคืนเวกเตอร์ {} มิติ ไม่ใช่ {EMBEDDING_DIM}", data.len()).into());
         }
         Ok(data.to_vec())
+    }
+}
+
+/// CoreML บน Mac Apple Silicon: ONNX Runtime เปิดใช้เองและแปลงโมเดลเป็นของ CoreML ทุกครั้งที่โหลด (3–4 วินาที)
+/// ไปวางใน `$TMPDIR` ครั้งละราว 365 MB ซึ่งถูกลบเฉพาะเมื่อโปรแกรมปิดแบบปกติ — แอปที่ปิดโดยไม่คืน session
+/// เทสต์ และ dev build จึงทิ้งไว้ทุกครั้ง (เจอจริง 9.8 GB จนดิสก์เต็ม 21 พ.ย. 69)
+///
+/// แก้โดยบอก CoreML ให้เก็บโมเดลที่แปลงแล้วในโฟลเดอร์โมเดลของแอปและใช้ซ้ำ (โหลดเหลือราว 0.2 วินาที ผลเท่าเดิมทุกบิต)
+/// และลบของเดิมใน `$TMPDIR` ที่โปรแกรมเจ้าของปิดไปแล้ว (ของแอปรุ่นก่อน เทสต์ และ dev build)
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod coreml {
+    use ort::session::builder::{AutoDevicePolicy, SessionBuilder};
+    use std::path::{Path, PathBuf};
+
+    /// ตั้งให้ session ใช้ CoreML แบบเก็บโมเดลที่แปลงแล้วไว้ใช้ซ้ำ — เก็บไม่ได้ (โฟลเดอร์อ่านอย่างเดียว) ใช้ CPU แทน
+    /// ดีกว่าปล่อยให้ ONNX Runtime แปลงลง `$TMPDIR` ทุกครั้ง
+    pub fn configure(builder: SessionBuilder, model_dir: &Path, model: &Path) -> super::Result<SessionBuilder> {
+        let configured = match cache_dir(model_dir, model) {
+            Some(dir) => builder
+                .with_execution_providers([ort::ep::CoreML::default().with_model_cache_dir(dir.display()).build()]),
+            None => builder.with_auto_device(AutoDevicePolicy::PreferCPU),
+        };
+        Ok(configured.map_err(|e| e.to_string())?)
+    }
+
+    /// `coreml-cache/<ชื่อไฟล์>-<ขนาด>-<เวลาแก้ไข>` ในโฟลเดอร์โมเดล: ไฟล์โมเดลเปลี่ยนเมื่อไรได้โฟลเดอร์ใหม่ (ONNX Runtime
+    /// ตรวจแค่โครงของโมเดล ไม่ตรวจค่าน้ำหนัก) และลบของรุ่นก่อนของไฟล์เดียวกันทิ้ง
+    fn cache_dir(model_dir: &Path, model: &Path) -> Option<PathBuf> {
+        let meta = std::fs::metadata(model).ok()?;
+        let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+        let name = model.file_name()?.to_string_lossy().into_owned();
+        let root = model_dir.join("coreml-cache");
+        let key = format!("{name}-{}-{modified}", meta.len());
+        if let Ok(entries) = std::fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                let other = entry.file_name().to_string_lossy().into_owned();
+                if other != key && other.strip_prefix(&name).is_some_and(|rest| rest.starts_with('-')) {
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
+            }
+        }
+        let dir = root.join(key);
+        std::fs::create_dir_all(&dir).ok()?;
+        Some(dir)
+    }
+
+    /// ลบ `onnxruntime-<UUID>-<pid>-<เลข>.model.mlmodel` / `.mlmodelc` ใน `dir` ที่ PID ไม่ได้ทำงานแล้ว
+    /// (ของโปรแกรมที่ยังทำงานอยู่ยังถูกใช้ — ไม่แตะ)
+    pub fn remove_stale_temp_files(dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let Some(pid) = owner_pid(&entry.file_name().to_string_lossy()) else { continue };
+            if alive(pid) {
+                continue;
+            }
+            let path = entry.path();
+            let _ = match std::fs::symlink_metadata(&path) {
+                Ok(m) if m.is_dir() => std::fs::remove_dir_all(&path),
+                Ok(_) => std::fs::remove_file(&path),
+                Err(_) => continue,
+            };
+        }
+    }
+
+    /// PID ในชื่อไฟล์ชั่วคราวของ CoreML · ชื่ออื่น = None
+    fn owner_pid(name: &str) -> Option<i32> {
+        let stem = name.strip_suffix(".model.mlmodel").or_else(|| name.strip_suffix(".model.mlmodelc"))?;
+        let parts: Vec<&str> = stem.strip_prefix("onnxruntime-")?.split('-').collect();
+        let hex = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit());
+        let uuid = parts.len() == 7 && parts[..5].iter().zip([8, 4, 4, 4, 12]).all(|(p, n)| p.len() == n && hex(p));
+        let pid: i32 = parts.get(5)?.parse().ok()?;
+        (uuid && pid > 0 && hex(parts[6])).then_some(pid)
+    }
+
+    /// `kill(pid, 0)` ไม่ส่งสัญญาณจริง: สำเร็จ = ยังทำงาน · EPERM = ทำงานอยู่แต่เป็นของผู้ใช้อื่น
+    fn alive(pid: i32) -> bool {
+        let signalled = unsafe { libc::kill(pid, 0) } == 0;
+        signalled || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn reads_the_pid_only_from_coreml_temp_names() {
+            let name = "onnxruntime-00F90307-CB02-48BC-BA7E-AAA899D6DCB4-8207-00001DFBBEEE368C";
+            assert_eq!(owner_pid(&format!("{name}.model.mlmodel")), Some(8207));
+            assert_eq!(owner_pid(&format!("{name}.model.mlmodelc")), Some(8207));
+            assert_eq!(owner_pid(&format!("{name}.onnx")), None);
+            assert_eq!(owner_pid("onnxruntime-notes-8207-1.model.mlmodel"), None);
+            assert_eq!(owner_pid("photo-8207.model.mlmodel"), None);
+        }
+
+        #[test]
+        fn removes_leftovers_of_finished_processes_only() {
+            let dir = std::env::temp_dir().join(format!("puri-faces-coreml-test-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            // PID ของโปรแกรมที่จบไปแล้ว: process ลูกที่รอจนจบ
+            let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+            let finished = child.id();
+            child.wait().unwrap();
+            let name = |pid: u32| format!("onnxruntime-00F90307-CB02-48BC-BA7E-AAA899D6DCB4-{pid}-00001DFBBEEE368C");
+            let stale_file = dir.join(format!("{}.model.mlmodel", name(finished)));
+            let stale_dir = dir.join(format!("{}.model.mlmodelc", name(finished)));
+            let ours = dir.join(format!("{}.model.mlmodelc", name(std::process::id())));
+            let other = dir.join("notes.txt");
+            std::fs::write(&stale_file, b"x").unwrap();
+            std::fs::create_dir_all(stale_dir.join("weights")).unwrap();
+            std::fs::create_dir_all(&ours).unwrap();
+            std::fs::write(&other, b"x").unwrap();
+            remove_stale_temp_files(&dir);
+            assert!(!stale_file.exists() && !stale_dir.exists(), "ของโปรแกรมที่จบแล้วถูกลบ");
+            assert!(ours.exists() && other.exists(), "ของโปรแกรมที่ยังทำงาน และไฟล์อื่น ไม่ถูกแตะ");
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
+        #[test]
+        fn keeps_one_cache_folder_per_model_file() {
+            let dir = std::env::temp_dir().join(format!("puri-faces-cache-test-{}", std::process::id()));
+            let model = dir.join("det.onnx");
+            std::fs::create_dir_all(dir.join("coreml-cache/det.onnx-1-1")).unwrap();
+            std::fs::create_dir_all(dir.join("coreml-cache/det.onnx.bak-1-1")).unwrap();
+            std::fs::write(&model, b"model").unwrap();
+            let cache = cache_dir(&dir, &model).unwrap();
+            assert!(cache.is_dir() && cache.file_name().unwrap().to_string_lossy().starts_with("det.onnx-5-"));
+            assert!(!dir.join("coreml-cache/det.onnx-1-1").exists(), "ของไฟล์โมเดลรุ่นก่อนถูกลบ");
+            assert!(dir.join("coreml-cache/det.onnx.bak-1-1").exists(), "ของไฟล์อื่นไม่ถูกแตะ");
+            assert_eq!(cache_dir(&dir, &model), Some(cache), "ไฟล์เดิม = โฟลเดอร์เดิม");
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
     }
 }
 
