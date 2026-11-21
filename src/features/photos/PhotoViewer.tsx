@@ -19,7 +19,7 @@ import { PasteEditDialog } from './PasteEditDialog';
 import { GenerateDialog } from '@/features/assistant/GenerateDialog';
 import { useAssistant } from '@/stores/assistant';
 import { useUi } from '@/stores/ui';
-import { PhotoEditor } from './PhotoEditor';
+import { PhotoEditor, type EditorTab } from './PhotoEditor';
 import { ViewerInspector } from './ViewerInspector';
 import { ViewerStage, type ViewerStageHandle } from './ViewerStage';
 import { FILE_MANAGER } from '@/lib/platform';
@@ -74,6 +74,8 @@ export function PhotoViewer() {
   // แต่งทีละรูป (DECISIONS ข้อ 32): เปิดมาที่หน้าแต่งภาพเลย หรือเปิดหน้าแต่งภาพต่อให้รูปถัดไปหลัง "บันทึก แล้วไปรูปถัดไป" / "ข้าม"
   // `editFor` = รูปที่ต้องเปิดหน้าแต่งภาพให้ · รันซ้ำได้ผลเดิม (StrictMode รัน effect สองรอบ) และล้างเมื่อไปรูปอื่นด้วยวิธีอื่น
   const editFor = useRef<Id | null>(null);
+  // แท็บของหน้าแต่งภาพที่ใช้ล่าสุดในตัวดูภาพนี้ (รูปถัดไปเปิดที่แท็บเดิม)
+  const editorTab = useRef<EditorTab>('crop');
   const sessionRef = viewer.session;
   useEffect(() => {
     setDrawMode(false);
@@ -466,6 +468,8 @@ export function PhotoViewer() {
           onClose={() => setEditing(false)}
           onSaved={applyEdited}
           sequence={index >= 0 && total > 1 ? { index, total, next: editNext } : undefined}
+          initialTab={editorTab.current}
+          onTabChange={(next) => (editorTab.current = next)}
         />
       )}
       <PasteEditDialog open={pasting} onOpenChange={setPasting} selection={{ kind: 'explicit', photoIds: [photoId] }} count={1} />

@@ -349,7 +349,7 @@ function PhotosTab({
           ) : null
         }
         empty={
-          editFilter === 'unedited' && !(faceFilter !== 'any') ? (
+          editFilter === 'unedited' && faceFilter === 'any' ? (
             <EmptyState
               icon={<CircleCheck aria-hidden />}
               title={selectedPerson ? `แต่งรูปของ ${selectedPerson.displayName} ในงานนี้ครบแล้ว` : 'แต่งรูปในงานนี้ครบแล้ว'}

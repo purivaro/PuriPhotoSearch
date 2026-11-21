@@ -281,6 +281,10 @@ function PersonPhotos({
   const [sort, setSort] = useState<SearchParams['sort']>('taken_desc');
   // ค่าเริ่มต้น: รวมรูปที่ AI จัดให้ ผู้ใช้ไล่ดูแล้วแจ้งเฉพาะรูปที่ไม่ใช่
   const [chosen, setScope] = useState<PhotoScope>('all');
+  // "แต่งรูปของคนนี้" ขณะดูรูปที่แจ้งว่าไม่ใช่: กลับไปรูปของคนนี้ก่อน (ไม่แต่งรูปของคนอื่น)
+  useEffect(() => {
+    if (autoEdit && chosen === 'rejected') setScope('all');
+  }, [autoEdit, chosen]);
   // รูปที่แจ้งว่าไม่ใช่ถูกคืนจนหมด: กลับไปมุมมองปกติ
   const scope: PhotoScope = chosen === 'rejected' && person.rejectedPhotoCount === 0 ? 'all' : chosen;
   const query = useMemo<PhotoQuery>(() => {
@@ -336,7 +340,7 @@ function PersonPhotos({
         originLabel="กลับไปบุคคล"
         showEvent={!eventId}
         selectionKey={`${person.id}|${eventId ?? ''}|${scope}|${editFilter}`}
-        autoEdit={autoEdit}
+        autoEdit={autoEdit && scope !== 'rejected'}
         onAutoEditHandled={onAutoEditHandled}
         selectionActions={({ photos, clear }) =>
           scope === 'rejected' ? <GiveBack person={person} photos={photos} onDone={clear} /> : <NotThisPerson person={person} photos={photos} onDone={clear} />

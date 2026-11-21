@@ -34,7 +34,8 @@ import {
 } from './editGeometry';
 
 type Aspect = 'free' | 'original' | '1:1' | '4:5' | '4:3' | '3:2' | '16:9';
-type Tab = 'crop' | 'light' | 'masks' | 'presets';
+export type EditorTab = 'crop' | 'light' | 'masks' | 'presets';
+type Tab = EditorTab;
 
 const ASPECTS: { value: Aspect; label: string; ratio: number | null }[] = [
   { value: 'free', label: 'อิสระ', ratio: null },
@@ -91,20 +92,23 @@ interface PhotoEditorProps {
    * (`next` ได้ผลการบันทึกเมื่อบันทึกก่อนไป · null = รูปสุดท้ายของชุด)
    */
   sequence?: { index: number; total: number; next: ((saved?: PhotoDetails) => void) | null };
+  /** แท็บที่เปิดอยู่: แต่งทีละรูปแล้วรูปถัดไปเปิดที่แท็บเดิม (เช่น แสงและสี) ไม่กลับไปตัดและหมุนทุกครั้ง */
+  initialTab?: EditorTab;
+  onTabChange?: (tab: EditorTab) => void;
 }
 
 /**
  * แต่งภาพ — ตัด หมุน ปรับเอียง แสงและสี (DECISIONS ข้อ 17–18)
  * เก็บเป็นค่าในคลัง ไฟล์ต้นฉบับไม่ถูกแตะ ใบหน้าและชื่ออยู่ครบเสมอ กลับเป็นต้นฉบับได้ทุกเมื่อ
  */
-export function PhotoEditor({ details, onClose, onSaved, sequence }: PhotoEditorProps) {
+export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 'crop', onTabChange }: PhotoEditorProps) {
   // รูปที่มีไฟล์ RAW คู่: แต่งจาก RAW — ค่าที่นับว่าไม่ได้แต่งคือค่าเริ่มต้นจาก Lightroom (DECISIONS ข้อ 26)
   const pair = details.rawPairInfo;
   const fromRaw = pair?.editFromRaw ?? false;
   const unedited = (fromRaw ? pair?.start : null) ?? IDENTITY;
   const saved = details.edit?.settings ?? unedited;
   const [settings, setSettings] = useState<EditSettings>(saved);
-  const [tab, setTab] = useState<Tab>('crop');
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [aspect, setAspect] = useState<Aspect>('free');
   const [portrait, setPortrait] = useState(false);
   const [straightening, setStraightening] = useState(false);
@@ -281,6 +285,7 @@ export function PhotoEditor({ details, onClose, onSaved, sequence }: PhotoEditor
                 setPreviewAdjust(null);
                 setPicking(false);
                 setTab(next);
+                onTabChange?.(next);
               }}
               items={[
                 { value: 'crop', label: 'ตัดและหมุน' },
