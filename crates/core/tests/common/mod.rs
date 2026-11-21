@@ -304,6 +304,11 @@ pub fn write_png(path: &Path) {
 
 /// JPEG ที่มี EXIF Orientation และ DateTimeOriginal (แทรก APP1 หลัง SOI)
 pub fn jpeg_with_exif(w: u32, h: u32, orientation: u16, datetime: &str) -> Vec<u8> {
+    add_exif(&jpeg_bytes(w, h, 77), orientation, datetime)
+}
+
+/// แทรก EXIF Orientation และ DateTimeOriginal ลงใน JPEG ที่มีอยู่
+pub fn add_exif(base: &[u8], orientation: u16, datetime: &str) -> Vec<u8> {
     assert_eq!(datetime.len(), 19);
     let mut tiff: Vec<u8> = vec![];
     tiff.extend_from_slice(b"II*\0");
@@ -330,7 +335,6 @@ pub fn jpeg_with_exif(w: u32, h: u32, orientation: u16, datetime: &str) -> Vec<u
 
     let mut payload = b"Exif\0\0".to_vec();
     payload.extend(tiff);
-    let base = jpeg_bytes(w, h, 77);
     let mut out = base[..2].to_vec();
     out.extend_from_slice(&[0xFF, 0xE1]);
     out.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());

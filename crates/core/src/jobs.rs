@@ -259,6 +259,7 @@ fn run_next(inner: &Inner, conn: &Connection) -> Result<bool> {
         "export" => crate::export::run(&ctx),
         "shrink" => crate::shrink::run(&ctx),
         "model" => crate::ai::run_install(&ctx),
+        "cull" => crate::cull::run(&ctx),
         other => Err(AppError::internal(format!("ไม่รู้จักชนิดงาน {other}"))),
     };
     let now = util::now();
@@ -775,6 +776,8 @@ fn register_file(
                        decode_error_code = NULL, decode_error = NULL WHERE id = ?1",
                     params![revision_id, stamp.size as i64, stamp.mtime_ns],
                 )?;
+                // ผลวัดสำหรับการคัดเป็นของเนื้อหาเดิม (DECISIONS ข้อ 37)
+                conn.execute("DELETE FROM photo_quality WHERE revision_id = ?1", [&revision_id])?;
             }
             Ok(false)
         }

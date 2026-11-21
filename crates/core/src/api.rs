@@ -330,6 +330,29 @@ enum Command {
         #[serde(default)]
         flag: Option<crate::picks::Flag>,
     },
+    /// AI ช่วยคัดภาพ (DECISIONS ข้อ 37)
+    #[serde(rename_all = "camelCase")]
+    GetCullStatus {
+        event_id: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    StartCullAnalysis {
+        event_id: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    PreviewCull {
+        event_id: String,
+        level: u8,
+    },
+    #[serde(rename_all = "camelCase")]
+    ApplyCull {
+        event_id: String,
+        level: u8,
+    },
+    #[serde(rename_all = "camelCase")]
+    ClearAiPicks {
+        event_id: String,
+    },
 }
 
 /// ชื่อคำสั่งทั้งหมด — ต้องตรงกับ `Commands` ใน `src/lib/ipc/types.ts` (มีเทสต์ตรวจ)
@@ -422,6 +445,11 @@ pub const COMMAND_NAMES: &[&str] = &[
     "preview_white_balance",
     "preview_auto_light",
     "set_photo_flags",
+    "get_cull_status",
+    "start_cull_analysis",
+    "preview_cull",
+    "apply_cull",
+    "clear_ai_picks",
 ];
 
 #[derive(Serialize)]
@@ -639,6 +667,11 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         PreviewWhiteBalance(r) => ok(crate::preview::white_balance(app, &r)?),
         PreviewAutoLight(r) => ok(crate::preview::auto(app, &r)?),
         SetPhotoFlags { selection, flag } => ok(crate::picks::set(app, &selection, flag)?),
+        GetCullStatus { event_id } => ok(crate::cull::status(app, &event_id)?),
+        StartCullAnalysis { event_id } => ok(crate::cull::analyze(app, &event_id)?),
+        PreviewCull { event_id, level } => ok(crate::cull::preview(app, &event_id, level)?),
+        ApplyCull { event_id, level } => ok(crate::cull::apply(app, &event_id, level)?),
+        ClearAiPicks { event_id } => ok(serde_json::json!({ "cleared": crate::cull::clear(app, &event_id)? })),
     }
 }
 

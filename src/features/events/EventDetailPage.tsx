@@ -12,6 +12,7 @@ import { FaceAvatar } from '@/features/people/FaceAvatar';
 import { ThumbSizeSlider } from '@/features/photos/ThumbSizeSlider';
 import { EditFilterSelect, EditProgress, progressPhrase } from '@/features/photos/EditProgress';
 import { FlagFilterSelect, FlagSummary } from '@/features/photos/PhotoFlags';
+import { CullDialog } from '@/features/photos/CullDialog';
 import { PhotoResults } from '@/features/photos/PhotoResults';
 import { parseEditFilter, parseFlagFilter } from '@/features/search/searchParams';
 import { cn } from '@/lib/cn';
@@ -290,6 +291,7 @@ function PhotosTab({
 }) {
   const [faceFilter, setFaceFilter] = useState<SearchParams['faceFilter']>('any');
   const [sort, setSort] = useState<SearchParams['sort']>('taken_asc');
+  const [cullOpen, setCullOpen] = useState(false);
   // คน filter ที่มาจากหน้าบุคคลอาจยังไม่อยู่ในรายชื่อของงาน (เช่นถูกเอาออกแล้ว) ก็ยังแสดง chip ให้ล้างได้
   const selectedPerson = event.people.find((p) => p.person.id === personId)?.person ?? null;
   const query = useMemo<PhotoQuery>(
@@ -335,6 +337,10 @@ function PhotosTab({
         </Select>
         <EditFilterSelect value={editFilter} onChange={(ed) => onFiltersChange({ ed })} />
         <FlagFilterSelect value={flagFilter} onChange={(fl) => onFiltersChange({ fl })} />
+        <Button icon={<Sparkles className="size-4" aria-hidden />} onClick={() => setCullOpen(true)} data-testid="event-cull-open">
+          AI ช่วยคัด
+        </Button>
+        <CullDialog eventId={event.id} open={cullOpen} onOpenChange={setCullOpen} onShowPicked={() => onFiltersChange({ fl: 'picked' })} />
         <Select value={sort} onChange={(e) => setSort(e.target.value as SearchParams['sort'])} aria-label="เรียงรูปตาม">
           <option value="taken_asc">วันถ่าย เก่า → ใหม่</option>
           <option value="taken_desc">วันถ่าย ใหม่ → เก่า</option>
