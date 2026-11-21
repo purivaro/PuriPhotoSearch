@@ -562,7 +562,7 @@ fn library_from_v1_upgrades_in_place() {
     })
     .unwrap();
     let call = |cmd: &str, args: Value| puri_core::api::dispatch(&app, cmd, args).unwrap();
-    assert_eq!(call("get_capabilities", json!({}))["schemaVersion"], 10);
+    assert_eq!(call("get_capabilities", json!({}))["schemaVersion"], 11);
     assert_eq!(call("get_library_summary", json!({}))["name"], "คลังเดิม");
     let job = call("get_job", json!({ "jobId": "j1" }));
     assert_eq!((job["state"].as_str(), job["counts"]["done"].as_i64()), (Some("completed"), Some(5)));

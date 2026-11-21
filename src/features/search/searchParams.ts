@@ -1,4 +1,4 @@
-import type { EditFilter, Id, PersonMode, SearchParams } from '@/lib/ipc/types';
+import type { EditFilter, FlagFilter, Id, PersonMode, SearchParams } from '@/lib/ipc/types';
 import type { PhotoQuery } from '@/lib/queries';
 
 /** เงื่อนไขค้นหาของหน้า S06 เก็บใน URL เพื่อย้อนกลับ/แชร์ภายในแอปได้ */
@@ -17,6 +17,8 @@ export interface SearchFilters {
   includeAi: boolean;
   /** การแต่งในแอป: ทั้งหมด / ยังไม่แต่ง / แต่งแล้ว */
   editFilter: EditFilter;
+  /** การคัด: ทั้งหมด / เลือกไว้ / ยังไม่คัด / ไม่เอา */
+  flagFilter: FlagFilter;
 }
 
 export const DEFAULT_FILTERS: SearchFilters = {
@@ -32,11 +34,17 @@ export const DEFAULT_FILTERS: SearchFilters = {
   sort: 'taken_desc',
   includeAi: true,
   editFilter: 'any',
+  flagFilter: 'any',
 };
 
 const SORTS: SearchParams['sort'][] = ['taken_desc', 'taken_asc', 'added_desc', 'filename'];
 const FACE_FILTERS: SearchParams['faceFilter'][] = ['any', 'has_faces', 'no_person'];
 const EDIT_FILTERS: EditFilter[] = ['any', 'edited', 'unedited'];
+
+/** อ่านตัวกรองการคัดจาก URL (ค่าแปลกปลอม = ทั้งหมด) */
+export function parseFlagFilter(value: string | null): FlagFilter {
+  return value === 'picked' || value === 'unflagged' || value === 'rejected' ? value : 'any';
+}
 
 /** อ่านตัวกรองการแต่งจาก URL (ค่าแปลกปลอม = ทั้งหมด) */
 export function parseEditFilter(value: string | null): EditFilter {
@@ -68,6 +76,7 @@ export function parseFilters(search: URLSearchParams): SearchFilters {
     sort: sort && SORTS.includes(sort) ? sort : 'taken_desc',
     includeAi: search.get('ai') !== '0',
     editFilter: parseEditFilter(search.get('ed')),
+    flagFilter: parseFlagFilter(search.get('fl')),
   };
 }
 
@@ -89,6 +98,7 @@ export function filtersToSearch(filters: SearchFilters): URLSearchParams {
   if (filters.sort !== 'taken_desc') out.set('sort', filters.sort);
   if (!filters.includeAi) out.set('ai', '0');
   if (filters.editFilter !== 'any') out.set('ed', filters.editFilter);
+  if (filters.flagFilter !== 'any') out.set('fl', filters.flagFilter);
   return out;
 }
 
@@ -99,7 +109,13 @@ export function hasDateFilter(filters: SearchFilters): boolean {
 /** มีเงื่อนไขที่ทำให้ผลแคบลงหรือไม่ (ไม่นับการเรียง) */
 export function hasActiveFilters(filters: SearchFilters): boolean {
   return Boolean(
-    filters.text.trim() || filters.personIds.length || filters.eventIds.length || hasDateFilter(filters) || filters.faceFilter !== 'any' || filters.editFilter !== 'any',
+    filters.text.trim() ||
+      filters.personIds.length ||
+      filters.eventIds.length ||
+      hasDateFilter(filters) ||
+      filters.faceFilter !== 'any' ||
+      filters.editFilter !== 'any' ||
+      filters.flagFilter !== 'any',
   );
 }
 
@@ -116,6 +132,7 @@ export function filtersToQuery(filters: SearchFilters, limit: number): PhotoQuer
   };
   if (text) query.text = text;
   if (filters.editFilter !== 'any') query.editFilter = filters.editFilter;
+  if (filters.flagFilter !== 'any') query.flagFilter = filters.flagFilter;
   if (hasDateFilter(filters)) {
     query.date = { field: filters.dateField, includeUnknown: filters.includeUnknownDate };
     if (filters.from) query.date.from = filters.from;

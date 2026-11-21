@@ -18,6 +18,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (8, include_str!("../migrations/0008_ai_images.sql")),
     (9, include_str!("../migrations/0009_raw.sql")),
     (10, include_str!("../migrations/0010_raw_pairs.sql")),
+    (11, include_str!("../migrations/0011_photo_picks.sql")),
 ];
 
 pub fn latest_version() -> i64 {

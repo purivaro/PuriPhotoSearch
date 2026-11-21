@@ -3,8 +3,17 @@ import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/Form';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
-import type { EditFilter } from '@/lib/ipc/types';
+import type { EditFilter, FlagFilter } from '@/lib/ipc/types';
 import type { PhotoResultsMeta } from './PhotoResults';
+
+/** คำบอกตัวกรองการคัด/การแต่ง เช่น "ที่เลือกไว้และยังไม่แต่ง" ("" = ไม่ได้กรอง) */
+export function progressPhrase(edit: EditFilter, flag: FlagFilter): string {
+  const parts = [
+    { any: '', picked: 'เลือกไว้', unflagged: 'ยังไม่คัด', rejected: 'ไม่เอา' }[flag],
+    { any: '', unedited: 'ยังไม่แต่ง', edited: 'แต่งแล้ว' }[edit],
+  ].filter(Boolean);
+  return parts.length ? `ที่${parts.join('และ')}` : '';
+}
 
 /** ตัวกรองการแต่งในแอป (แต่งตามคน — DECISIONS ข้อ 32) */
 export function EditFilterSelect({ value, onChange, className }: { value: EditFilter; onChange: (value: EditFilter) => void; className?: string }) {

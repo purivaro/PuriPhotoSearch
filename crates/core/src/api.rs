@@ -324,6 +324,12 @@ enum Command {
 
     PreviewWhiteBalance(crate::preview::PointRequest),
     PreviewAutoLight(crate::preview::PointRequest),
+    /// คัดก่อนแต่ง (DECISIONS ข้อ 33): flag ไม่ส่ง/null = ล้างกลับเป็นยังไม่คัด
+    SetPhotoFlags {
+        selection: export::SelectionSpec,
+        #[serde(default)]
+        flag: Option<crate::picks::Flag>,
+    },
 }
 
 /// ชื่อคำสั่งทั้งหมด — ต้องตรงกับ `Commands` ใน `src/lib/ipc/types.ts` (มีเทสต์ตรวจ)
@@ -415,6 +421,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "restore_suggestions",
     "preview_white_balance",
     "preview_auto_light",
+    "set_photo_flags",
 ];
 
 #[derive(Serialize)]
@@ -631,6 +638,7 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         }
         PreviewWhiteBalance(r) => ok(crate::preview::white_balance(app, &r)?),
         PreviewAutoLight(r) => ok(crate::preview::auto(app, &r)?),
+        SetPhotoFlags { selection, flag } => ok(crate::picks::set(app, &selection, flag)?),
     }
 }
 

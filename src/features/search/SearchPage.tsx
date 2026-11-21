@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/Overlay
 import { FaceAvatar } from '@/features/people/FaceAvatar';
 import { PersonPicker } from '@/features/people/PersonPicker';
 import { EditFilterSelect, EditProgress } from '@/features/photos/EditProgress';
+import { FlagFilterSelect, FlagSummary } from '@/features/photos/PhotoFlags';
 import { PhotoResults } from '@/features/photos/PhotoResults';
 import { cn } from '@/lib/cn';
 import { formatCount, formatThaiDate } from '@/lib/format';
@@ -186,6 +187,7 @@ export function SearchPage() {
           </Select>
 
           <EditFilterSelect value={filters.editFilter} onChange={(editFilter) => update({ editFilter })} className="[&>select]:h-9 [&>select]:rounded-full" />
+          <FlagFilterSelect value={filters.flagFilter} onChange={(flagFilter) => update({ flagFilter })} className="[&>select]:h-9 [&>select]:rounded-full" />
 
           <label
             className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-full border border-line bg-surface px-3.5 text-sm font-medium text-ink"
@@ -215,7 +217,8 @@ export function SearchPage() {
               {meta.refreshing && meta.total === 0 ? 'กำลังค้นหา…' : `${active ? 'พบ' : 'รูปทั้งหมดในคลัง'} ${formatCount(meta.total)} รูป`}
             </p>
             {meta.refreshing && <Spinner className="size-4" />}
-            {filters.editFilter !== 'any' && <EditProgress meta={meta} />}
+            {(filters.editFilter !== 'any' || filters.flagFilter !== 'any') && <EditProgress meta={meta} />}
+            <FlagSummary coverage={meta.coverage} />
             <p className="min-w-0 flex-1 text-[13.5px] text-muted" data-testid="search-coverage">
               {[
                 filters.personIds.length > 0 ? (filters.includeAi ? 'รวมรูปที่ AI จัดให้ซึ่งยังไม่มีคนตรวจ (มีรูปประกายกำกับ)' : 'นับเฉพาะใบหน้าที่ยืนยันแล้ว') : null,
@@ -254,6 +257,7 @@ export function SearchPage() {
                   dateActive ? dateLabel : null,
                   filters.faceFilter !== 'any' ? 'สถานะใบหน้าที่เลือก' : null,
                   filters.editFilter === 'unedited' ? 'ยังไม่แต่ง' : filters.editFilter === 'edited' ? 'แต่งแล้ว' : null,
+                  filters.flagFilter === 'picked' ? 'เลือกไว้' : filters.flagFilter === 'unflagged' ? 'ยังไม่คัด' : filters.flagFilter === 'rejected' ? 'ไม่เอา' : null,
                 ]
                   .filter(Boolean)
                   .join(' · ') || undefined

@@ -10,13 +10,14 @@ import { Field, Select, Tabs, TextArea, TextInput } from '@/components/ui/Form';
 import { JobCard, JobStrip } from '@/features/jobs/JobCard';
 import { FaceAvatar } from '@/features/people/FaceAvatar';
 import { ThumbSizeSlider } from '@/features/photos/ThumbSizeSlider';
-import { EditFilterSelect, EditProgress } from '@/features/photos/EditProgress';
+import { EditFilterSelect, EditProgress, progressPhrase } from '@/features/photos/EditProgress';
+import { FlagFilterSelect, FlagSummary } from '@/features/photos/PhotoFlags';
 import { PhotoResults } from '@/features/photos/PhotoResults';
-import { parseEditFilter } from '@/features/search/searchParams';
+import { parseEditFilter, parseFlagFilter } from '@/features/search/searchParams';
 import { cn } from '@/lib/cn';
 import { errorMessage, formatCount, formatThaiDate, isErrorCode, middleEllipsis, newRequestId } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
-import type { EditFilter, EventDetail, SearchParams } from '@/lib/ipc/types';
+import type { EditFilter, EventDetail, FlagFilter, SearchParams } from '@/lib/ipc/types';
 import { isJobActive, PHOTO_PAGE_SIZE, qk, useActiveJobs, useCapabilities, useEvent, type PhotoQuery } from '@/lib/queries';
 import { FILE_MANAGER } from '@/lib/platform';
 import { useFolderChooser } from '@/app/FolderChooser';
@@ -35,10 +36,14 @@ export function EventDetailPage() {
   useDocumentTitle(event.data?.title);
 
   const tab = (params.get('tab') as EventTab | null) ?? 'photos';
-  const setParam = (key: string, value: string | null) => {
+  const setParam = (key: string, value: string | null) => patchParams({ [key]: value });
+  // เปลี่ยนหลายค่าใน URL ครั้งเดียว (เรียก setParam ติดกันหลายครั้งจะทับกัน เพราะทุกครั้งเริ่มจาก params ชุดเดิม)
+  const patchParams = (patch: Record<string, string | null>) => {
     const next = new URLSearchParams(params);
-    if (value === null) next.delete(key);
-    else next.set(key, value);
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) next.delete(key);
+      else next.set(key, value);
+    }
     setParams(next, { replace: true });
   };
   // แต่งตามคน (DECISIONS ข้อ 32): เลือกคนในงาน → เปิดรูปแรกของเขาที่ยังไม่แต่งในหน้าแต่งภาพ (ค่า = คนที่จะแต่ง)
@@ -229,7 +234,14 @@ export function EventDetailPage() {
           personId={params.get('person')}
           onPersonChange={(id) => setParam('person', id)}
           editFilter={parseEditFilter(params.get('ed'))}
-          onEditFilterChange={(value) => setParam('ed', value === 'any' ? null : value)}
+          flagFilter={parseFlagFilter(params.get('fl'))}
+          onFiltersChange={({ person, ed, fl }) =>
+            patchParams({
+              ...(person !== undefined && { person }),
+              ...(ed !== undefined && { ed: ed === 'any' ? null : ed }),
+              ...(fl !== undefined && { fl: fl === 'any' ? null : fl }),
+            })
+          }
           scanning={Boolean(job)}
           // เริ่มเมื่อ URL เปลี่ยนเป็นคนนั้น + "ยังไม่แต่ง" แล้วจริง (react-router เปลี่ยน URL แบบ transition ช้ากว่า state นี้)
           autoEdit={autoEdit !== null && autoEdit === params.get('person') && params.get('ed') === 'unedited'}
@@ -260,7 +272,8 @@ function PhotosTab({
   personId,
   onPersonChange,
   editFilter,
-  onEditFilterChange,
+  flagFilter,
+  onFiltersChange,
   scanning,
   autoEdit,
   onAutoEditHandled,
@@ -269,7 +282,8 @@ function PhotosTab({
   personId: string | null;
   onPersonChange: (id: string | null) => void;
   editFilter: EditFilter;
-  onEditFilterChange: (value: EditFilter) => void;
+  flagFilter: FlagFilter;
+  onFiltersChange: (patch: { person?: string | null; ed?: EditFilter; fl?: FlagFilter }) => void;
   scanning: boolean;
   autoEdit: boolean;
   onAutoEditHandled: (opened: boolean) => void;
@@ -289,10 +303,11 @@ function PhotosTab({
       // คนในงานนับรูปที่ AI จัดให้ด้วย (ตรงกับตัวเลขบนชิป) · ป้ายชื่อบนรูปบอกคนที่ AI จัดให้ด้วยรูปประกาย
       includeSuggested: true,
       editFilter,
+      flagFilter,
     }),
-    [event.id, personId, faceFilter, sort, editFilter],
+    [event.id, personId, faceFilter, sort, editFilter, flagFilter],
   );
-  const filtered = Boolean(personId) || faceFilter !== 'any' || editFilter !== 'any';
+  const filtered = Boolean(personId) || faceFilter !== 'any' || editFilter !== 'any' || flagFilter !== 'any';
 
   return (
     <div>
@@ -318,7 +333,8 @@ function PhotosTab({
           <option value="has_faces">มีใบหน้าที่ระบุไว้</option>
           <option value="no_person">ยังไม่มีชื่อบุคคล</option>
         </Select>
-        <EditFilterSelect value={editFilter} onChange={onEditFilterChange} />
+        <EditFilterSelect value={editFilter} onChange={(ed) => onFiltersChange({ ed })} />
+        <FlagFilterSelect value={flagFilter} onChange={(fl) => onFiltersChange({ fl })} />
         <Select value={sort} onChange={(e) => setSort(e.target.value as SearchParams['sort'])} aria-label="เรียงรูปตาม">
           <option value="taken_asc">วันถ่าย เก่า → ใหม่</option>
           <option value="taken_desc">วันถ่าย ใหม่ → เก่า</option>
@@ -332,7 +348,7 @@ function PhotosTab({
         query={query}
         label={`รูปในกิจกรรม ${event.title}`}
         originLabel="กลับไปกิจกรรม"
-        selectionKey={`${event.id}|${personId ?? ''}|${faceFilter}|${editFilter}`}
+        selectionKey={`${event.id}|${personId ?? ''}|${faceFilter}|${editFilter}|${flagFilter}`}
         autoEdit={autoEdit}
         onAutoEditHandled={onAutoEditHandled}
         summary={(meta) =>
@@ -340,11 +356,12 @@ function PhotosTab({
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
               {filtered && (
                 <p className="text-sm text-muted" aria-live="polite">
-                  พบ {formatCount(meta.total)} รูป{editFilter === 'unedited' ? 'ที่ยังไม่แต่ง' : editFilter === 'edited' ? 'ที่แต่งแล้ว' : ''}จาก {formatCount(event.photoCount)} รูปในงานนี้
+                  พบ {formatCount(meta.total)} รูป{progressPhrase(editFilter, flagFilter)}จาก {formatCount(event.photoCount)} รูปในงานนี้
                   {selectedPerson ? ` ที่มี ${selectedPerson.displayName} (รวมที่ AI จัดให้)` : ''}
                 </p>
               )}
               <EditProgress meta={meta} />
+              <FlagSummary coverage={meta.coverage} />
             </div>
           ) : null
         }
@@ -352,9 +369,9 @@ function PhotosTab({
           editFilter === 'unedited' && faceFilter === 'any' ? (
             <EmptyState
               icon={<CircleCheck aria-hidden />}
-              title={selectedPerson ? `แต่งรูปของ ${selectedPerson.displayName} ในงานนี้ครบแล้ว` : 'แต่งรูปในงานนี้ครบแล้ว'}
-              description="ไม่มีรูปที่ยังไม่แต่ง — รูปที่แต่งแล้วมีป้าย “แต่งแล้ว” กำกับ"
-              action={<Button onClick={() => onEditFilterChange('any')}>ดูทุกรูป</Button>}
+              title={`แต่งรูป${flagFilter === 'any' ? '' : progressPhrase('any', flagFilter)}${selectedPerson ? `ของ ${selectedPerson.displayName} ` : ''}ในงานนี้ครบแล้ว`}
+              description={`ไม่มีรูป${progressPhrase(editFilter, flagFilter)} — รูปที่แต่งแล้วมีป้าย “แต่งแล้ว” กำกับ`}
+              action={<Button onClick={() => onFiltersChange({ ed: 'any', fl: 'any' })}>ดูทุกรูป</Button>}
             />
           ) : filtered ? (
             <EmptyState
@@ -364,9 +381,8 @@ function PhotosTab({
               action={
                 <Button
                   onClick={() => {
-                    onPersonChange(null);
                     setFaceFilter('any');
-                    onEditFilterChange('any');
+                    onFiltersChange({ person: null, ed: 'any', fl: 'any' });
                   }}
                 >
                   ล้างตัวกรอง

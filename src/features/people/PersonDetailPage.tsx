@@ -9,12 +9,13 @@ import { ConfirmDialog } from '@/components/ui/Dialog';
 import { EmptyState, ErrorState, InlineNotice, LoadingBlock, StatusBadge } from '@/components/ui/Feedback';
 import { Select, Tabs } from '@/components/ui/Form';
 import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/Overlay';
-import { EditFilterSelect, EditProgress } from '@/features/photos/EditProgress';
+import { EditFilterSelect, EditProgress, progressPhrase } from '@/features/photos/EditProgress';
+import { FlagFilterSelect, FlagSummary } from '@/features/photos/PhotoFlags';
 import { PhotoResults } from '@/features/photos/PhotoResults';
-import { parseEditFilter } from '@/features/search/searchParams';
+import { parseEditFilter, parseFlagFilter } from '@/features/search/searchParams';
 import { errorMessage, formatCount, formatThaiDate, isErrorCode } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
-import type { EditFilter, PersonDetail, PhotoResult, SearchParams } from '@/lib/ipc/types';
+import type { EditFilter, FlagFilter, PersonDetail, PhotoResult, SearchParams } from '@/lib/ipc/types';
 import { invalidatePeopleData, PHOTO_PAGE_SIZE, qk, usePeople, type PhotoQuery } from '@/lib/queries';
 import { CoappearanceList } from './CoappearanceList';
 import { FaceAvatar } from './FaceAvatar';
@@ -60,10 +61,14 @@ export function PersonDetailPage() {
     setParams(next, { replace: true });
   };
   const editFilter = parseEditFilter(params.get('ed'));
-  const setEditFilter = (value: EditFilter) => {
+  const flagFilter = parseFlagFilter(params.get('fl'));
+  // ตัวกรองการแต่ง (ed) และการคัด (fl) อยู่ใน URL — ล้างพร้อมกันได้ในครั้งเดียว
+  const setProgressFilters = (patch: { ed?: EditFilter; fl?: FlagFilter }) => {
     const next = new URLSearchParams(params);
-    if (value === 'any') next.delete('ed');
-    else next.set('ed', value);
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === 'any') next.delete(key);
+      else next.set(key, value);
+    }
     setParams(next, { replace: true });
   };
   const editThisPerson = () => {
@@ -228,7 +233,8 @@ export function PersonDetailPage() {
             setParams(next, { replace: true });
           }}
           editFilter={editFilter}
-          onEditFilterChange={setEditFilter}
+          flagFilter={flagFilter}
+          onFiltersChange={setProgressFilters}
           // เริ่มเมื่อ URL เปลี่ยนเป็น "ยังไม่แต่ง" แล้วจริง (react-router เปลี่ยน URL แบบ transition ช้ากว่า state นี้)
           autoEdit={autoEdit && editFilter === 'unedited'}
           onAutoEditHandled={(opened) => {
@@ -266,7 +272,8 @@ function PersonPhotos({
   eventId,
   onEventChange,
   editFilter,
-  onEditFilterChange,
+  flagFilter,
+  onFiltersChange,
   autoEdit,
   onAutoEditHandled,
 }: {
@@ -274,7 +281,8 @@ function PersonPhotos({
   eventId: string | null;
   onEventChange: (id: string | null) => void;
   editFilter: EditFilter;
-  onEditFilterChange: (value: EditFilter) => void;
+  flagFilter: FlagFilter;
+  onFiltersChange: (patch: { ed?: EditFilter; fl?: FlagFilter }) => void;
   autoEdit: boolean;
   onAutoEditHandled: (opened: boolean) => void;
 }) {
@@ -288,9 +296,9 @@ function PersonPhotos({
   // รูปที่แจ้งว่าไม่ใช่ถูกคืนจนหมด: กลับไปมุมมองปกติ
   const scope: PhotoScope = chosen === 'rejected' && person.rejectedPhotoCount === 0 ? 'all' : chosen;
   const query = useMemo<PhotoQuery>(() => {
-    const base = { personMode: 'all' as const, eventIds: eventId ? [eventId] : [], faceFilter: 'any' as const, sort, limit: PHOTO_PAGE_SIZE, editFilter };
+    const base = { personMode: 'all' as const, eventIds: eventId ? [eventId] : [], faceFilter: 'any' as const, sort, limit: PHOTO_PAGE_SIZE, editFilter, flagFilter };
     return scope === 'rejected' ? { ...base, personIds: [], rejectedPersonId: person.id } : { ...base, personIds: [person.id], includeSuggested: scope === 'all' };
-  }, [person.id, eventId, sort, scope, editFilter]);
+  }, [person.id, eventId, sort, scope, editFilter, flagFilter]);
   return (
     <div>
       <div className="mb-3.5 flex flex-wrap items-center gap-2.5">
@@ -308,7 +316,8 @@ function PersonPhotos({
           <option value="added_desc">เพิ่มล่าสุด</option>
           <option value="filename">ชื่อไฟล์</option>
         </Select>
-        <EditFilterSelect value={editFilter} onChange={onEditFilterChange} />
+        <EditFilterSelect value={editFilter} onChange={(ed) => onFiltersChange({ ed })} />
+        <FlagFilterSelect value={flagFilter} onChange={(fl) => onFiltersChange({ fl })} />
         {(person.aiPhotoCount > 0 || person.rejectedPhotoCount > 0) && (
           <Tabs<PhotoScope>
             label="ขอบเขตของรูป"
@@ -339,7 +348,7 @@ function PersonPhotos({
         label={scope === 'rejected' ? `รูปที่แจ้งว่าไม่ใช่ ${person.displayName}` : `รูปของ ${person.displayName}`}
         originLabel="กลับไปบุคคล"
         showEvent={!eventId}
-        selectionKey={`${person.id}|${eventId ?? ''}|${scope}|${editFilter}`}
+        selectionKey={`${person.id}|${eventId ?? ''}|${scope}|${editFilter}|${flagFilter}`}
         autoEdit={autoEdit && scope !== 'rejected'}
         onAutoEditHandled={onAutoEditHandled}
         selectionActions={({ photos, clear }) =>
@@ -349,24 +358,32 @@ function PersonPhotos({
           meta.total > 0 || (meta.coverage?.eligiblePhotos ?? 0) > 0 ? (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
               <p className="text-sm text-muted" aria-live="polite">
-                {formatCount(meta.total)} รูป{editFilter === 'unedited' ? 'ที่ยังไม่แต่ง' : editFilter === 'edited' ? 'ที่แต่งแล้ว' : ''}
+                {formatCount(meta.total)} รูป{progressPhrase(editFilter, flagFilter)}
                 {eventId ? ' ในกิจกรรมที่เลือก' : ' จากทุกกิจกรรม'}
               </p>
               {scope !== 'rejected' && <EditProgress meta={meta} />}
+              <FlagSummary coverage={meta.coverage} />
             </div>
           ) : null
         }
         empty={
-          editFilter !== 'any' ? (
+          editFilter === 'unedited' ? (
             <EmptyState
-              icon={editFilter === 'unedited' ? <CircleCheck aria-hidden /> : <SlidersHorizontal aria-hidden />}
-              title={editFilter === 'unedited' ? `แต่งรูปของ ${person.displayName} ครบแล้ว` : 'ยังไม่มีรูปที่แต่งแล้ว'}
+              icon={<CircleCheck aria-hidden />}
+              title={`แต่งรูป${flagFilter === 'any' ? '' : progressPhrase('any', flagFilter)}ของ ${person.displayName} ครบแล้ว`}
+              description={`ไม่มีรูป${progressPhrase(editFilter, flagFilter)}${eventId ? 'ในกิจกรรมที่เลือก' : ''} — รูปที่แต่งแล้วมีป้าย “แต่งแล้ว” กำกับ`}
+              action={<Button onClick={() => onFiltersChange({ ed: 'any', fl: 'any' })}>ดูทุกรูป</Button>}
+            />
+          ) : editFilter !== 'any' || flagFilter !== 'any' ? (
+            <EmptyState
+              icon={<SlidersHorizontal aria-hidden />}
+              title={`ไม่มีรูป${progressPhrase(editFilter, flagFilter)}`}
               description={
-                editFilter === 'unedited'
-                  ? `ไม่มีรูปที่ยังไม่แต่ง${eventId ? 'ในกิจกรรมที่เลือก' : ''} — รูปที่แต่งแล้วมีป้าย “แต่งแล้ว” กำกับ`
-                  : `กด “แต่งรูปของคนนี้” เพื่อเริ่มแต่งทีละรูป${eventId ? ' (เฉพาะกิจกรรมที่เลือก)' : ''}`
+                flagFilter === 'any'
+                  ? `กด “แต่งรูปของคนนี้” เพื่อเริ่มแต่งทีละรูป${eventId ? ' (เฉพาะกิจกรรมที่เลือก)' : ''}`
+                  : 'คัดรูปในตัวดูภาพด้วยคีย์ P (เลือก) และ X (ไม่เอา) หรือเลือกหลายรูปแล้วใช้เมนู “คัดรูป”'
               }
-              action={<Button onClick={() => onEditFilterChange('any')}>ดูทุกรูป</Button>}
+              action={<Button onClick={() => onFiltersChange({ ed: 'any', fl: 'any' })}>ดูทุกรูป</Button>}
             />
           ) : eventId ? (
             <EmptyState icon={<UserRoundSearch aria-hidden />} title="ไม่มีรูปของบุคคลนี้ในกิจกรรมที่เลือก" action={<Button onClick={() => onEventChange(null)}>ดูทุกกิจกรรม</Button>} />

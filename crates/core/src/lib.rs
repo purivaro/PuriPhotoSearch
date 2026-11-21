@@ -23,6 +23,7 @@ pub mod masks;
 pub mod media;
 pub mod pair;
 pub mod people;
+pub mod picks;
 pub mod platform;
 pub mod preset;
 pub mod preview;

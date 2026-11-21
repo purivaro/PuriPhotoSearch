@@ -1,13 +1,13 @@
 import type { ReactNode } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ChevronDown, ClipboardPaste, Minimize2, Palette, SlidersHorizontal, Sparkles, Upload, X } from 'lucide-react';
+import { Ban, ChevronDown, ClipboardPaste, Eraser, Flag, Minimize2, Palette, SlidersHorizontal, Sparkles, Upload, X } from 'lucide-react';
 import { useEditClipboard } from '@/stores/editClipboard';
 import { Button } from '@/components/ui/Button';
 import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/Overlay';
 import { errorMessage, formatCount } from '@/lib/format';
 import { call } from '@/lib/ipc/client';
-import type { Id } from '@/lib/ipc/types';
+import type { Id, PhotoFlag } from '@/lib/ipc/types';
 import type { PhotoQuery } from '@/lib/queries';
 import { usePresets } from './EditPresets';
 import { EMPTY_SELECTION, selectLoaded, selectSnapshot, selectionCount, type Selection } from './selection';
@@ -31,12 +31,14 @@ interface SelectionBarProps {
   onGenerate: () => void;
   /** ให้ AI แต่งรูปที่เลือกตามภาพตัวอย่าง */
   onMatchStyle: () => void;
+  /** คัดรูปที่เลือก: เลือก / ไม่เอา / ล้าง (DECISIONS ข้อ 33) */
+  onFlag: (flag: PhotoFlag | null) => void;
   /** ปุ่มเฉพาะหน้า วางก่อนปุ่มส่งออก */
   actions?: ReactNode;
 }
 
 /** แถบเลือกหลายรูป: บอกจำนวนและขอบเขตตลอดเวลา อยู่ท้าย grid โดยไม่บังแถวสุดท้าย */
-export function SelectionBar({ selection, onSelectionChange, loadedIds, total, query, onExport, onShrink, onPasteEdit, onApplyPreset, onGenerate, onMatchStyle, actions }: SelectionBarProps) {
+export function SelectionBar({ selection, onSelectionChange, loadedIds, total, query, onExport, onShrink, onPasteEdit, onApplyPreset, onGenerate, onMatchStyle, onFlag, actions }: SelectionBarProps) {
   const count = selectionCount(selection);
   const copied = useEditClipboard((s) => s.copied);
   // ปุ่ม "ใช้ preset" ขึ้นเมื่อมี preset แล้วเท่านั้น (ไม่รกแถบของคนที่ไม่ได้ใช้)
@@ -81,6 +83,25 @@ export function SelectionBar({ selection, onSelectionChange, loadedIds, total, q
           ล้างที่เลือก
         </Button>
         {actions}
+        <Menu>
+          <MenuTrigger asChild>
+            <Button icon={<Flag className="size-4" aria-hidden />} data-testid="flag-menu-button" title="คัดรูปที่เลือก (คีย์ P / X / U)">
+              คัดรูป
+              <ChevronDown className="size-4" aria-hidden />
+            </Button>
+          </MenuTrigger>
+          <MenuContent>
+            <MenuItem icon={<Flag />} onSelect={() => onFlag('pick')} data-testid="flag-menu-pick">
+              เลือก (P)
+            </MenuItem>
+            <MenuItem icon={<Ban />} onSelect={() => onFlag('reject')} data-testid="flag-menu-reject">
+              ไม่เอา (X) — ไฟล์ไม่ถูกลบ
+            </MenuItem>
+            <MenuItem icon={<Eraser />} onSelect={() => onFlag(null)} data-testid="flag-menu-clear">
+              ล้างการคัด (U)
+            </MenuItem>
+          </MenuContent>
+        </Menu>
         {copied && (
           <Button icon={<ClipboardPaste className="size-4" aria-hidden />} onClick={onPasteEdit} data-testid="paste-edit-button" title={`วางการแต่งจาก ${copied.filename}`}>
             วางการแต่ง

@@ -4,8 +4,9 @@ import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Feedback';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
-import type { PhotoResult } from '@/lib/ipc/types';
+import type { PhotoFlag, PhotoResult } from '@/lib/ipc/types';
 import { THUMB_SIZES, useSettings } from '@/stores/settings';
+import { FlagBadge, flagForKey } from './PhotoFlags';
 import { PhotoThumb } from './PhotoThumb';
 import { EMPTY_SELECTION, isSelected, selectLoaded, selectRange, selectionCount, toggle, type Selection } from './selection';
 
@@ -43,10 +44,12 @@ interface PhotoGridProps {
   /** แสดงชื่อกิจกรรมใต้ชื่อไฟล์ (ใช้เมื่อผลมาจากหลายกิจกรรม) */
   showEvent?: boolean;
   total: number;
+  /** คัดรูปที่เลือกด้วยคีย์ P / X / U (DECISIONS ข้อ 33) */
+  onFlag?: (flag: PhotoFlag | null) => void;
 }
 
 /** กริดรูปแบบคอลัมน์สม่ำเสมอ เลือกหลายรูปด้วย checkbox / Shift / ⌘A ได้ */
-export function PhotoGrid({ items, label, selection, onSelectionChange, onOpen, hasMore, loadingMore, onLoadMore, showEvent, total }: PhotoGridProps) {
+export function PhotoGrid({ items, label, selection, onSelectionChange, onOpen, hasMore, loadingMore, onLoadMore, showEvent, total, onFlag }: PhotoGridProps) {
   const sentinel = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef(onLoadMore);
   loadMoreRef.current = onLoadMore;
@@ -79,6 +82,12 @@ export function PhotoGrid({ items, label, selection, onSelectionChange, onOpen, 
       event.preventDefault();
       event.stopPropagation();
       onSelectionChange(EMPTY_SELECTION);
+    } else if (anySelected && onFlag) {
+      const flag = flagForKey(event);
+      if (flag !== undefined) {
+        event.preventDefault();
+        onFlag(flag);
+      }
     }
   };
 
@@ -110,15 +119,19 @@ export function PhotoGrid({ items, label, selection, onSelectionChange, onOpen, 
                 }}
                 className={cn('relative block w-full overflow-hidden rounded-xl bg-sunken', selected && 'ring-[3px] ring-brand')}
               >
-                <PhotoThumb photo={photo} className="aspect-[3/2] w-full transition-transform duration-200 group-hover:scale-[1.015]" />
+                <PhotoThumb
+                  photo={photo}
+                  className={cn('aspect-[3/2] w-full transition-[transform,opacity] duration-200 group-hover:scale-[1.015]', photo.flag === 'reject' && 'opacity-40 group-hover:opacity-80')}
+                />
                 {!photo.available && (
                   <span className="absolute right-1.5 bottom-1.5 inline-flex items-center gap-1 rounded-md bg-black/65 px-1.5 py-0.5 text-[11.5px] font-medium text-white">
                     <CloudOff className="size-3" aria-hidden /> ต้นฉบับไม่พร้อม
                   </span>
                 )}
                 <PeopleBadge photo={photo} />
-                {(photo.editId || photo.raw || photo.rawPair) && (
+                {(photo.flag || photo.editId || photo.raw || photo.rawPair) && (
                   <span className="absolute top-1.5 right-1.5 flex items-center gap-1">
+                    {photo.flag && <FlagBadge flag={photo.flag} compact={compact} />}
                     {photo.editId && (
                       <span
                         title="แต่งในแอปแล้ว — ไฟล์ต้นฉบับไม่ถูกแตะ"

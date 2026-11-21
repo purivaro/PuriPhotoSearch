@@ -397,6 +397,31 @@
     await waitFor(() => tids('photo-card').length === 4 && !photoCard('IMG_0249.jpg'), 'รูปที่แต่งแล้วหลุดจากรายการที่ยังไม่แต่ง');
     await waitFor(() => tid('edit-progress') && text(tid('edit-progress')).includes('แต่งแล้ว 2 จาก 6'), 'ความคืบหน้าเพิ่มขึ้น');
 
+    // ── คัดก่อนแต่ง (DECISIONS ข้อ 33): ในตัวดูภาพกด P = เลือก, X = ไม่เอา แล้วไปรูปถัดไปเอง (ใช้ event.code จึงกดได้แม้แป้นเป็นภาษาไทย)
+    const press = (code, key) => window.dispatchEvent(new KeyboardEvent('keydown', { code, key, bubbles: true, cancelable: true }));
+    const [pickedId, rejectedId] = ['IMG_0250.jpg', 'DSC_0101.jpg'].map((f) => photoCard(f).dataset.photoId);
+    await click(tid('photo-card-open', photoCard('IMG_0250.jpg')), 'เปิด IMG_0250 ในตัวดูภาพ');
+    await waitFor(() => location.hash.includes(pickedId) && tid('viewer-flag-pick') && !tid('viewer-flag-pick').disabled, 'ตัวดูภาพพร้อมคัด');
+    press('KeyP', 'ย'); // แป้นภาษาไทย: ตัว P คือ "ย"
+    await waitFor(() => location.hash.includes(rejectedId), 'กด P แล้วไปรูปถัดไปเอง');
+    await waitFor(() => tid('viewer-flag-reject') && !tid('viewer-flag-reject').disabled, 'รูปถัดไปพร้อมคัด');
+    press('KeyX', 'x');
+    await waitFor(async () => (await rpc('get_photo_details', { photoId: rejectedId })).flag === 'reject', 'กด X แล้วบันทึกว่าไม่เอา');
+    expect((await rpc('get_photo_details', { photoId: pickedId })).flag === 'pick', 'กด P แล้วบันทึกว่าเลือก');
+    await click(tid('viewer-close'), 'ปิดตัวดูภาพ');
+    location.hash = `#/events/${ai.id}?fl=picked`;
+    await waitFor(() => tids('photo-card').length === 1 && photoCard('IMG_0250.jpg'), 'กรองเฉพาะที่เลือกไว้');
+    expect(tid('photo-card-flag', photoCard('IMG_0250.jpg'))?.dataset.flag === 'pick', 'ป้าย "เลือก" บนภาพย่อ');
+    const flags = await see('flag-summary');
+    expect(text(flags).includes('เลือกไว้ 1') && text(flags).includes('ไม่เอา 1'), `สรุปการคัด (ได้ "${text(flags)}")`);
+    // เลือกหลายรูปแล้วล้างการคัดจากเมนูในแถบเลือก
+    await click(tid('photo-card-select', photoCard('IMG_0250.jpg')), 'เลือกรูป');
+    await click(await see('flag-menu-button'), 'เมนูคัดรูป');
+    await click(await see('flag-menu-clear'), 'ล้างการคัด');
+    await waitFor(() => tids('photo-card').length === 0, 'ล้างแล้วหลุดจากรายการที่เลือกไว้');
+    expect((await rpc('get_photo_details', { photoId: pickedId })).flag === null, 'ล้างการคัดแล้ว');
+    await stage('pick-reject');
+
     // ── S05: หน้าหลักใช้ข้อมูลจริงจากคลัง
     await click(tid('nav-home'), 'เมนูหน้าหลัก');
     await waitFor(() => tids('person-card', tid('home-people-grid') ?? document).some((c) => c.dataset.personId === kan.id), 'คนที่ปักหมุดอยู่บนหน้าหลัก');
