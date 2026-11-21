@@ -375,6 +375,18 @@ pub struct PhotoResult {
     pub raw_pair: Option<String>,
     /// การคัด (DECISIONS ข้อ 33): "pick" = เลือก, "reject" = ไม่เอา, None = ยังไม่คัด
     pub flag: Option<String>,
+    /// การคัดนี้ AI ทำ (DECISIONS ข้อ 37) พร้อมเหตุผล — None = ผู้ใช้คัดเองหรือยังไม่คัด
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flag_ai: Option<AiFlag>,
+}
+
+/// เหตุผลที่ AI คัดรูปนี้ (DECISIONS ข้อ 37)
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiFlag {
+    /// best = ดีที่สุดของช่วงนั้น · blur = เบลอ · duplicate = ซ้ำกับ `of`
+    pub reason: String,
+    pub of: Option<String>,
 }
 
 /// รูปที่มีคู่ RAW (DECISIONS ข้อ 26): สิ่งที่หน้าแต่งภาพต้องรู้
@@ -460,7 +472,7 @@ const PHOTO_FROM: &str = "FROM photos p
 
 const PHOTO_COLS: &str = "p.id, r.id, l.filename, e.id, e.title, r.taken_at_local, r.date_source, r.width, r.height, \
                           r.thumbnail_status, l.available, l.os_path, r.size, e.event_date, r.decode_error, pe.edit_id, \
-                          rp.filename, pk.flag";
+                          rp.filename, pk.flag, pk.source, pk.reason, pk.reason_photo_id";
 
 fn photo_from_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoResult> {
     let filename: String = r.get(2)?;
@@ -483,6 +495,10 @@ fn photo_from_row(r: &rusqlite::Row) -> rusqlite::Result<PhotoResult> {
         edit_id: r.get(15)?,
         raw_pair: r.get(16)?,
         flag: r.get(17)?,
+        flag_ai: match (r.get::<_, Option<String>>(18)?.as_deref(), r.get::<_, Option<String>>(19)?) {
+            (Some("ai"), Some(reason)) => Some(AiFlag { reason, of: r.get(20)? }),
+            _ => None,
+        },
     })
 }
 

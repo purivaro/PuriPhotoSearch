@@ -45,10 +45,12 @@ pub fn set(app: &App, selection: &SelectionSpec, flag: Option<Flag>) -> Result<F
         for row in &rows {
             updated += match flag {
                 None => tx.execute("DELETE FROM photo_picks WHERE photo_id = ?1", [&row.photo_id])?,
+                // ผู้ใช้คัดเอง = เป็นของผู้ใช้ (แม้ค่าเดียวกับที่ AI คัดไว้) — AI ปรับระดับใหม่จะไม่แตะรูปนี้อีก (DECISIONS ข้อ 37)
                 Some(flag) => tx.execute(
-                    "INSERT INTO photo_picks(photo_id, flag, updated_at) VALUES (?1, ?2, ?3)
-                     ON CONFLICT(photo_id) DO UPDATE SET flag = excluded.flag, updated_at = excluded.updated_at
-                     WHERE photo_picks.flag <> excluded.flag",
+                    "INSERT INTO photo_picks(photo_id, flag, updated_at, source) VALUES (?1, ?2, ?3, 'user')
+                     ON CONFLICT(photo_id) DO UPDATE SET flag = excluded.flag, updated_at = excluded.updated_at,
+                       source = 'user', reason = NULL, reason_photo_id = NULL
+                     WHERE photo_picks.flag <> excluded.flag OR photo_picks.source <> 'user'",
                     params![row.photo_id, flag.as_str(), now],
                 )?,
             };

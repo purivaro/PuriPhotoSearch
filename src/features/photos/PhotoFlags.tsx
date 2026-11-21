@@ -5,7 +5,7 @@ import { Select } from '@/components/ui/Form';
 import { cn } from '@/lib/cn';
 import { errorMessage, formatCount } from '@/lib/format';
 import { call } from '@/lib/ipc/client';
-import type { Coverage, FlagFilter, PhotoFlag, SelectionSpec } from '@/lib/ipc/types';
+import type { AiFlag, Coverage, FlagFilter, PhotoFlag, SelectionSpec } from '@/lib/ipc/types';
 
 /** คัดก่อนแต่ง (DECISIONS ข้อ 33): ชื่อของการคัด และคีย์ลัดแบบ Lightroom (ใช้ event.code จึงกดได้แม้แป้นเป็นภาษาไทย) */
 export const FLAG_KEYS: Record<string, PhotoFlag | null> = { KeyP: 'pick', KeyX: 'reject', KeyU: null };
@@ -41,21 +41,32 @@ export function FlagFilterSelect({ value, onChange, className }: { value: FlagFi
   );
 }
 
-/** ป้ายการคัดบนภาพย่อ: เลือก = ธงสีเขียว · ไม่เอา = กากบาท (ภาพย่อหรี่ลงด้วย) */
-export function FlagBadge({ flag, compact }: { flag: PhotoFlag; compact?: boolean }) {
+/** เหตุผลที่ AI คัดรูปนี้ เป็นภาษาผู้ใช้ (DECISIONS ข้อ 37) */
+export function aiFlagReason(ai: AiFlag): string {
+  if (ai.reason === 'blur') return 'เบลอกว่ารูปอื่นในงานนี้มาก';
+  if (ai.reason === 'duplicate') return 'ถ่ายซ้ำกับรูปที่เลือกไว้ของช่วงเดียวกัน';
+  return 'ดีที่สุดของช่วงที่ถ่ายต่อเนื่อง';
+}
+
+/** ป้ายการคัดบนภาพย่อ: เลือก = ธงสีเขียว · ไม่เอา = กากบาท (ภาพย่อหรี่ลงด้วย) · AI คัด = มีคำว่า AI กำกับ */
+export function FlagBadge({ flag, compact, ai }: { flag: PhotoFlag; compact?: boolean; ai?: AiFlag }) {
   const Icon = flag === 'pick' ? Flag : Ban;
+  const label = ai ? `AI ${FLAG_LABEL[flag]}` : FLAG_LABEL[flag];
+  const hint = flag === 'pick' ? 'เลือกไว้ (กด P ในตัวดูภาพ)' : 'ไม่เอา — ไฟล์ไม่ถูกลบ (กด X ในตัวดูภาพ)';
   return (
     <span
-      title={flag === 'pick' ? 'เลือกไว้ (กด P ในตัวดูภาพ)' : 'ไม่เอา — ไฟล์ไม่ถูกลบ (กด X ในตัวดูภาพ)'}
+      title={ai ? `AI ${FLAG_LABEL[flag]}: ${aiFlagReason(ai)} — กด P / X / U ในตัวดูภาพเพื่อเปลี่ยนเอง` : hint}
       data-testid="photo-card-flag"
       data-flag={flag}
+      data-ai={ai ? ai.reason : undefined}
       className={cn(
         'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-white',
         flag === 'pick' ? 'bg-ok' : 'bg-black/65',
       )}
     >
       <Icon className="size-3 shrink-0" fill={flag === 'pick' ? 'currentColor' : 'none'} aria-hidden />
-      {compact ? <span className="sr-only">{FLAG_LABEL[flag]}</span> : FLAG_LABEL[flag]}
+      {ai && <span className="text-[10px] font-bold tracking-wide">AI</span>}
+      {compact ? <span className="sr-only">{label}</span> : FLAG_LABEL[flag]}
     </span>
   );
 }

@@ -266,6 +266,48 @@ export type FlagFilter = 'any' | 'picked' | 'unflagged' | 'rejected';
 /** การคัดของรูป: pick = เลือก, reject = ไม่เอา (ไม่ลบไฟล์) */
 export type PhotoFlag = 'pick' | 'reject';
 
+/** เหตุผลที่ AI คัดรูป (DECISIONS ข้อ 37): best = ดีที่สุดของช่วงนั้น · blur = เบลอ · duplicate = ซ้ำกับ `of` */
+export interface AiFlag {
+  reason: 'best' | 'blur' | 'duplicate';
+  of: Id | null;
+}
+
+/** AI ช่วยคัดภาพของกิจกรรม (DECISIONS ข้อ 37) */
+export interface CullStatus {
+  /** รูปของกิจกรรมที่ไฟล์อยู่ครบ */
+  total: number;
+  measured: number;
+  /** ผู้ใช้คัดเองแล้ว (AI ไม่แตะ) / AI คัดไว้ */
+  userFlagged: number;
+  aiFlagged: number;
+  /** งานวัดที่ยังทำอยู่ */
+  job: JobSnapshot | null;
+}
+
+export type CullReason = { kind: 'best' } | { kind: 'blur' } | { kind: 'duplicate'; of: Id };
+
+export interface CullDecision {
+  photoId: Id;
+  flag: PhotoFlag;
+  reason: CullReason;
+}
+
+export interface CullLevelCount {
+  level: number;
+  keep: number;
+  duplicates: number;
+  blurry: number;
+}
+
+export interface CullPreview {
+  level: number;
+  levels: CullLevelCount[];
+  /** ผลของระดับที่ขอ เฉพาะรูปที่ผู้ใช้ยังไม่ได้คัดเอง */
+  decisions: CullDecision[];
+  unmeasured: number;
+  userFlagged: number;
+}
+
 export interface PersonRef {
   id: Id;
   displayName: string;
@@ -305,6 +347,8 @@ export interface PhotoResult {
   rawPair: string | null;
   /** การคัด (null = ยังไม่คัด) */
   flag: PhotoFlag | null;
+  /** การคัดนี้ AI ทำ (DECISIONS ข้อ 37) — ไม่มี = ผู้ใช้คัดเองหรือยังไม่คัด */
+  flagAi?: AiFlag;
 }
 
 /** สี่เหลี่ยมเป็นสัดส่วน 0–1 */
@@ -837,9 +881,9 @@ export type JobState =
 export interface JobSnapshot {
   id: Id;
   /** model = ดาวน์โหลดตัววิเคราะห์ใบหน้า (counts เป็น MB) */
-  kind: 'catalog' | 'export' | 'model' | 'shrink';
+  kind: 'catalog' | 'export' | 'model' | 'shrink' | 'cull';
   state: JobState;
-  /** catalog: discovery | thumbnail | done; export: copy | done; model: download | verify | done */
+  /** catalog: discovery | thumbnail | done; export: copy | done; model: download | verify | done; cull: measure | done */
   stage: string;
   title: string;
   eventId: Id | null;
@@ -1214,6 +1258,12 @@ export interface Commands {
   reject_suggestions: [{ faceIds: Id[]; personId: Id }, { dataRevision: number }];
   /** คัดก่อนแต่ง: flag null = ล้างกลับเป็นยังไม่คัด */
   set_photo_flags: [{ selection: SelectionSpec; flag: PhotoFlag | null }, { updated: number }];
+  get_cull_status: [{ eventId: Id }, CullStatus];
+  /** null = วัดครบแล้ว */
+  start_cull_analysis: [{ eventId: Id }, JobSnapshot | null];
+  preview_cull: [{ eventId: Id; level: number }, CullPreview];
+  apply_cull: [{ eventId: Id; level: number }, { picked: number; rejected: number; updated: number }];
+  clear_ai_picks: [{ eventId: Id }, { cleared: number }];
   /** ย้อน "ไม่ใช่บุคคลนี้": ใบหน้ากลับไปให้ AI จัดได้ตามเดิม */
   restore_suggestions: [{ faceIds: Id[]; personId: Id }, { dataRevision: number }];
 }

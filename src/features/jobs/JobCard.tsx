@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { toast } from 'sonner';
-import { ChevronDown, CircleCheck, Download, FileText, FolderOpen, History, Minimize2, Pause, Play, RotateCcw, Square, TriangleAlert, Upload } from 'lucide-react';
+import { ChevronDown, CircleCheck, Download, FileText, FolderOpen, History, Minimize2, Pause, Play, RotateCcw, Sparkles, Square, TriangleAlert, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog, Dialog } from '@/components/ui/Dialog';
 import { ErrorState, LoadingBlock, ProgressBar, StatusBadge } from '@/components/ui/Feedback';
@@ -41,7 +41,8 @@ export function JobCard({ job, defaultExpanded = false }: { job: JobSnapshot; de
   const finished = FINISHED.includes(job.state);
   const active = isJobActive(job);
   const processed = job.counts.done + job.counts.failed + job.counts.skipped;
-  const KindIcon = job.kind === 'export' ? Upload : job.kind === 'model' ? Download : job.kind === 'shrink' ? Minimize2 : FolderOpen;
+  const KindIcon =
+    job.kind === 'export' ? Upload : job.kind === 'model' ? Download : job.kind === 'shrink' ? Minimize2 : job.kind === 'cull' ? Sparkles : FolderOpen;
   const isModel = job.kind === 'model';
 
   return (
@@ -143,7 +144,9 @@ export function JobCard({ job, defaultExpanded = false }: { job: JobSnapshot; de
             ? 'ตัววิเคราะห์ใบหน้าจะยังไม่ถูกติดตั้ง กดดาวน์โหลดใหม่ได้ภายหลัง รูปและชื่อบุคคลในคลังไม่กระทบ'
             : job.kind === 'shrink'
               ? 'รูปที่ย่อเสร็จแล้วยังเป็นไฟล์ที่ย่อ (ต้นฉบับขนาดเต็มอยู่ในถังขยะ) รูปที่เหลือไม่ถูกแตะ'
-              : 'ข้อมูลที่ทำสำเร็จแล้วจะยังอยู่ การยกเลิกงานไม่ใช่การนำกิจกรรมออกจากคลัง และรูปต้นฉบับไม่ถูกแก้ไข'
+              : job.kind === 'cull'
+                ? 'รูปที่ดูแล้วจะยังใช้คัดได้ รูปที่เหลือยังไม่ถูกคัด สั่งให้ AI ช่วยคัดใหม่เมื่อไรก็ทำต่อจากเดิม'
+                : 'ข้อมูลที่ทำสำเร็จแล้วจะยังอยู่ การยกเลิกงานไม่ใช่การนำกิจกรรมออกจากคลัง และรูปต้นฉบับไม่ถูกแก้ไข'
         }
         confirmLabel={isModel ? 'ยกเลิกการดาวน์โหลด' : 'ยกเลิกส่วนที่เหลือ'}
         cancelLabel={isModel ? 'ดาวน์โหลดต่อ' : 'ทำงานต่อ'}

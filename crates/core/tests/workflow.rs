@@ -1198,6 +1198,133 @@ fn edit_crop_and_rotate_keep_faces_names_and_the_original_file() {
     assert_eq!(tree_state(&root), before, "แต่งภาพไม่แตะไฟล์ต้นฉบับ");
 }
 
+/// ฉากทดสอบของการคัด: ลายตารางหมากรุก + วงกลม เลื่อนได้ (`shift`) เบลอได้ (`blur`) · `hue` เปลี่ยนสีทั้งฉาก
+fn cull_scene(shift: u32, blur: f32, hue: u8) -> Vec<u8> {
+    let img = image::RgbImage::from_fn(640, 480, |x, y| {
+        let check = ((x + shift) / 40 + y / 40).is_multiple_of(2);
+        let (dx, dy) = (x as f32 - 320.0 - shift as f32, y as f32 - 240.0);
+        let v: u8 = if dx * dx + dy * dy < 100.0 * 100.0 {
+            230
+        } else if check {
+            170
+        } else {
+            50
+        };
+        image::Rgb([v, v.saturating_sub(hue), (v / 2).saturating_add(hue)])
+    });
+    let img = if blur > 0.0 { image::imageops::blur(&img, blur) } else { img };
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92).encode_image(&img).unwrap();
+    out.into_inner()
+}
+
+#[test]
+fn ai_cull_keeps_the_best_of_each_burst_and_never_touches_the_users_own_picks() {
+    // AI ช่วยคัดภาพ (DECISIONS ข้อ 37): วัดในงานเบื้องหลัง · ระดับ 1–5 · ไม่แตะการคัดของผู้ใช้ · ไฟล์ไม่ถูกแตะ
+    let lib = Lib::new();
+    let root = lib.photos().join("2026-11-22 ปล่อยปลา");
+    std::fs::create_dir_all(&root).unwrap();
+    let shots = [
+        // ช่วง A: กดถ่ายต่อกัน 3 ใบ ใบกลางคมที่สุด
+        ("a1.jpg", cull_scene(0, 1.6, 0), "2026:11:22 10:00:00"),
+        ("a2.jpg", cull_scene(3, 0.0, 0), "2026:11:22 10:00:01"),
+        ("a3.jpg", cull_scene(6, 1.2, 0), "2026:11:22 10:00:02"),
+        // ฉาก B ใบเดียว
+        ("b.jpg", cull_scene(120, 0.0, 90), "2026:11:22 10:05:00"),
+        // ฉาก C เบลอมากใบเดียว · ฉาก D คมใบเดียว
+        ("c.jpg", cull_scene(200, 9.0, 40), "2026:11:22 10:10:00"),
+        ("d.jpg", cull_scene(260, 0.0, 120), "2026:11:22 10:12:00"),
+        // ช่วง E: ผู้ใช้เลือกใบแรกไว้เอง (แม้ใบที่สองคมกว่า)
+        ("e1.jpg", cull_scene(330, 1.0, 60), "2026:11:22 10:20:00"),
+        ("e2.jpg", cull_scene(333, 0.0, 60), "2026:11:22 10:20:01"),
+    ];
+    for (name, jpeg, time) in &shots {
+        std::fs::write(root.join(name), common::add_exif(jpeg, 1, time)).unwrap();
+    }
+    lib.import(&root, "single_event", |_| true);
+    let before = tree_state(&root);
+    let id = |name: &str| lib.photo_id(name);
+    let event = lib.query(json!({}))["items"][0]["eventId"].as_str().unwrap().to_string();
+    lib.call(
+        "set_photo_flags",
+        json!({ "selection": { "kind": "explicit", "photoIds": [id("e1.jpg")] }, "flag": "pick" }),
+    );
+
+    // ยังไม่ได้วัด → เริ่มงานวัด (งานเดียวต่อกิจกรรม) → วัดครบ
+    let status = lib.call("get_cull_status", json!({ "eventId": event }));
+    assert_eq!(
+        (status["total"].as_i64(), status["measured"].as_i64(), status["userFlagged"].as_i64()),
+        (Some(8), Some(0), Some(1))
+    );
+    let job = lib.call("start_cull_analysis", json!({ "eventId": event }));
+    assert_eq!((job["kind"].as_str(), job["counts"]["total"].as_i64()), (Some("cull"), Some(8)));
+    assert_eq!(lib.call("start_cull_analysis", json!({ "eventId": event }))["id"], job["id"], "ไม่สร้างงานซ้ำ");
+    lib.run_jobs();
+    let status = lib.call("get_cull_status", json!({ "eventId": event }));
+    assert_eq!((status["measured"].as_i64(), status["job"].clone()), (Some(8), Value::Null));
+    assert_eq!(lib.call("start_cull_analysis", json!({ "eventId": event })), Value::Null, "วัดครบแล้วไม่มีงาน");
+
+    // ดูผลก่อนใช้: ทุกระดับบอกจำนวน · ระดับเข้มขึ้นเก็บไม่มากขึ้น
+    let preview = lib.call("preview_cull", json!({ "eventId": event, "level": 2 }));
+    let keeps: Vec<i64> = arr(&preview["levels"]).iter().map(|l| l["keep"].as_i64().unwrap()).collect();
+    assert_eq!(keeps.len(), 5);
+    assert!(keeps.windows(2).all(|w| w[0] >= w[1]), "{keeps:?}");
+    assert_eq!(preview["userFlagged"], 1);
+    let decision = |name: &str| {
+        arr(&preview["decisions"]).iter().find(|d| d["photoId"] == id(name).as_str()).cloned().unwrap_or(Value::Null)
+    };
+    assert_eq!(decision("a2.jpg")["reason"], json!({ "kind": "best" }));
+    assert_eq!(decision("a1.jpg")["reason"], json!({ "kind": "duplicate", "of": id("a2.jpg") }));
+    assert_eq!(decision("c.jpg")["reason"], json!({ "kind": "blur" }));
+    assert_eq!(
+        decision("e2.jpg")["reason"],
+        json!({ "kind": "duplicate", "of": id("e1.jpg") }),
+        "ใบที่ผู้ใช้เลือกเป็นตัวแทนของช่วง"
+    );
+    assert_eq!(decision("e1.jpg"), Value::Null, "ไม่แตะรูปที่ผู้ใช้คัดเอง");
+
+    // ใช้ผล → เลือก a2 b d · ไม่เอา a1 a3 c e2 · e1 ยังเป็นของผู้ใช้
+    let applied = lib.call("apply_cull", json!({ "eventId": event, "level": 2 }));
+    assert_eq!(
+        (applied["picked"].as_i64(), applied["rejected"].as_i64(), applied["updated"].as_i64()),
+        (Some(3), Some(4), Some(7))
+    );
+    let names = |filter: &str| lib.filenames(json!({ "flagFilter": filter }));
+    assert_eq!(names("picked"), ["a2.jpg", "b.jpg", "d.jpg", "e1.jpg"]);
+    assert_eq!(names("rejected"), ["a1.jpg", "a3.jpg", "c.jpg", "e2.jpg"]);
+    let items = lib.query(json!({}));
+    let item = |name: &str| arr(&items["items"]).iter().find(|i| i["filename"] == name).unwrap().clone();
+    assert_eq!(item("a1.jpg")["flagAi"], json!({ "reason": "duplicate", "of": id("a2.jpg") }));
+    assert_eq!(item("a2.jpg")["flagAi"], json!({ "reason": "best", "of": null }));
+    assert!(item("e1.jpg").get("flagAi").is_none(), "การคัดของผู้ใช้ไม่มีป้าย AI");
+    assert_eq!(lib.call("apply_cull", json!({ "eventId": event, "level": 2 }))["updated"], 0, "ใช้ซ้ำไม่เปลี่ยนอะไร");
+
+    // ผู้ใช้เปลี่ยนใจกับรูปที่ AI คัด → เป็นของผู้ใช้ · ปรับระดับใหม่ AI ไม่แตะรูปนั้น
+    lib.call(
+        "set_photo_flags",
+        json!({ "selection": { "kind": "explicit", "photoIds": [id("a1.jpg")] }, "flag": "pick" }),
+    );
+    assert!(lib.query(json!({}))["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|i| i["filename"] == "a1.jpg" && i["flag"] == "pick" && i.get("flagAi").is_none()));
+    lib.call("apply_cull", json!({ "eventId": event, "level": 5 }));
+    assert!(names("picked").contains(&"a1.jpg".to_string()));
+    let status = lib.call("get_cull_status", json!({ "eventId": event }));
+    assert_eq!(status["userFlagged"], 2);
+
+    // ล้างการคัดของ AI: การคัดของผู้ใช้อยู่ครบ
+    let cleared = lib.call("clear_ai_picks", json!({ "eventId": event }));
+    assert_eq!(cleared["cleared"].as_i64(), Some(6));
+    assert_eq!(names("picked"), ["a1.jpg", "e1.jpg"]);
+    assert!(names("rejected").is_empty());
+    assert_eq!(tree_state(&root), before, "ไฟล์ต้นฉบับไม่ถูกแตะ");
+
+    // ค่าที่ผิด
+    assert_eq!(lib.try_call("start_cull_analysis", json!({ "eventId": "nope" })).unwrap_err().code, "NOT_FOUND");
+}
+
 #[test]
 fn pick_and_reject_filter_count_and_select_without_touching_files() {
     // คัดก่อนแต่ง (DECISIONS ข้อ 33): เลือก/ไม่เอาแบบ Lightroom เป็นข้อมูลของคลัง ไฟล์ไม่ถูกแตะ

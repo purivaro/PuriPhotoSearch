@@ -16,7 +16,7 @@ import type { Id, PhotoDetails, PhotoFlag } from '@/lib/ipc/types';
 import { qk } from '@/lib/queries';
 import { useEditClipboard } from '@/stores/editClipboard';
 import { PasteEditDialog } from './PasteEditDialog';
-import { FLAG_LABEL, flagForKey, useSetPhotoFlags } from './PhotoFlags';
+import { aiFlagReason, FLAG_LABEL, flagForKey, useSetPhotoFlags } from './PhotoFlags';
 import { GenerateDialog } from '@/features/assistant/GenerateDialog';
 import { useAssistant } from '@/stores/assistant';
 import { useUi } from '@/stores/ui';
@@ -437,7 +437,9 @@ export function PhotoViewer() {
                 )}
               >
                 {data.flag === 'pick' ? <Flag className="size-3.5" fill="currentColor" aria-hidden /> : <Ban className="size-3.5" aria-hidden />}
+                {data.flagAi ? 'AI ' : ''}
                 {data.flag === 'pick' ? 'เลือกไว้' : 'ไม่เอา'}
+                {data.flagAi && <span className="font-normal opacity-90">· {aiFlagReason(data.flagAi)}</span>}
               </span>
             )}
             {previousId && (

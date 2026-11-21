@@ -4,6 +4,7 @@ import type { ErrorCode, JobSnapshot, JobState } from '@/lib/ipc/types';
 export function jobKindLabel(job: JobSnapshot): string {
   if (job.kind === 'model') return 'ดาวน์โหลดตัววิเคราะห์ใบหน้า';
   if (job.kind === 'shrink') return 'ย่อไฟล์ต้นฉบับ';
+  if (job.kind === 'cull') return 'AI ช่วยคัดภาพ';
   return job.kind === 'export' ? 'ส่งออกสำเนา' : 'เพิ่มรูปเข้าคลัง';
 }
 
@@ -47,6 +48,7 @@ export function jobStageLabel(job: JobSnapshot): string {
   if (job.kind === 'model') return job.stage === 'verify' ? 'ตรวจและติดตั้งไฟล์' : job.stage === 'download' ? 'ดาวน์โหลด' : 'เสร็จขั้นตอน';
   if (job.kind === 'export') return 'คัดลอกไฟล์ต้นฉบับ';
   if (job.kind === 'shrink') return 'ย่อและแทนที่ไฟล์';
+  if (job.kind === 'cull') return 'ดูความคมและหาภาพซ้ำ';
   if (job.stage === 'discovery') return 'ตรวจรายการ';
   if (job.stage === 'thumbnail') return 'เตรียมข้อมูลรูป';
   return 'เสร็จขั้นตอน';
@@ -64,7 +66,7 @@ export function jobProgressText(job: JobSnapshot): string {
   if (!job.totalKnown) return `กำลังตรวจรายการ พบแล้ว ${formatCount(total)} ไฟล์`;
   const processed = done + failed + job.counts.skipped;
   const unit = job.kind === 'export' ? 'ไฟล์' : 'รูป';
-  const head = job.kind === 'export' ? 'คัดลอกแล้ว' : job.kind === 'shrink' ? 'ย่อแล้ว' : 'เตรียมข้อมูลรูป';
+  const head = job.kind === 'export' ? 'คัดลอกแล้ว' : job.kind === 'shrink' ? 'ย่อแล้ว' : job.kind === 'cull' ? 'ดูแล้ว' : 'เตรียมข้อมูลรูป';
   return `${head} ${formatCount(processed)} / ${formatCount(total)} ${unit}`;
 }
 

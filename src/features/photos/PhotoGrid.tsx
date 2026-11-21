@@ -131,7 +131,7 @@ export function PhotoGrid({ items, label, selection, onSelectionChange, onOpen, 
                 <PeopleBadge photo={photo} />
                 {(photo.flag || photo.editId || photo.raw || photo.rawPair) && (
                   <span className="absolute top-1.5 right-1.5 flex items-center gap-1">
-                    {photo.flag && <FlagBadge flag={photo.flag} compact={compact} />}
+                    {photo.flag && <FlagBadge flag={photo.flag} compact={compact} ai={photo.flagAi} />}
                     {photo.editId && (
                       <span
                         title="แต่งในแอปแล้ว — ไฟล์ต้นฉบับไม่ถูกแตะ"

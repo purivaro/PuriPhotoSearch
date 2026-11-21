@@ -145,6 +145,11 @@ domain_commands!(
     preview_white_balance,
     preview_auto_light,
     set_photo_flags,
+    get_cull_status,
+    start_cull_analysis,
+    preview_cull,
+    apply_cull,
+    clear_ai_picks,
 );
 
 /// เปิด native file picker สำหรับไฟล์รูป (ลายน้ำ); คืน path ที่ผู้ใช้เลือกเอง (หรือ None เมื่อยกเลิก)

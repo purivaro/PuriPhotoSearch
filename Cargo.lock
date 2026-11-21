@@ -3418,6 +3418,8 @@ dependencies = [
  "ort",
  "puri-core",
  "rusqlite",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

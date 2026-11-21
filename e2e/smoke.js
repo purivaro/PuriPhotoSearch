@@ -429,6 +429,46 @@
     expect((await rpc('get_photo_details', { photoId: pickedId })).flag === null, 'ล้างการคัดแล้ว');
     await stage('pick-reject');
 
+    // ── AI ช่วยคัดภาพ (DECISIONS ข้อ 37): วัดรูปในงานเบื้องหลัง → ระดับการคัด → ใช้ผล → ป้าย AI · ไม่แตะรูปที่คัดเอง → ล้างการคัดของ AI
+    location.hash = `#/events/${ai.id}`;
+    await waitFor(() => tids('photo-card').length === 6, 'รูปทั้งหกของงานอบรม AI');
+    await click(await see('event-cull-open'), 'ปุ่ม AI ช่วยคัด');
+    await see('cull-levels', 'ผลการคัดพร้อม (วัดรูปของงานเสร็จ)', 60000);
+    expect(tid('cull-level-2').getAttribute('aria-checked') === 'true', 'ค่าตั้งต้นคือระดับ 2 (เบา)');
+    const keeps = [1, 2, 3, 4, 5].map((n) => Number(text(tid(`cull-level-${n}`)).replace(/\D/g, '')));
+    expect(keeps.every((k, i) => i === 0 || k <= keeps[i - 1]), `ระดับเข้มขึ้นเก็บไม่มากขึ้น (ได้ ${keeps})`);
+    await click(tid('cull-level-5'), 'ระดับเข้มมาก');
+    await waitFor(() => text(tid('cull-summary')).includes(`เก็บ ${keeps[4]} รูป`), 'สรุปเปลี่ยนตามระดับ');
+    await click(tid('cull-level-2'), 'กลับมาระดับเบา');
+    await waitFor(() => text(tid('cull-summary')).includes(`เก็บ ${keeps[1]} รูป`), 'สรุประดับเบา');
+    expect(text(tid('cull-summary')).includes('คัดเองแล้ว 1 รูป'), `บอกว่ารูปที่คัดเองไม่ถูกแตะ (ได้ "${text(tid('cull-summary'))}")`);
+    const cullStatus = await rpc('get_cull_status', { eventId: ai.id });
+    await click(tid('cull-apply'), 'ใช้ผลการคัดนี้');
+    await waitFor(() => !tid('cull-levels'), 'ปิดหน้าต่างหลังใช้ผล');
+    const culled = (await rpc('query_photos', { eventIds: [ai.id], limit: 50 })).items;
+    const userRejected = culled.find((i) => i.id === rejectedId);
+    expect(userRejected.flag === 'reject' && !userRejected.flagAi, 'รูปที่ผู้ใช้ไม่เอาเองยังเป็นของผู้ใช้');
+    const byAi = culled.filter((i) => i.flagAi);
+    const expected = cullStatus.measured - cullStatus.userFlagged;
+    expect(
+      expected > 0 && byAi.length === expected && byAi.filter((i) => i.flag === 'pick').length === keeps[1],
+      `AI คัดรูปที่เหลือ ${expected} รูป เก็บ ${keeps[1]} (ได้ ${JSON.stringify(byAi.map((i) => [i.filename, i.flag, i.flagAi.reason]))})`,
+    );
+    await waitFor(() => tids('photo-card-flag').some((b) => b.dataset.ai), 'ป้าย AI บนภาพย่อ');
+    // ล้างการคัดของ AI: การคัดของผู้ใช้อยู่ครบ
+    await click(await see('event-cull-open'), 'เปิด AI ช่วยคัดอีกครั้ง');
+    await click(await see('cull-clear'), 'ล้างการคัดของ AI');
+    const confirmClear = await waitFor(
+      () => all('[role="alertdialog"] button, [role="dialog"] button').find((b) => text(b) === 'ล้างการคัดของ AI'),
+      'ปุ่มยืนยันล้างการคัดของ AI',
+    );
+    await click(confirmClear, 'ยืนยันล้าง');
+    await waitFor(async () => (await rpc('query_photos', { eventIds: [ai.id], limit: 50 })).items.every((i) => !i.flagAi), 'การคัดของ AI ถูกล้าง');
+    expect((await rpc('get_photo_details', { photoId: rejectedId })).flag === 'reject', 'การคัดของผู้ใช้ยังอยู่');
+    if (tid('cull-levels')) await click(all('[role="dialog"] button').find((b) => text(b) === 'ยกเลิก'), 'ปิดหน้าต่าง AI ช่วยคัด');
+    await waitFor(() => !tid('cull-levels'), 'ปิดหน้าต่างแล้ว');
+    await stage('ai-cull', { keeps });
+
     // ── S05: หน้าหลักใช้ข้อมูลจริงจากคลัง
     await click(tid('nav-home'), 'เมนูหน้าหลัก');
     await waitFor(() => tids('person-card', tid('home-people-grid') ?? document).some((c) => c.dataset.personId === kan.id), 'คนที่ปักหมุดอยู่บนหน้าหลัก');

@@ -40,13 +40,14 @@ debug build ที่ตั้ง `PURI_DATA_DIR` จะใช้โฟลเด
 | | `legacy_id_map` (v2) | ระเบียนของรุ่นเดิม → ID ใหม่ กันนำเข้าซ้ำ |
 | | `groups`, `person_groups` | กลุ่มที่ผู้ใช้ตั้ง; คนหนึ่งอยู่ได้หลายกลุ่ม |
 | | `pinned_persons`, `recent_person_views`, `ui_preferences` | ปักหมุด, เปิดล่าสุด, แท็บหน้าหลัก |
-| งาน | `jobs`, `job_errors` | คิวถาวร, ตัวนับ, ข้อผิดพลาดรายไฟล์ |
+| งาน | `jobs`, `job_errors` | คิวถาวร, ตัวนับ, ข้อผิดพลาดรายไฟล์ · ชนิด `catalog` `export` `model` `shrink` และ `cull` (v12 — วัดรูปของกิจกรรมเพื่อคัด) |
 | ส่งออก | `selections`, `selection_items` | snapshot ของ "เลือกผลค้นหาทั้งหมด" |
 | | `export_runs`, `export_items` | ผลรายรูปของการส่งออกแต่ละครั้ง |
 | | `photo_edits` | การแต่งภาพต่อรูป (JSON ของ `edit::EditSettings` + `edit_id` ที่ใช้เป็นชื่อ cache) ไฟล์ต้นฉบับไม่ถูกแตะ — DECISIONS ข้อ 17 · `fromRaw` = แต่งจากไฟล์ RAW คู่ (ข้อ 26) · `masks` = ปรับเฉพาะส่วน (ข้อ 28: บริเวณใบหน้าเก็บกรอบเป็นสัดส่วนบนภาพเดิม ไม่อ้าง ID ของใบหน้า — ลบ/แก้กรอบใบหน้าภายหลังไม่ทำให้ Mask เสีย ไม่มีคอลัมน์หรือตารางใหม่) · `retouch` = รีทัชใบหน้า (ข้อ 31: กรอบใบหน้า + ผิวเนียน/ลดริ้วรอย/หน้าเรียว/หน้าผอม 0–100) |
-| | `photo_picks` | การคัดแบบ Pick/Reject ของ Lightroom (schema v11): `flag` = `pick` (เลือก) / `reject` (ไม่เอา) · ไม่มีแถว = ยังไม่คัด · ต่อรูป (ไม่ใช่ต่อ revision) · "ไม่เอา" ไม่ลบหรือย้ายไฟล์ — DECISIONS ข้อ 33 |
+| | `photo_picks` | การคัดแบบ Pick/Reject ของ Lightroom (schema v11): `flag` = `pick` (เลือก) / `reject` (ไม่เอา) · ไม่มีแถว = ยังไม่คัด · ต่อรูป (ไม่ใช่ต่อ revision) · "ไม่เอา" ไม่ลบหรือย้ายไฟล์ — DECISIONS ข้อ 33 · `source` (v12) = `user` (คัดเอง) / `ai` (AI ช่วยคัด) · `reason` + `reason_photo_id` (v12) = เหตุผลของ AI: `best` / `blur` / `duplicate` (ซ้ำกับรูปไหน) — ปรับระดับใหม่ AI แก้เฉพาะแถว `ai` · ผู้ใช้กด P/X บนรูปที่ AI คัด = เป็นของผู้ใช้ — ข้อ 37 |
+| | `photo_quality` | ผลวัดสำหรับ AI ช่วยคัด ต่อ revision (schema v12): ความคมของภาพ/ใบหน้า ความสว่าง สัดส่วนที่ขาว/ดำจนหมดรายละเอียด ภาพย่อ 24×16 + สี 64 ช่องสำหรับเทียบความเหมือน · `version` = รุ่นสูตร · คำนวณใหม่ได้ (ลบเมื่อไฟล์เปลี่ยนในที่) — DECISIONS ข้อ 37 |
 | | `photo_raw_pairs` | ไฟล์ RAW คู่ของรูป JPEG (schema v10): ตำแหน่งไฟล์ · `lightroom` = กรอบและค่าที่แต่งใน Lightroom จาก XMP (NULL = JPEG จากกล้อง) · `start` = ค่าเริ่มต้นเมื่อแต่งจาก RAW (คิดครั้งแรกที่ใช้) · `available` — RAW ที่เป็นคู่ไม่เป็นรูปแยก — DECISIONS ข้อ 26 |
-| | `edit_presets` | preset ของค่าแสงและสี (JSON ของ `adjust::Adjust`) · `source` = user/lightroom · `unsupported` = ส่วนของ .xmp ที่นำเข้าไม่ได้ (schema v7) — DECISIONS ข้อ 20 |
+| | `edit_presets` | preset ของค่าแสงและสี (JSON ของ `adjust::Adjust`) · `source` = user/lightroom · `unsupported` = ส่วนของ .xmp ที่นำเข้าไม่ได้ (schema v7) — DECISIONS ข้อ 20 · `masks` (v12) = JSON ของ Mask ที่ preset พาไปด้วย (เช่น Mask ตัวคนของ preset จาก Lightroom) |
 | | `ai_images` | ที่มาของภาพที่ผู้ช่วย AI สร้าง ผูกด้วย SHA-256 ของไฟล์: รูปต้นทาง คำสั่ง แม่แบบ AI ที่ใช้ เวลา (schema v8) — DECISIONS ข้อ 23 |
 | | `watermarks` | โลโก้ลายน้ำที่ผู้ใช้เพิ่ม (PNG ในคลัง ด้านยาวไม่เกิน 2048) · `export_runs.watermark` = ลายน้ำของงานส่งออก — DECISIONS ข้อ 16 |
 | | `shrink_runs`, `shrink_items` | ผลรายรูปของการย่อไฟล์ต้นฉบับ (สถานะ เหตุผลที่ข้าม ตำแหน่งต้นฉบับในถังขยะ) — DECISIONS ข้อ 15 |
