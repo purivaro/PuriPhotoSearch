@@ -106,7 +106,6 @@ cargo run -p puri-core --example make_fixtures -- /tmp/puri-photos
 
 ```sh
 pnpm check                     # typecheck + vitest + cargo fmt --check + clippy -D warnings + cargo test
-                               # (cargo test มีเทสต์ที่เรียก node/vitest เทียบตัวอย่างสดกับไฟล์ที่บันทึก — ต้อง pnpm install ก่อน)
 e2e/run.sh                     # เส้นทางหลักในหน้าต่างแอปจริง (ต้องมี desktop session)
 e2e/setup.sh                   # หน้าต่าง "เตรียมแอปให้พร้อมใช้" ตอนเปิดครั้งแรก กับฐานรุ่น Python จำลอง (macOS)
 e2e/update.sh                  # แอปจริงอัปเดตตัวเองจากรุ่นปัจจุบันเป็นรุ่นทดสอบ (build สองรอบ หลายนาที; Windows รันใน workflow Release เท่านั้น)

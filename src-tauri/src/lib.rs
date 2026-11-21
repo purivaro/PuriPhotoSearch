@@ -104,8 +104,6 @@ domain_commands!(
     get_export_report,
     reveal_export_destination,
     save_photo_edit,
-    preview_white_balance,
-    preview_auto_light,
     reset_photo_edit,
     apply_photo_edits,
     list_edit_presets,
@@ -144,6 +142,8 @@ domain_commands!(
     get_review_faces,
     reject_suggestions,
     restore_suggestions,
+    preview_white_balance,
+    preview_auto_light,
 );
 
 /// เปิด native file picker สำหรับไฟล์รูป (ลายน้ำ); คืน path ที่ผู้ใช้เลือกเอง (หรือ None เมื่อยกเลิก)
