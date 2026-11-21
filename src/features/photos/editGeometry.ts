@@ -183,3 +183,15 @@ export function dragCrop(start: UnitRect, handle: Handle, dx: number, dy: number
 function clamp(v: number, lo: number, hi: number) {
   return Math.min(Math.max(v, lo), Math.max(lo, hi));
 }
+
+/**
+ * ลากเส้นให้ตรง (DECISIONS ข้อ 38): เส้นที่ลากบนภาพที่แสดงอยู่ (dx, dy เป็นพิกเซล y ชี้ลง) ควรเป็นแนวนอนหรือแนวตั้ง
+ * (ดูจากว่าใกล้แบบไหนกว่า) → องศาที่ต้องปรับเอียงเพิ่มจากค่าปัจจุบัน (ตามเข็มนาฬิกา แบบ EditSettings.straighten)
+ */
+export function levelDelta(dx: number, dy: number): number {
+  let a = (Math.atan2(dy, dx) * 180) / Math.PI;
+  if (a > 90) a -= 180;
+  if (a <= -90) a += 180;
+  if (Math.abs(a) <= 45) return -a;
+  return -(a > 0 ? a - 90 : a + 90);
+}

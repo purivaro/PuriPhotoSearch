@@ -150,6 +150,7 @@ domain_commands!(
     preview_cull,
     apply_cull,
     clear_ai_picks,
+    suggest_composition,
 );
 
 /// เปิด native file picker สำหรับไฟล์รูป (ลายน้ำ); คืน path ที่ผู้ใช้เลือกเอง (หรือ None เมื่อยกเลิก)

@@ -542,6 +542,22 @@ export interface EditMask {
 /** ภาพต้นทางของหน้าแต่งภาพ: ไฟล์ของรูป หรือภาพจาก RAW คู่ในกรอบของ JPEG */
 export type PreviewSource = 'original' | 'rawframe';
 
+/** AI ช่วยจัดองค์ประกอบ (DECISIONS ข้อ 38) */
+export interface CropSuggestion {
+  /** กรอบตัด (พิกัดเดียวกับ EditSettings.crop) */
+  crop: UnitRect;
+  /** "original" = สัดส่วนเดิม · "1:1" "4:5" "2:3" "3:2" "4:3" "16:9" · "locked" = สัดส่วนที่ล็อกไว้ */
+  ratio: string;
+  score: number;
+}
+
+export interface Composition {
+  /** ค่าปรับเอียงที่เสนอ (องศาตามเข็มนาฬิกา) — null = หลักฐานไม่ชัด ไม่เสนอ */
+  straighten: number | null;
+  tilt: { degrees: number; confidence: number } | null;
+  crops: CropSuggestion[];
+}
+
 /** คำขอภาพตัวอย่างหนึ่งเฟรม (Rust วาด — DECISIONS ข้อ 30) */
 export interface PreviewRequest {
   photoId: Id;
@@ -1264,6 +1280,7 @@ export interface Commands {
   preview_cull: [{ eventId: Id; level: number }, CullPreview];
   apply_cull: [{ eventId: Id; level: number }, { picked: number; rejected: number; updated: number }];
   clear_ai_picks: [{ eventId: Id }, { cleared: number }];
+  suggest_composition: [{ photoId: Id; source: PreviewSource; settings: EditSettings; ratio?: number | null }, Composition];
   /** ย้อน "ไม่ใช่บุคคลนี้": ใบหน้ากลับไปให้ AI จัดได้ตามเดิม */
   restore_suggestions: [{ faceIds: Id[]; personId: Id }, { dataRevision: number }];
 }

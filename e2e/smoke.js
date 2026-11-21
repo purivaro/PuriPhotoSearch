@@ -146,7 +146,8 @@
     await click(tids('event-card').find((c) => c.dataset.eventId === ai.id), 'เปิดงานอบรม AI');
     await waitFor(() => location.hash.startsWith(`#/events/${ai.id}`), 'หน้ารายละเอียดกิจกรรม');
     await waitFor(() => tids('photo-card').length === 6, 'รูปหกใบใน grid');
-    await waitFor(() => all('[data-testid="photo-card"] img').filter((i) => i.naturalWidth > 0).length >= 5, 'ภาพย่อโหลดจริง');
+    // ภาพย่อโหลดแบบ lazy — ตอนเครื่องถูกงานอื่นใช้ CPU หนัก (เช่น mediaanalysisd ของ macOS) ใช้เวลาเกิน 20 วินาทีได้
+    await waitFor(() => all('[data-testid="photo-card"] img').filter((i) => i.naturalWidth > 0).length >= 5, 'ภาพย่อโหลดจริง', 60000);
     await stage('event-detail');
 
     // ── S15: ตัวดูภาพ + ระบุใบหน้าเอง
@@ -262,6 +263,37 @@
     const editedId = await waitFor(() => location.hash.match(/photos\/([^/?]+)/)?.[1], 'รหัสรูปใน URL ของตัวดูภาพ');
     await click(await see('viewer-edit'), 'แต่งภาพ');
     await see('photo-editor');
+
+    // ── AI ช่วยจัดองค์ประกอบ (DECISIONS ข้อ 38): เสนอการครอป → ใช้แบบที่ 1 · ลากเส้นให้ตรง → เอียงตามเส้น · ปรับเอียงอัตโนมัติตอบเสมอ
+    await waitFor(() => tid('editor-suggest-crop') && !tid('editor-suggest-crop').disabled, 'ปุ่มเสนอการครอปพร้อม', 30000);
+    await click(tid('editor-suggest-crop'), 'เสนอการครอป');
+    const firstCrop = await see('editor-crop-suggestion-0', 'กรอบที่ AI เสนอ', 30000);
+    expect(text(firstCrop).includes('สัดส่วนเดิม'), `แบบแรกคงสัดส่วนเดิม (ได้ "${text(firstCrop)}")`);
+    await click(firstCrop, 'ใช้แบบที่ 1');
+    await waitFor(() => tid('editor-crop-suggestion-0')?.getAttribute('aria-pressed') === 'true', 'แบบที่ 1 ถูกใช้');
+    expect(parseFloat(tid('editor-crop').style.width) < 100, `กรอบตัดเล็กลงจากทั้งภาพ (กว้าง ${tid('editor-crop').style.width})`);
+    await click(tid('editor-level-line'), 'ลากเส้นให้ตรงเอง');
+    const surface = await see('editor-level-surface');
+    const area = surface.getBoundingClientRect();
+    const pointer = (kind, x, y) =>
+      surface.dispatchEvent(new PointerEvent(kind, { bubbles: true, cancelable: true, clientX: x, clientY: y, pointerId: 7, button: 0, pointerType: 'mouse' }));
+    // เส้นลาดลงทางขวา 3° (ภาพเอียงตามเข็ม) → ปรับเอียง −3°
+    const [lx, ly, run] = [area.left + area.width * 0.2, area.top + area.height * 0.5, area.width * 0.6];
+    pointer('pointerdown', lx, ly);
+    await sleep(40);
+    pointer('pointermove', lx + run, ly + run * Math.tan((3 * Math.PI) / 180));
+    await sleep(40);
+    pointer('pointerup', lx + run, ly + run * Math.tan((3 * Math.PI) / 180));
+    await waitFor(() => Math.abs(Number(tid('editor-straighten').value) + 3) < 0.15, 'ปรับเอียงตามเส้นที่ลาก');
+    expect(!tid('editor-level-surface'), 'ออกจากโหมดลากเส้นเอง');
+    expect(!tid('editor-crop-suggestion-0'), 'กรอบที่เสนอไว้หายเมื่อเอียงใหม่ (คิดจากภาพก่อนเอียง)');
+    await click(tid('editor-auto-straighten'), 'ปรับเอียงอัตโนมัติ');
+    await waitFor(() => all('[data-sonner-toast]').some((t) => /เส้น|ตรงอยู่แล้ว|ปรับเอียง/.test(text(t))), 'ผลของปรับเอียงอัตโนมัติ (ปรับหรือบอกว่าไม่แน่ใจ)');
+    // กลับค่าเดิมก่อนขั้นถัดไป (ขั้นแสงและสีกับขั้นเฉพาะส่วนอ่านพิกเซลตามตำแหน่งใบหน้า)
+    await click(tid('editor-reset'), 'รีเซ็ตทั้งหมด');
+    await waitFor(() => Number(tid('editor-straighten').value) === 0, 'กลับเป็นไม่เอียง');
+    await stage('editor-compose', { straighten: -3 });
+
     const canvasMean = () => {
       const c = tid('editor-preview');
       if (!c || c.width === 0) return 0;

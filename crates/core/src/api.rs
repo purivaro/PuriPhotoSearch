@@ -353,6 +353,8 @@ enum Command {
     ClearAiPicks {
         event_id: String,
     },
+    /// AI ช่วยจัดองค์ประกอบ (DECISIONS ข้อ 38)
+    SuggestComposition(crate::preview::CompositionRequest),
 }
 
 /// ชื่อคำสั่งทั้งหมด — ต้องตรงกับ `Commands` ใน `src/lib/ipc/types.ts` (มีเทสต์ตรวจ)
@@ -450,6 +452,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "preview_cull",
     "apply_cull",
     "clear_ai_picks",
+    "suggest_composition",
 ];
 
 #[derive(Serialize)]
@@ -672,6 +675,7 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         PreviewCull { event_id, level } => ok(crate::cull::preview(app, &event_id, level)?),
         ApplyCull { event_id, level } => ok(crate::cull::apply(app, &event_id, level)?),
         ClearAiPicks { event_id } => ok(serde_json::json!({ "cleared": crate::cull::clear(app, &event_id)? })),
+        SuggestComposition(r) => ok(crate::preview::composition(app, &r)?),
     }
 }
 
