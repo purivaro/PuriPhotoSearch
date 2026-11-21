@@ -251,7 +251,9 @@ const ADJUST_HELP_EDIT_PHOTOS: &str = concat!(
     "Edit many photos at once with the same change (non-destructive; the user can undo). `adjust` is merged into EACH photo's own current \
 settings (only the given fields change), unless `reset` is true. ",
     "Fields of `adjust` (all optional, 0 or empty = unchanged look): exposure (EV, -3..3); contrast, highlights, shadows, whites, blacks, \
-temperature (+warm/-cool), tint (+magenta/-green), vibrance, saturation (-100..100); hue, sat, lum: arrays of 8 values -100..100 for [red, orange, \
+temperature (+warm/-cool), tint (+magenta/-green), vibrance, saturation (-100..100); texture (fine detail like skin pores and fabric: negative \
+= smoother softer skin, positive = crisper), clarity (mid-tone local contrast: negative = soft dreamy glow, positive = punchy), dehaze (negative \
+= adds haze/milky look, positive = removes haze) -100..100, applied to the whole photo; hue, sat, lum: arrays of 8 values -100..100 for [red, orange, \
 yellow, green, aqua, blue, purple, magenta] (skin tones are mostly orange); parametric: [shadows, darks, lights, highlights] -100..100; curve, \
 curveRed, curveGreen, curveBlue: point curves [[in,out],...] 0..255 sorted by in, at most 16 points; levels, levelsRed, levelsGreen, levelsBlue: \
 {inBlack 0..253, gamma 0.1..9.99 (1 = none, >1 brighter mids), inWhite, outBlack, outWhite 0..255}; grading: {shadows, midtones, highlights, \

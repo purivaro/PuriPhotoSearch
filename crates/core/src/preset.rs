@@ -1,7 +1,7 @@
 //! preset ของการแต่งภาพ (DECISIONS ข้อ 20): ค่าแสงและสีที่บันทึกไว้ใช้ซ้ำ และนำเข้าจาก preset `.xmp` ของ Lightroom
 //!
-//! การนำเข้าอ่านเฉพาะค่าที่ตัวแต่งภาพของเราทำได้ (แสงพื้นฐาน ความสด/ความอิ่ม HSL เส้นโค้งโทน Parametric curve สมดุลแสงขาว
-//! ขาวดำ Color Grading Vignette) ที่เหลือ (Profile, Mask, Texture, Clarity …) บันทึกเป็นรายการ "นำเข้าไม่ได้" ให้ผู้ใช้เห็นตามจริง
+//! การนำเข้าอ่านเฉพาะค่าที่ตัวแต่งภาพของเราทำได้ (แสงพื้นฐาน Texture Clarity Dehaze ความสด/ความอิ่ม HSL เส้นโค้งโทน Parametric curve
+//! สมดุลแสงขาว ขาวดำ Color Grading Vignette) ที่เหลือ (Profile, Mask, Sharpening …) บันทึกเป็นรายการ "นำเข้าไม่ได้" ให้ผู้ใช้เห็นตามจริง
 //! ผลจึงใกล้เคียงกับ Lightroom ไม่ใช่เท่ากันทุกพิกเซล — สูตรของ Adobe ไม่เปิดเผย
 
 use crate::adjust::{Adjust, Grading, Vignette, Wheel};
@@ -204,6 +204,9 @@ pub fn parse_lightroom(text: &str) -> Result<Parsed> {
         (&mut a.blacks, "Blacks2012"),
         (&mut a.vibrance, "Vibrance"),
         (&mut a.saturation, "Saturation"),
+        (&mut a.texture, "Texture"),
+        (&mut a.clarity, "Clarity2012"),
+        (&mut a.dehaze, "Dehaze"),
     ] {
         *field = clamp(num(text, key).unwrap_or(0.0));
     }
@@ -269,14 +272,9 @@ pub fn parse_lightroom(text: &str) -> Result<Parsed> {
         }
     }
     // (ชื่อใน xmp, ชื่อที่แสดง, ค่าติดลบได้)
-    for (key, label, bipolar) in [
-        ("Texture", "Texture", true),
-        ("Clarity2012", "Clarity", true),
-        ("Dehaze", "Dehaze", true),
-        ("GrainAmount", "Grain", false),
-        ("LuminanceSmoothing", "ลดนอยส์", false),
-        ("Sharpness", "Sharpening", false),
-    ] {
+    for (key, label, bipolar) in
+        [("GrainAmount", "Grain", false), ("LuminanceSmoothing", "ลดนอยส์", false), ("Sharpness", "Sharpening", false)]
+    {
         if let Some(v) = num(text, key).filter(|v| *v != 0.0) {
             unsupported.push(format!("{label} {}", if bipolar { signed(v) } else { format!("{v}") }));
         }
@@ -384,6 +382,7 @@ mod tests {
             (0.25, -8.0, -12.0, 11.0, 21.0, 23.0)
         );
         assert_eq!((a.vibrance, a.saturation, a.temperature), (14.0, 13.0, 0.0), "As Shot = ไม่ปรับสมดุลแสงขาว");
+        assert_eq!((a.texture, a.clarity, a.dehaze), (-21.0, -7.0, 0.0));
         assert_eq!((a.hue[1], a.sat[0], a.sat[3], a.lum[1]), (3.0, 32.0, -33.0, 42.0));
         assert_eq!(a.parametric, [-5.0, 4.0, 12.0, 0.0]);
         assert_eq!(a.parametric_split, None, "จุดแบ่งค่าเริ่มต้น");
@@ -393,10 +392,7 @@ mod tests {
         assert_eq!((a.grading.blending, a.grading.balance), (70.0, -15.0));
         assert_eq!((a.vignette.amount, a.vignette.midpoint, a.vignette.feather), (-18.0, 35.0, 50.0));
         assert!(a.validate().is_ok());
-        assert_eq!(
-            p.unsupported,
-            ["Profile “Adobe Portrait”", "Texture -21", "Clarity -7", "ลดนอยส์ 11", "Mask “Smoothen Face”"]
-        );
+        assert_eq!(p.unsupported, ["Profile “Adobe Portrait”", "ลดนอยส์ 11", "Mask “Smoothen Face”"]);
     }
 
     #[test]

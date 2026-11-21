@@ -1357,7 +1357,8 @@ fn edit_presets_save_import_rename_delete_and_survive_restart() {
     );
     assert_eq!((a["lum"][1].as_f64(), a["sat"][5].as_f64()), (Some(30.0), Some(-25.0)));
     assert_eq!(a["curve"], json!([[0.0, 12.0], [128.0, 136.0], [255.0, 250.0]]));
-    assert_eq!(imported["unsupported"], json!(["Profile “Adobe Vivid”", "Texture +15"]));
+    assert_eq!(imported["unsupported"], json!(["Profile “Adobe Vivid”"]), "Texture ทำตามได้แล้ว (ข้อ 27)");
+    assert_eq!(a["texture"].as_f64(), Some(15.0));
     assert_eq!(std::fs::read_to_string(&xmp).unwrap(), LIGHTROOM_XMP);
     // ไฟล์ที่ไม่ใช่ preset หรือไม่มีอยู่ → ปฏิเสธพร้อมเหตุผล
     let photo = dir.join("not-a-preset.jpg");
@@ -2208,7 +2209,8 @@ fn raw_and_jpeg_of_one_shot_become_one_photo_edited_from_the_raw() {
     let exposure = start["adjust"]["exposure"].as_f64().unwrap();
     assert!((exposure - 0.5).abs() < 0.15, "ค่าแสงที่ทำให้ภาพเท่ากับ JPEG: {exposure}");
     let unsupported: Vec<&str> = arr(&info["unsupported"]).iter().filter_map(Value::as_str).collect();
-    assert_eq!(unsupported, vec!["Texture -10", "แก้เลนส์ (Lens Corrections)"]);
+    assert_eq!(unsupported, vec!["แก้เลนส์ (Lens Corrections)"], "Texture ทำตามได้ (ข้อ 27)");
+    assert_eq!(start["adjust"]["texture"], -10.0);
     let camera_info =
         lib.call("get_photo_details", json!({ "photoId": lib.photo_id("DSC0002.JPG") }))["rawPairInfo"].clone();
     assert_eq!((camera_info["lightroom"].as_bool(), camera_info["editFromRaw"].as_bool()), (Some(false), Some(true)));

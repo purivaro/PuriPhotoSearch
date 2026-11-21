@@ -28,6 +28,9 @@ export const NEUTRAL: Adjust = {
   shadows: 0,
   whites: 0,
   blacks: 0,
+  texture: 0,
+  clarity: 0,
+  dehaze: 0,
   temperature: 0,
   tint: 0,
   vibrance: 0,
@@ -49,7 +52,7 @@ export const NEUTRAL: Adjust = {
   vignette: VIGNETTE_NEUTRAL,
 };
 
-const SLIDERS = ['exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks', 'temperature', 'tint', 'vibrance', 'saturation'] as const;
+const SLIDERS = ['exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks', 'texture', 'clarity', 'dehaze', 'temperature', 'tint', 'vibrance', 'saturation'] as const;
 /** ค่าที่เป็นแถบเลื่อนตัวเดียว */
 export type SliderKey = (typeof SLIDERS)[number];
 
@@ -70,7 +73,8 @@ export const gradingIsActive = (g: Grading) => [g.shadows, g.midtones, g.highlig
 export const hasVignette = (a: Adjust) => a.vignette.amount !== 0;
 
 export function isNeutral(a: Adjust): boolean {
-  return SLIDERS.every((k) => a[k] === 0) && !hasHsl(a) && !hasCurves(a) && !hasLevels(a) && !gradingIsActive(a.grading) && !hasVignette(a);
+  // ช่องที่ไม่มีในค่าที่บันทึกก่อนรุ่นนี้ (เช่น texture) = 0
+  return SLIDERS.every((k) => (a[k] ?? 0) === 0) && !hasHsl(a) && !hasCurves(a) && !hasLevels(a) && !gradingIsActive(a.grading) && !hasVignette(a);
 }
 
 const toLinear = (v: number) => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
