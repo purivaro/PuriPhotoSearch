@@ -18,6 +18,7 @@ pub mod faces;
 pub mod import;
 pub mod jobs;
 pub mod legacy;
+pub mod lens;
 pub mod local;
 pub mod masks;
 pub mod media;

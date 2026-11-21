@@ -2461,6 +2461,7 @@ fn exported_jpeg(dng: &[u8], frame: puri_core::pair::Frame, exposure: f64, xmp: 
         frame,
         jpeg: (fw.round() as u32, fh.round() as u32),
         start: Default::default(),
+        lens: true,
         unsupported: vec![],
     };
     let settings = puri_core::edit::EditSettings {
@@ -2507,7 +2508,9 @@ fn raw_and_jpeg_of_one_shot_become_one_photo_edited_from_the_raw() {
       <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
        crs:RawFileName="SHOT001.DNG" crs:WhiteBalance="As Shot" crs:Exposure2012="+0.50" crs:Texture="-10"
        crs:HasCrop="True" crs:CropLeft="0.04" crs:CropTop="0.02" crs:CropRight="0.97" crs:CropBottom="0.95"
-       crs:CropAngle="1.5" crs:LensProfileEnable="1"/></rdf:RDF></x:xmpmeta>"#;
+       crs:CropAngle="1.5" crs:LensProfileEnable="1">
+       <crs:Look><rdf:Description crs:Name="Adobe Portrait"/></crs:Look>
+      </rdf:Description></rdf:RDF></x:xmpmeta>"#;
     std::fs::write(root.join("SHOT001.jpg"), exported_jpeg(&shot, frame, 0.5, Some(xmp))).unwrap();
     std::fs::write(root.join("sony_raw/SHOT001.DNG"), &shot).unwrap();
     // RAW+JPEG จากกล้อง: ชื่อเดียวกันในโฟลเดอร์เดียวกัน ไม่มี XMP
@@ -2552,7 +2555,11 @@ fn raw_and_jpeg_of_one_shot_become_one_photo_edited_from_the_raw() {
     let exposure = start["adjust"]["exposure"].as_f64().unwrap();
     assert!((exposure - 0.5).abs() < 0.15, "ค่าแสงที่ทำให้ภาพเท่ากับ JPEG: {exposure}");
     let unsupported: Vec<&str> = arr(&info["unsupported"]).iter().filter_map(Value::as_str).collect();
-    assert_eq!(unsupported, vec!["แก้เลนส์ (Lens Corrections)"], "Texture ทำตามได้ (ข้อ 27)");
+    assert_eq!(
+        unsupported,
+        vec!["Profile “Adobe Portrait”", "แก้เลนส์ (Lens Corrections)"],
+        "Texture ทำตามได้ (ข้อ 27) · กล้องนี้ไม่มีหน้าตา Adobe Portrait และไม่มีข้อมูลเลนส์ (ข้อ 34–35)"
+    );
     assert_eq!(start["adjust"]["texture"], -10.0);
     let camera_info =
         lib.call("get_photo_details", json!({ "photoId": lib.photo_id("DSC0002.JPG") }))["rawPairInfo"].clone();

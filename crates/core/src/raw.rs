@@ -32,6 +32,57 @@ pub const HEADROOM: f32 = 2.0;
 /// 1.1 เท่าได้ความอิ่มสีเท่ากล้อง (วัดได้ 0.99 เท่า — Sony ILCE-7CM2 30 ไฟล์ + Panasonic DC-S5 49 ไฟล์)
 const SATURATION: f32 = 1.1;
 
+/// หน้าตาพื้นฐานแบบ Adobe Portrait ของ Lumix DC-S5 (DECISIONS ข้อ 35): หมุนสีและปรับความอิ่มตามมุมสี Oklab ทุก 30°
+/// (0°, 30°, … 330°) ความสว่างเท่าเดิม · หาค่าด้วย `examples/lightroom_fit.rs` จากรูปที่ Lightroom ส่งออก 61 รูป (Adobe Portrait +
+/// preset "Bright and Nature 85" · ใช้รูปครึ่งหนึ่งหาค่า อีกครึ่งตรวจ) · เทียบทั้งระบบด้วย `examples/lightroom_compare.rs`:
+/// ΔE 4.9 → 3.8 ไม่มีรูปที่แย่ลง — ผิวและจีวรของเราเหลืองกว่า Lightroom จึงหมุนช่วงส้ม/เหลืองไปทางแดง · เขียวและฟ้าของเราอิ่มกว่า จึงลดลง
+const LOOK_HUE: [f64; 12] = [2.0, -0.5, -8.0, -7.5, 4.5, 0.5, -1.0, -1.5, -4.0, -4.0, -1.0, 2.0];
+const LOOK_SAT: [f64; 12] = [0.93, 0.78, 1.0, 0.82, 0.74, 0.87, 0.93, 0.91, 0.75, 0.74, 0.82, 0.89];
+
+/// รุ่นกล้องที่ใช้หน้าตาพื้นฐานข้างบน — ค่าหาจากกล้องรุ่นนี้รุ่นเดียว (ชื่อตาม rawler) · Sony ILCE-7CM2 ลองแล้วห่างจาก Lightroom มากขึ้น
+pub(crate) fn has_portrait_look(make: &str, model: &str) -> bool {
+    make == "Panasonic" && model == "DC-S5"
+}
+
+/// ปิดหน้าตาพื้นฐาน — สำหรับเครื่องมือหาค่า (`examples/lightroom_fit.rs`) เท่านั้น
+#[doc(hidden)]
+pub static BASE_LOOK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+fn portrait_look(rgb: &mut [f32]) {
+    use rayon::prelude::*;
+    rgb.par_chunks_exact_mut(3).for_each(|px| {
+        let [r, g, b] = [px[0], px[1], px[2]].map(f64::from);
+        let l_ = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b).cbrt();
+        let m_ = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b).cbrt();
+        let s_ = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b).cbrt();
+        let ll = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_;
+        let a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_;
+        let bb = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
+        let chroma = (a * a + bb * bb).sqrt();
+        if chroma < 1e-6 {
+            return;
+        }
+        let hue = bb.atan2(a);
+        let x = hue.to_degrees().rem_euclid(360.0) / 30.0;
+        let (i, t) = (x.floor() as usize % 12, x - x.floor());
+        let j = (i + 1) % 12;
+        let turn = (LOOK_HUE[i] * (1.0 - t) + LOOK_HUE[j] * t).to_radians();
+        let c = chroma * (LOOK_SAT[i] * (1.0 - t) + LOOK_SAT[j] * t);
+        let (a, bb) = (c * (hue + turn).cos(), c * (hue + turn).sin());
+        let l3 = (ll + 0.3963377774 * a + 0.2158037573 * bb).powi(3);
+        let m3 = (ll - 0.1055613458 * a - 0.0638541728 * bb).powi(3);
+        let s3 = (ll - 0.0894841775 * a - 1.2914855480 * bb).powi(3);
+        let out = [
+            4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3,
+            -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3,
+            -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3,
+        ];
+        for (p, v) in px.iter_mut().zip(out) {
+            *p = (v as f32).clamp(0.0, HEADROOM);
+        }
+    });
+}
+
 pub fn is_raw_ext(ext: &str) -> bool {
     EXTS.contains(&ext.to_ascii_lowercase().as_str())
 }
@@ -70,6 +121,8 @@ pub struct RawInfo {
     pub shot: Shot,
     /// จุดขาว (CIE xy) ของแสงตามที่กล้องบันทึก — คิดจากสมดุลแสงขาวกับเมทริกซ์สีของกล้อง · ไม่มีข้อมูล = None
     pub white_xy: Option<[f64; 2]>,
+    /// ความโค้งของเลนส์ที่กล้องบันทึกไว้ให้แก้ (DECISIONS ข้อ 34) — None = ไม่มีข้อมูลหรือกล้องไม่ได้สั่งให้แก้
+    pub lens: Option<crate::lens::Radial>,
 }
 
 /// ข้อมูลการถ่ายที่ใส่ใน EXIF ของสำเนา JPEG ที่ส่งออก
@@ -110,7 +163,13 @@ impl RawInfo {
         let (w, h) = if exif.orientation >= 5 { (h, w) } else { (w, h) };
         let shot = shot_of(&md);
         let white_xy = white_of(raw);
-        RawInfo { width: w as u32, height: h as u32, exif, make: md.make, model: md.model, shot, white_xy }
+        RawInfo { width: w as u32, height: h as u32, exif, make: md.make, model: md.model, shot, white_xy, lens: None }
+    }
+
+    /// อ่านข้อมูลแก้เลนส์จากไบต์ของไฟล์ (ไม่ต้องถอดรหัสภาพ)
+    fn with_lens(mut self, bytes: &[u8]) -> RawInfo {
+        self.lens = crate::lens::Radial::from_raw_bytes(bytes, self.width, self.height);
+        self
     }
 
     /// segment APP1 "Exif" สำหรับ JPEG ที่สร้างจาก RAW: ยี่ห้อ/รุ่นกล้อง Orientation = 1 (ภาพตั้งตรงแล้ว) วันถ่าย
@@ -257,17 +316,18 @@ pub fn info(bytes: &[u8]) -> Result<RawInfo> {
     let params = RawDecodeParams::default();
     let raw = decoder.raw_image(&src, &params, true).map_err(raw_error)?;
     let md = decoder.raw_metadata(&src, &params).map_err(raw_error)?;
-    Ok(RawInfo::new(&raw, md))
+    Ok(RawInfo::new(&raw, md).with_lens(bytes))
 }
 
 /// ล้างภาพ RAW ให้ด้านยาวอย่างน้อย `min_edge` (หรือเต็มขนาดถ้าภาพเล็กกว่า) — คืนภาพเชิงเส้นที่ตั้งตรงแล้ว และข้อมูลของไฟล์
+/// · ยังไม่แก้เลนส์ (ตามแนวของเซนเซอร์): ผู้เรียกแก้เองด้วย `info.lens` — รูป RAW แก้ทั้งภาพ รูปคู่แก้ตอนวางลงกรอบของ JPEG
 pub fn develop(bytes: &[u8], min_edge: u32) -> Result<(Linear, RawInfo)> {
     let src = RawSource::new_from_slice(bytes);
     let decoder = rawler::get_decoder(&src).map_err(raw_error)?;
     let params = RawDecodeParams::default();
     let raw = decoder.raw_image(&src, &params, false).map_err(raw_error)?;
     let md = decoder.raw_metadata(&src, &params).map_err(raw_error)?;
-    let info = RawInfo::new(&raw, md);
+    let info = RawInfo::new(&raw, md).with_lens(bytes);
     let (cw, ch) = cropped_dims(&raw);
     let half = (min_edge as usize) * 2 <= cw.max(ch);
     let to_rgb = CameraToRgb::new(&raw);
@@ -280,6 +340,9 @@ pub fn develop(bytes: &[u8], min_edge: u32) -> Result<(Linear, RawInfo)> {
     let mut out: Vec<f32> = Vec::with_capacity(camera.len() * 3);
     for c in &camera {
         out.extend_from_slice(&to_rgb.apply(*c));
+    }
+    if BASE_LOOK.load(std::sync::atomic::Ordering::Relaxed) && has_portrait_look(&info.make, &info.model) {
+        portrait_look(&mut out);
     }
     let mut img = DynamicImage::ImageRgb32F(
         Linear::from_raw(w as u32, h as u32, out).ok_or_else(|| AppError::internal("ขนาดภาพ RAW ไม่ตรงกับข้อมูล"))?,
@@ -514,6 +577,11 @@ pub fn shrink(img: Linear, max_edge: u32) -> Linear {
 pub fn base_image(bytes: &[u8], max_edge: u32) -> Result<(image::RgbImage, RawInfo)> {
     let (lin, info) = develop(bytes, max_edge)?;
     let lin = shrink(lin, max_edge);
+    // แก้เลนส์ตามที่กล้องบันทึกไว้ เหมือน JPEG ที่กล้องสร้าง (ภาพย่อ ตัวดูภาพ ใบหน้า และการแต่งใช้ภาพเดียวกัน)
+    let lin = match &info.lens {
+        Some(lens) => lens.correct(&lin),
+        None => lin,
+    };
     Ok((crate::adjust::apply_linear(&lin, &crate::adjust::Adjust::default()), info))
 }
 
@@ -528,6 +596,10 @@ pub fn render(bytes: &[u8], s: &crate::edit::EditSettings, max_edge: u32) -> Res
         _ => u32::MAX,
     };
     let (lin, info) = develop(bytes, need)?;
+    let lin = match &info.lens {
+        Some(lens) => lens.correct(&lin),
+        None => lin,
+    };
     // หน้าเรียว/หน้าผอมทำบนภาพเดิมก่อนตัด/หมุน (DECISIONS ข้อ 31)
     let lin = crate::retouch::warp_image(DynamicImage::ImageRgb32F(lin), s.retouch.as_ref());
     let img = crate::edit::render_geometry(lin, s).into_rgb32f();
@@ -565,7 +637,8 @@ mod tests {
         let i = info(&dng).unwrap();
         assert_eq!((i.width, i.height, i.make.as_str()), (96, 64, "Puri"));
         assert_eq!(i.exif.taken_at_local.as_deref(), Some("2026-11-21T10:20:30"));
-        // เต็มขนาด (demosaic): สีเทากลางเป็นกลางและสว่างเท่าเดิม · สีส้มยังเป็นส้ม (ความอิ่มสีของโทนตั้งต้นเพิ่มขึ้นเล็กน้อย)
+        // เต็มขนาด (demosaic): สีเทากลางเป็นกลางและสว่างเท่าเดิม · สีส้มยังเป็นส้ม
+        // (หน้าตาแบบ Adobe Portrait หมุนส้มไปทางแดงและลดความอิ่มเล็กน้อย — DECISIONS ข้อ 35)
         let (full, _) = develop(&dng, u32::MAX).unwrap();
         assert_eq!(full.dimensions(), (96, 64));
         let gray = full.get_pixel(80, 48).0;
@@ -600,6 +673,35 @@ mod tests {
         // ฐานโทนตั้งต้น: ขาวสุด
         let (base, _) = base_image(&test_dng(&bright, 1, "2026:11:21 10:20:30"), 32).unwrap();
         assert!(base.get_pixel(16, 16).0.iter().all(|v| *v >= 250), "{:?}", base.get_pixel(16, 16));
+    }
+
+    #[test]
+    fn the_portrait_look_turns_orange_toward_red_and_only_for_the_camera_it_was_fitted_on() {
+        assert!(has_portrait_look("Panasonic", "DC-S5"));
+        assert!(!has_portrait_look("Panasonic", "DC-S5M2") && !has_portrait_look("Sony", "ILCE-7CM2"));
+        assert!(!has_portrait_look("Puri", "Test"), "DNG ทดสอบไม่โดน");
+        let oklab = |p: &[f32]| {
+            let [r, g, b] = [p[0], p[1], p[2]].map(f64::from);
+            let l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b).cbrt();
+            let m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b).cbrt();
+            let s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b).cbrt();
+            let (a, bb) = (
+                1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+                0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+            );
+            (0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s, bb.atan2(a).to_degrees())
+        };
+        let before = [0.6f32, 0.3, 0.1, 0.3, 0.3, 0.3];
+        let mut after = before;
+        portrait_look(&mut after);
+        let ((l0, h0), (l1, h1)) = (oklab(&before[..3]), oklab(&after[..3]));
+        assert!((l0 - l1).abs() < 1e-5, "ความสว่างเท่าเดิม {l0} {l1}");
+        assert!(h1 < h0 - 5.0, "ส้มหมุนไปทางแดง {h0:.1}° → {h1:.1}°");
+        assert!(
+            after[3..].iter().zip(&before[3..]).all(|(a, b)| (a - b).abs() < 1e-6),
+            "สีเทาไม่เปลี่ยน {:?}",
+            &after[3..]
+        );
     }
 
     #[test]
