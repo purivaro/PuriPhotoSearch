@@ -19,6 +19,7 @@ pub mod import;
 pub mod jobs;
 pub mod legacy;
 pub mod local;
+pub mod masks;
 pub mod media;
 pub mod pair;
 pub mod people;

@@ -244,7 +244,13 @@
     // ── S15b: แต่งภาพ (หลังส่งออก — ตัวรันตรวจว่าสำเนาที่ส่งออกตรงกับต้นฉบับทุก byte)
     // canvas ของหน้าแต่งภาพต้องอ่านพิกเซลของภาพจาก puri:// ได้ (ถ้าไม่มี CORS ภาพจะ "taint" และ getImageData โยน SecurityError)
     if (tid('selection-clear')) await click(tid('selection-clear'), 'ล้างที่เลือก');
-    await click(tid('photo-card-open', tids('photo-card')[0]), 'เปิดรูปแรกของผลค้นหา');
+    // รูปชื่อนี้มีสองกิจกรรม — เปิดรูปที่ระบุใบหน้าไว้ (ขั้นปรับเฉพาะส่วนใช้ใบหน้าของรูป)
+    const labelled = [];
+    for (const card of tids('photo-card')) {
+      if ((await rpc('get_photo_details', { photoId: card.dataset.photoId })).faces.length === 2) labelled.push(card);
+    }
+    expect(labelled.length === 1, `รูปที่มีสองใบหน้าในผลค้นหา: ${labelled.length}`);
+    await click(tid('photo-card-open', labelled[0]), 'เปิดรูปที่ระบุใบหน้าไว้');
     await see('photo-viewer');
     const editedId = await waitFor(() => location.hash.match(/photos\/([^/?]+)/)?.[1], 'รหัสรูปใน URL ของตัวดูภาพ');
     await click(await see('viewer-edit'), 'แต่งภาพ');
@@ -283,10 +289,47 @@
     await click(tid('preset-name-confirm'), 'บันทึก preset');
     await waitFor(() => tids('preset-item').length === 2, 'preset สองอัน');
     await stage('editor-presets', { presets: tids('preset-item').map((b) => text(b)) });
+
+    // ปรับเฉพาะส่วน (DECISIONS ข้อ 28): บริเวณใบหน้าจากกรอบที่ระบุไว้ → เปลี่ยนเฉพาะผิวหน้า ฉากหลังเท่าเดิม
+    // (ผิวของรูปนี้สว่างเกือบขาวแล้วจาก preset ข้างบน "ผิวขาวใส" จึงสว่างขึ้นได้นิดเดียว — ใช้ค่าแสง −1 ของบริเวณให้เห็นผลชัด)
+    const canvasAt = (fx, fy) => {
+      const c = tid('editor-preview');
+      const d = c.getContext('2d').getImageData(Math.round(c.width * fx) - 2, Math.round(c.height * fy) - 2, 5, 5).data;
+      const sum = [0, 0, 0];
+      for (let i = 0; i < d.length; i += 4) for (let k = 0; k < 3; k++) sum[k] += d[i + k];
+      return sum.map((v) => v / (d.length / 4));
+    };
+    await click(tid('editor-tab-masks'), 'แท็บเฉพาะส่วน');
+    const addFaces = await see('mask-add-faces');
+    expect(text(addFaces).includes('2 คน'), `ปุ่มบอกจำนวนใบหน้า (ได้ "${text(addFaces)}")`);
+    // แก้มของใบหน้าซ้าย (ใต้ตา) และฉากหลังมุมซ้ายบน
+    const [skin0, back0] = [canvasAt(0.3, 0.46), canvasAt(0.06, 0.08)];
+    await click(addFaces, 'เพิ่มบริเวณใบหน้าและผิว');
+    await see('mask-editor', 'แผงปรับบริเวณที่เลือก');
+    await sleep(1600); // ให้สีแดงที่แสดงบริเวณชั่วครู่หายไปก่อน
+    await click(tids('mask-look').find((b) => text(b) === 'ผิวขาวใส'), 'จุดเริ่ม “ผิวขาวใส”');
+    await type(await see('mask-exposure'), '-1');
+    let last = skin0;
+    const skin1 = await waitFor(
+      () => {
+        last = canvasAt(0.3, 0.46);
+        return last[1] < skin0[1] - 20 ? last : null;
+      },
+      { toString: () => `ผิวหน้าในตัวอย่างมืดลงตามค่าแสงของบริเวณ (ก่อน ${skin0.map(Math.round)} · ล่าสุด ${last.map(Math.round)})` },
+    );
+    const back1 = canvasAt(0.06, 0.08);
+    expect(back1.every((v, k) => Math.abs(v - back0[k]) <= 1), `ฉากหลังเท่าเดิม ${back0} → ${back1}`);
+    await stage('editor-masks', { skin: [skin0, skin1].map((s) => s.map(Math.round)) });
+
     await click(tid('editor-save'), 'บันทึกการแต่ง');
     await waitFor(() => !tid('photo-editor'), 'ปิดหน้าแต่งภาพหลังบันทึก');
     const edit = (await rpc('get_photo_details', { photoId: editedId })).edit;
     expect(edit?.settings.adjust.exposure === 0.4 && edit.settings.adjust.lum[1] === 45, `ค่าที่บันทึก: ${JSON.stringify(edit?.settings.adjust)}`);
+    const mask = edit?.settings.masks?.[0];
+    expect(
+      edit.settings.masks.length === 1 && mask.area.boxes.length === 2 && mask.adjust.texture === -35 && mask.adjust.exposure === -1,
+      `Mask ที่บันทึก: ${JSON.stringify(mask)}`,
+    );
     await waitFor(() => all('[data-testid="viewer-image-box"] img').some((i) => i.naturalWidth > 0), 'ภาพที่แต่งแล้วโหลดในตัวดูภาพ');
     await click(tid('viewer-close'), 'ปิดตัวดูภาพ');
     await waitFor(() => !tid('photo-viewer'), 'ปิดตัวดูภาพแล้ว');
@@ -304,6 +347,8 @@
       const a = (await rpc('get_photo_details', { photoId: id })).edit?.settings.adjust;
       expect(a?.lum[1] === 45 && a.exposure === 0.4, `รูป ${id} ได้ค่าของ preset: ${JSON.stringify(a)}`);
     }
+    const kept = (await rpc('get_photo_details', { photoId: editedId })).edit.settings.masks;
+    expect(kept?.length === 1, 'ใช้ preset (แสงและสี) แล้วการปรับเฉพาะส่วนของรูปยังอยู่');
     await stage('apply-preset-many', { photos: ids.length });
     await click(tid('selection-clear'), 'ล้างที่เลือก');
 

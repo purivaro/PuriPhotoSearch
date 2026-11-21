@@ -439,8 +439,30 @@ export interface EditSettings {
   crop: UnitRect | null;
   /** แสงและสี (ทำหลังตัด/หมุน) */
   adjust: EditAdjust;
+  /** ปรับเฉพาะส่วน (DECISIONS ข้อ 28) — ทำหลังแสงและสีของทั้งภาพ ตามลำดับ */
+  masks?: EditMask[];
   /** แต่งจากไฟล์ RAW คู่ — แอปตั้งเองตอนบันทึก */
   fromRaw?: boolean;
+}
+
+/** บริเวณของการปรับเฉพาะส่วน — พิกัดเป็นสัดส่วนบนภาพเดิม (ก่อนตัด/หมุน) */
+export type MaskArea = {
+  kind: 'faces';
+  /** กรอบใบหน้า [x, y, w, h] */
+  boxes: [number, number, number, number][];
+  /** เฉพาะสีผิวในบริเวณนั้น */
+  skin: boolean;
+};
+
+export interface EditMask {
+  id: string;
+  area: MaskArea;
+  /** ค่าแสงสีของบริเวณนี้ (ทำต่อจากภาพที่ปรับทั้งภาพแล้ว) */
+  adjust: EditAdjust;
+  /** ความแรง 0–100 */
+  amount: number;
+  /** ปรับทุกส่วนยกเว้นบริเวณนี้ */
+  invert: boolean;
 }
 
 /** ส่วนของการแต่งที่จะวางให้รูปอื่น */
@@ -451,6 +473,8 @@ export interface EditParts {
   light: boolean;
   /** อุณหภูมิสี โทนสี ความสดของสี ความอิ่มสี */
   color: boolean;
+  /** ปรับเฉพาะส่วน — บริเวณใบหน้าใช้ใบหน้าของแต่ละรูปเอง */
+  masks: boolean;
 }
 
 export interface ApplyEditsResult {
