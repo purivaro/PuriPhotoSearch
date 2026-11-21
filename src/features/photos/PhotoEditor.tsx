@@ -10,12 +10,11 @@ import { cn } from '@/lib/cn';
 import { errorMessage, formatCount } from '@/lib/format';
 import { assetUrl, call } from '@/lib/ipc/client';
 import type { EditSettings, PhotoDetails, RawPairInfo, UnitRect } from '@/lib/ipc/types';
-import { NEUTRAL, applyToPixels, autoAdjust, histogram, isNeutral, neutralize, type Adjust, type Histogram, type Profile } from './adjust';
+import { NEUTRAL, autoAdjust, histogram, isNeutral, neutralize, type Adjust, type Histogram, type Profile } from './adjust';
 import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, ToneCurvePanel, VignettePanel } from './AdjustControls';
 import { EditPresets } from './EditPresets';
-import { applyLocal, hasLocal } from './local';
 import { MaskPanel } from './MaskPanel';
-import { applyMasks, maskIsActive } from './masks';
+import { isMasking, renderPixels } from './render';
 import { COLOR, LIGHT, PRESENCE, SliderGroup } from './SliderGroup';
 import {
   FULL,
@@ -149,19 +148,11 @@ function paint(
   ctx.drawImage(source, (-source.width * k) / 2, (-source.height * k) / 2, source.width * k, source.height * k);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   // ปรับเฉพาะส่วน (DECISIONS ข้อ 28) หรือแสดงบริเวณของ Mask ที่เลือก
-  const masks = s.masks ?? [];
-  const masking = masks.some(maskIsActive) || overlay !== null;
-  const adjusting = withAdjust && (!isNeutral(s.adjust) || masking);
+  const adjusting = withAdjust && (!isNeutral(s.adjust) || isMasking(s, overlay));
   if (!adjusting && !wantHistogram) return null;
   const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
   if (adjusting) {
-    applyToPixels(pixels.data, s.adjust, frame ? canvas.width : undefined, profile);
-    // รัศมีคิดจากด้านยาวของทั้งกรอบ (ขยายดูบางส่วนก็ได้ผลแบบเดียวกับทั้งภาพ)
-    if (hasLocal(s.adjust)) applyLocal(pixels.data, canvas.width, canvas.height, 4, Math.max(frameW, frameH), s.adjust);
-    if (masking) {
-      const where = { width: canvas.width, height: canvas.height, view, sourceW: source.width, sourceH: source.height, settings: s };
-      applyMasks(pixels.data, where, masks, Math.max(frameW, frameH), overlay);
-    }
+    renderPixels(pixels.data, canvas.width, canvas.height, s, profile, { view, sourceW: source.width, sourceH: source.height, whole: frame }, overlay);
     ctx.putImageData(pixels, 0, 0);
   }
   return wantHistogram ? histogram(pixels.data) : null;

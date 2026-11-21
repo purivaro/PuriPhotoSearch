@@ -651,8 +651,9 @@ fn check_frame(frame: &Frame, info: &raw::RawInfo, jpeg: (u32, u32)) -> Result<(
 
 /// ภาพจาก RAW ในกรอบของ JPEG ตามที่แต่ง ด้านยาวไม่เกิน `max_edge` (`u32::MAX` = เต็มขนาด) — ล้างเท่าที่ต้องใช้
 pub fn render(raw_bytes: &[u8], base: &RawBase, s: &EditSettings, max_edge: u32) -> Result<image::RgbImage> {
-    let out = crate::adjust::apply_linear(&develop_framed(raw_bytes, base, s, max_edge)?, &s.adjust);
+    let framed = develop_framed(raw_bytes, base, s, max_edge)?;
     let g = Geometry::new(base.jpeg.0, base.jpeg.1, s);
+    let out = crate::adjust::apply_linear_in_frame(&framed, &s.adjust, g.frame_long(framed.width(), framed.height()));
     Ok(crate::edit::with_masks(image::DynamicImage::ImageRgb8(out), &g, s).into_rgb8())
 }
 

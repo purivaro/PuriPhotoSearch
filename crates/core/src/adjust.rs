@@ -558,6 +558,12 @@ pub fn linear_lut_at(table: &[f64], x: f32) -> f64 {
 /// ปรับแสงและสีภาพ RAW ที่ล้างแล้ว (แสงเชิงเส้น ตั้งตรง ตัด/หมุนแล้ว) → ภาพ 8 บิต — โทนตั้งต้นของ RAW อยู่ในขั้นนี้เสมอ
 /// (ไม่ได้แต่งก็ต้องผ่าน)
 pub fn apply_linear(img: &image::Rgb32FImage, a: &Adjust) -> image::RgbImage {
+    apply_linear_in_frame(img, a, img.width().max(img.height()) as f64)
+}
+
+/// เหมือน [`apply_linear`] สำหรับภาพที่ตัดแล้ว: `long` = ด้านยาวของกรอบก่อนตัด เป็นพิกเซลของภาพนี้
+/// ([`crate::edit::Geometry::frame_long`]) — รัศมีของ Texture/Clarity/Dehaze คิดจากทั้งกรอบแบบตัวอย่างสด ตัดภาพแล้วผลไม่เปลี่ยน
+pub fn apply_linear_in_frame(img: &image::Rgb32FImage, a: &Adjust, long: f64) -> image::RgbImage {
     let lut = a.linear_lut();
     let vignette = a.vignette.amount != 0.0;
     let per_pixel = a.per_pixel();
@@ -576,7 +582,7 @@ pub fn apply_linear(img: &image::Rgb32FImage, a: &Adjust) -> image::RgbImage {
     }
     if crate::local::is_active(a) {
         let (w, h) = (out.width() as usize, out.height() as usize);
-        crate::local::apply(&mut out, w, h, 3, w.max(h) as f32, a);
+        crate::local::apply(&mut out, w, h, 3, long, a);
     }
     out
 }
@@ -735,6 +741,13 @@ pub fn apply(img: DynamicImage, a: &Adjust) -> DynamicImage {
 /// ปรับแสงและสีภาพ 8 บิตตามชนิดของภาพต้นทาง — RAW: ภาพ 8 บิตของโทนตั้งต้น (ภาพย่อหรือภาพของตัวดูภาพ) แบบเดียวกับตัวอย่างสด
 /// ในหน้าแต่งภาพ · ไม่ได้แต่ง = ภาพเดิมทั้งสองชนิด
 pub fn apply_profile(img: DynamicImage, a: &Adjust, profile: Profile) -> DynamicImage {
+    let long = img.width().max(img.height()) as f64;
+    apply_profile_in_frame(img, a, profile, long)
+}
+
+/// เหมือน [`apply_profile`] สำหรับภาพที่ตัดแล้ว: `long` = ด้านยาวของกรอบก่อนตัด เป็นพิกเซลของภาพนี้
+/// ([`crate::edit::Geometry::frame_long`]) — รัศมีของ Texture/Clarity/Dehaze คิดจากทั้งกรอบแบบตัวอย่างสด ตัดภาพแล้วผลไม่เปลี่ยน
+pub fn apply_profile_in_frame(img: DynamicImage, a: &Adjust, profile: Profile, long: f64) -> DynamicImage {
     if a.is_neutral() {
         return img;
     }
@@ -766,7 +779,7 @@ pub fn apply_profile(img: DynamicImage, a: &Adjust, profile: Profile) -> Dynamic
         px[..3].copy_from_slice(&out);
     }
     if crate::local::is_active(a) {
-        crate::local::apply(raw, width, height, n, width.max(height) as f32, a);
+        crate::local::apply(raw, width, height, n, long, a);
     }
     if alpha {
         DynamicImage::ImageRgba8(rgba)
@@ -934,6 +947,48 @@ mod tests {
 
     /// ค่าอ้างอิงของ `sample_full` (ใส่ค่าเดียวกันใน adjust.test.ts)
     const FULL_EXPECTED: [[u8; 3]; 3] = [[20, 37, 53], [255, 190, 135], [77, 179, 116]];
+
+    /// ชุดที่เทสต์สุ่ม (`tests/preview_parity.rs` ชุด 765, 2067, 5995) จับได้ว่าตัวอย่างสดต่างจากไฟล์: การวน hue ด้วย
+    /// `((x % m) + m) % m` ของ JavaScript ปัดเศษเพิ่ม และ hue ที่ตกที่ 360° พอดี — ค่าเดียวกันใน adjust.test.ts
+    /// ([hue, sat, lum] ทั้ง 8 ช่วง, พิกเซลเข้า, พิกเซลออก)
+    type HslCase = ([[f64; 8]; 3], [u8; 3], [u8; 3]);
+    const HSL_EXPECTED: [HslCase; 3] = [
+        (
+            [
+                [100.0, 0.0, 0.0, 100.0, 100.0, -73.0, 0.0, -100.0],
+                [72.0, 100.0, 0.0, 100.0, 0.0, 0.0, 67.0, 0.0],
+                [0.0, 0.0, 18.0, -100.0, 65.0, 0.0, 0.0, -100.0],
+            ],
+            [218, 47, 41],
+            [255, 129, 4],
+        ),
+        (
+            [
+                [0.0, 92.089, -100.0, 100.0, -89.0, -100.0, -100.0, 26.0],
+                [-93.0, 0.0, 0.0, 100.0, -18.0, 72.0, -64.0, 100.0],
+                [0.0, 0.0, -22.0, -100.0, -100.0, 0.0, 100.0, 0.0],
+            ],
+            [204, 21, 143],
+            [225, 0, 131],
+        ),
+        (
+            [
+                [-100.0, 0.0, -100.0, 100.0, 0.0, 100.0, -64.0, -44.0],
+                [-48.0, 0.0, 0.0, -21.0, 13.0, 0.0, 0.0, -87.0],
+                [0.0, 39.0, 0.0, 0.0, -83.0, 0.0, 44.0, -8.0],
+            ],
+            [246, 117, 74],
+            [229, 116, 116],
+        ),
+    ];
+
+    #[test]
+    fn hue_wraps_around_360_exactly_like_the_live_preview() {
+        for ([hue, sat, lum], input, want) in HSL_EXPECTED {
+            let a = Adjust { hue, sat, lum, ..Default::default() };
+            assert_eq!(a.pixel(&a.curves(), input), want, "{input:?}");
+        }
+    }
 
     #[test]
     fn raw_tone_matches_the_camera_curve_and_round_trips() {

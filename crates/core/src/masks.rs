@@ -237,7 +237,7 @@ pub fn face_tones(px: &[u8], w: usize, h: usize, stride: usize, g: &Geometry, ar
 }
 
 /// กรอบบนภาพที่แต่ง (พิกเซล x0, y0, x1, y1) ที่ครอบส่วนที่มีน้ำหนัก + ขอบเผื่อ · None = ไม่มีส่วนใดอยู่ในภาพ
-fn bounds(area: &Area, g: &Geometry, w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
+fn bounds(area: &Area, g: &Geometry, w: usize, h: usize, long: f64) -> Option<(usize, usize, usize, usize)> {
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     match area {
         Area::Faces { boxes, .. } => {
@@ -249,7 +249,7 @@ fn bounds(area: &Area, g: &Geometry, w: usize, h: usize) -> Option<(usize, usize
             }
         }
     }
-    let margin = MARGIN * w.max(h) as f64;
+    let margin = MARGIN * long;
     let px = |v: f64, n: usize, extra: f64| (v * n as f64 + extra).clamp(0.0, n as f64);
     let (ax, ay) = (px(x0, w, -margin).floor() as usize, px(y0, h, -margin).floor() as usize);
     let (bx, by) = (px(x1, w, margin).ceil() as usize, px(y1, h, margin).ceil() as usize);
@@ -261,9 +261,10 @@ pub fn apply(px: &mut [u8], w: usize, h: usize, stride: usize, g: &Geometry, mas
     if w == 0 || h == 0 || px.len() < w * h * stride {
         return;
     }
-    let long = w.max(h) as f32;
+    // ด้านยาวของกรอบก่อนตัด (รัศมีของ Texture/Clarity และขอบเผื่อ) — เท่ากับตัวอย่างสด
+    let long = g.frame_long(w as u32, h as u32);
     for mask in masks.iter().filter(|m| m.is_active()) {
-        let region = if mask.invert { Some((0, 0, w, h)) } else { bounds(&mask.area, g, w, h) };
+        let region = if mask.invert { Some((0, 0, w, h)) } else { bounds(&mask.area, g, w, h, long) };
         let Some((x0, y0, x1, y1)) = region else { continue };
         let (rw, rh) = (x1 - x0, y1 - y0);
         // ส่วนที่ครอบบริเวณ → ปรับด้วยค่าของ Mask (Texture/Clarity คิดรัศมีจากด้านยาวของทั้งภาพ)
@@ -271,7 +272,14 @@ pub fn apply(px: &mut [u8], w: usize, h: usize, stride: usize, g: &Geometry, mas
             let i = ((y0 + y as usize) * w + x0 + x as usize) * stride;
             image::Rgb([px[i], px[i + 1], px[i + 2]])
         });
-        let per_pixel = Adjust { texture: 0.0, clarity: 0.0, dehaze: 0.0, ..mask.adjust.clone() };
+        // Vignette เป็นของกรอบภาพทั้งภาพ ไม่ใช่ของบริเวณ — ไม่ใช้ในบริเวณ (เหมือนตัวอย่างสด)
+        let per_pixel = Adjust {
+            texture: 0.0,
+            clarity: 0.0,
+            dehaze: 0.0,
+            vignette: crate::adjust::Vignette::default(),
+            ..mask.adjust.clone()
+        };
         let mut adjusted =
             crate::adjust::apply_profile(DynamicImage::ImageRgb8(crop), &per_pixel, Profile::Display).into_rgb8();
         if crate::local::is_active(&mask.adjust) {
@@ -429,5 +437,38 @@ mod tests {
                 MASK_SAMPLES.map(|(x, y)| [px[(y * 48 + x) * 3], px[(y * 48 + x) * 3 + 1], px[(y * 48 + x) * 3 + 2]]);
             assert_eq!(got, expected, "skin {skin}");
         }
+    }
+
+    #[test]
+    fn a_mask_ignores_vignette_which_belongs_to_the_whole_frame() {
+        // ค่าที่ส่งมาทาง AI หรือค่าที่เก็บไว้มี Vignette ในบริเวณได้: ไม่มีผล เหมือนตัวอย่างสด (เทสต์สุ่มจับได้ว่าเคยต่างกัน)
+        let g = Geometry::new(48, 32, &EditSettings::default());
+        let run = |adjust: Adjust| {
+            let mut px = crate::local::test_image(48, 32);
+            apply(&mut px, 48, 32, 3, &g, &[face_mask(vec![[0.3, 0.2, 0.35, 0.5]], false, adjust)]);
+            px
+        };
+        let vignette = crate::adjust::Vignette { amount: -100.0, ..Default::default() };
+        assert_eq!(run(Adjust { vignette, ..brighter() }), run(brighter()));
+    }
+
+    #[test]
+    fn on_a_cropped_photo_the_area_uses_the_whole_frame_like_the_live_preview() {
+        // ตัดครึ่งซ้าย: ภาพที่แต่ง 48×32 มาจากกรอบ 96×32 — Texture ของบริเวณคิดรัศมีจากด้านยาว 96 (ไม่ใช่ 48)
+        let s = EditSettings { crop: Some(crate::edit::Rect { x: 0.0, y: 0.0, w: 0.5, h: 1.0 }), ..Default::default() };
+        let g = Geometry::new(96, 32, &s);
+        let adjust = Adjust { texture: 80.0, clarity: 60.0, ..Default::default() };
+        let mut px = crate::local::test_image(48, 32);
+        apply(
+            &mut px,
+            48,
+            32,
+            3,
+            &g,
+            &[Mask { invert: true, ..face_mask(vec![[0.9, 0.9, 0.05, 0.05]], false, adjust.clone()) }],
+        );
+        let mut want = crate::local::test_image(48, 32);
+        crate::local::apply(&mut want, 48, 32, 3, 96.0, &adjust);
+        assert_eq!(px, want);
     }
 }

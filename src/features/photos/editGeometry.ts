@@ -29,7 +29,7 @@ export function rotatedSize(w: number, h: number, rotate: number) {
 
 /** กรอบหลังปรับเอียง = ภาพหลังหมุน × scale (สี่เหลี่ยมใหญ่สุดที่อยู่ในภาพที่เอียงได้ทั้งหมด) */
 export function frameScale(w: number, h: number, degrees: number): number {
-  const t = (degrees * Math.PI) / 180;
+  const t = degrees * (Math.PI / 180); // เท่ากับ f64::to_radians ของ Rust ทุกบิต
   const sa = Math.abs(Math.sin(t));
   const ca = Math.abs(Math.cos(t));
   return Math.min(w / (w * ca + h * sa), h / (w * sa + h * ca));
@@ -47,7 +47,7 @@ export function outputSize(width: number, height: number, s: EditSettings) {
 export function fromFrame(width: number, height: number, s: EditSettings, fx: number, fy: number) {
   const r = rotatedSize(Math.max(width, 1), Math.max(height, 1), s.rotate);
   const k = frameScale(r.w, r.h, s.straighten);
-  const t = (s.straighten * Math.PI) / 180;
+  const t = s.straighten * (Math.PI / 180);
   const rx = (fx - 0.5) * k * r.w;
   const ry = (fy - 0.5) * k * r.h;
   const px = rx * Math.cos(t) + ry * Math.sin(t);
@@ -65,7 +65,7 @@ export function toFrame(width: number, height: number, s: EditSettings, u: numbe
   const [qu, qv] = s.rotate === 90 ? [1 - v, u] : s.rotate === 180 ? [1 - u, 1 - v] : s.rotate === 270 ? [v, 1 - u] : [u, v];
   const r = rotatedSize(Math.max(width, 1), Math.max(height, 1), s.rotate);
   const k = frameScale(r.w, r.h, s.straighten);
-  const t = (s.straighten * Math.PI) / 180;
+  const t = s.straighten * (Math.PI / 180);
   const px = (qu - 0.5) * r.w;
   const py = (qv - 0.5) * r.h;
   const rx = px * Math.cos(t) - py * Math.sin(t);

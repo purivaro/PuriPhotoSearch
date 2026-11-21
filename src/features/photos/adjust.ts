@@ -93,11 +93,18 @@ function levels(l: Levels, x: number): number {
   return (l.outBlack + Math.pow(v, 1 / l.gamma) * (l.outWhite - l.outBlack)) / 255;
 }
 
+/** เศษเหลือแบบไม่ติดลบ เท่ากับ f64::rem_euclid ของ Rust ทุกบิต (`((x % m) + m) % m` ปัดเศษเพิ่มอีกครั้ง ผลต่างกันที่บิตท้าย) */
+const remEuclid = (x: number, m: number) => {
+  const r = x % m;
+  return r < 0 ? r + Math.abs(m) : r;
+};
+
 /** สีเต็มของ hue (HSL ความอิ่ม 1 ความสว่าง 0.5) */
 function pureHue(h: number): [number, number, number] {
   const hp = h / 60;
   const x = 1 - Math.abs((hp % 2) - 1);
-  const sector = Math.floor(hp);
+  // 360° (= ช่วงที่ 6) ใช้ช่วงสุดท้ายเหมือน `_ =>` ของ hsl_to_rgb ใน Rust
+  const sector = Math.min(Math.floor(hp), 5);
   const r = sector === 0 || sector === 5 ? 1 : sector === 1 || sector === 4 ? x : 0;
   const g = sector === 1 || sector === 2 ? 1 : sector === 0 || sector === 3 ? x : 0;
   const b = sector === 3 || sector === 4 ? 1 : sector === 2 || sector === 5 ? x : 0;
@@ -118,7 +125,7 @@ function gradeInto(g: Grading, r: number, gg: number, b: number, out: Float64Arr
     const wheel = wheels[k]!;
     if (w <= 0) continue;
     if (wheel.sat > 0) {
-      const [cr, cg, cb] = pureHue(((wheel.hue % 360) + 360) % 360);
+      const [cr, cg, cb] = pureHue(remEuclid(wheel.hue, 360));
       const cl = luma(cr, cg, cb);
       const f = (wheel.sat / 100) * 0.35 * w;
       o0 += (cr - cl) * f;
@@ -377,7 +384,7 @@ function colorInto(a: Adjust, withHsl: boolean, r: number, g: number, b: number,
     const d = max - min;
     const s = d <= 1e-12 ? 0 : l > 0.5 ? d / (2 - max - min) : d / (max + min);
     if (s > 1e-6) {
-      let h = max === r ? ((((g - b) / d) % 6) + 6) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      let h = max === r ? remEuclid((g - b) / d, 6) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
       h *= 60;
       // น้ำหนักของสองช่วงสีที่ hue อยู่ระหว่างกลาง · ผลแรงตามความอิ่มของพิกเซล (สีเทาไม่เปลี่ยน)
       const k = hueSegment(h);
@@ -385,14 +392,15 @@ function colorInto(a: Adjust, withHsl: boolean, r: number, g: number, b: number,
       const from = HUE_CENTERS[k]!;
       const t = (h - from) / ((k === 7 ? 360 : HUE_CENTERS[k + 1]!) - from);
       const strength = Math.min(s * 1.5, 1);
-      const h2 = (((h + ((a.hue[k]! * (1 - t) + a.hue[k1]! * t) / 100) * 30 * strength) % 360) + 360) % 360;
+      const h2 = remEuclid(h + ((a.hue[k]! * (1 - t) + a.hue[k1]! * t) / 100) * 30 * strength, 360);
       const s2 = clamp01(s * (1 + ((a.sat[k]! * (1 - t) + a.sat[k1]! * t) / 100) * strength));
       const l2 = clamp01(l + ((a.lum[k]! * (1 - t) + a.lum[k1]! * t) / 100) * 0.25 * strength);
       // HSL → RGB
       const c = (1 - Math.abs(2 * l2 - 1)) * s2;
       const hp = h2 / 60;
       const x = c * (1 - Math.abs((hp % 2) - 1));
-      const sector = Math.floor(hp);
+      // h2 = 360° พอดี (= ช่วงที่ 6) ใช้ช่วงสุดท้ายเหมือน `_ =>` ของ hsl_to_rgb ใน Rust
+      const sector = Math.min(Math.floor(hp), 5);
       const m = l2 - c / 2;
       rr = sector === 0 || sector === 5 ? c : sector === 1 || sector === 4 ? x : 0;
       gg = sector === 1 || sector === 2 ? c : sector === 0 || sector === 3 ? x : 0;

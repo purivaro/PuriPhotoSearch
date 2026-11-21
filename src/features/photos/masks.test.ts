@@ -43,13 +43,13 @@ const faceMask = (skin: boolean): EditMask => ({
 const canvas = { width: 48, height: 32, view: FULL, sourceW: 48, sourceH: 32, settings: IDENTITY };
 
 describe('ปรับเฉพาะส่วน (DECISIONS ข้อ 28)', () => {
-  it('ได้ค่าเดียวกับ Rust (ต่างได้ไม่เกิน 1 ระดับ)', () => {
+  it('ได้ค่าเดียวกับ Rust ทุกค่า', () => {
     for (const [skin, expected] of EXPECTED) {
       const px = testImage(48, 32);
       applyMasks(px, canvas, [faceMask(skin)], 48);
       SAMPLES.forEach(([x, y], k) => {
         const i = (y * 48 + x) * 4;
-        for (let c = 0; c < 3; c += 1) expect(Math.abs(px[i + c]! - expected[k]![c]!), `skin ${skin} @${x},${y}`).toBeLessThanOrEqual(1);
+        expect([px[i], px[i + 1], px[i + 2]], `skin ${skin} @${x},${y}`).toEqual(expected[k]);
       });
     }
   });
@@ -86,5 +86,16 @@ describe('ปรับเฉพาะส่วน (DECISIONS ข้อ 28)', () 
     const untouched = testImage(48, 32);
     applyMasks(untouched, canvas, [{ ...faceMask(false), amount: 0 }], 48);
     expect(untouched).toEqual(testImage(48, 32));
+  });
+
+  it('Vignette ในค่าของบริเวณไม่มีผล (เป็นของกรอบทั้งภาพ) — เหมือน masks.rs', () => {
+    const run = (vignette: boolean) => {
+      const px = testImage(48, 32);
+      const mask = faceMask(false);
+      const adjust = vignette ? { ...mask.adjust, vignette: { amount: -100, midpoint: 50, feather: 50, roundness: 0 } } : mask.adjust;
+      applyMasks(px, canvas, [{ ...mask, adjust }], 48);
+      return px;
+    };
+    expect(run(true)).toEqual(run(false));
   });
 });
