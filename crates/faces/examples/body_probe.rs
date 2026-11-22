@@ -31,7 +31,16 @@ fn main() {
         let t_fill = t.elapsed().as_secs_f64();
         let map = subject::SubjectMap::new(map);
         let people = map.people().len();
-        let plan = body::BodyPlan::new(map, filled.clone(), &[]);
+        // FACES="x,y,w,h;x,y,w,h" (สัดส่วน) = กรอบใบหน้า ใช้หาคอและแยกคนที่ยืนชิดกัน
+        let faces: Vec<[f64; 4]> = std::env::var("FACES")
+            .unwrap_or_default()
+            .split(';')
+            .filter_map(|f| {
+                let v: Vec<f64> = f.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
+            })
+            .collect();
+        let plan = body::BodyPlan::new(map, filled.clone(), &faces);
         // ขนาดของภาพผล (ด้านยาว) — EDGE=0 = เต็มขนาด
         let edge: u32 = std::env::var("EDGE").ok().and_then(|e| e.parse().ok()).unwrap_or(2048);
         let edge = if edge == 0 { u32::MAX } else { edge };

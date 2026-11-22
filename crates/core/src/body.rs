@@ -427,33 +427,38 @@ pub struct BodyPlan {
     fill: Fill,
     /// ต่อคน (ลำดับเดียวกับ [`SubjectMap::people`]): แถวที่เริ่มหด และแถวที่หดเต็ม (พิกเซลของภาพน้ำหนัก)
     necks: Vec<(f64, f64)>,
+    /// ต่อคน: คนที่ยืนชิดกันจนเป็นส่วนเดียว (มีใบหน้าตั้งแต่สองหน้า) — กึ่งกลางใบหน้าซ้ายสุดและขวาสุด (พิกเซลของภาพน้ำหนัก)
+    /// ขอบซ้ายหดเข้าหาคนซ้ายสุด ขอบขวาหดเข้าหาคนขวาสุด ส่วนระหว่างคนไม่ขยับ
+    groups: Vec<Option<(f64, f64)>>,
 }
 
 impl BodyPlan {
     /// `faces` = กรอบใบหน้า [x, y, w, h] (สัดส่วนบนภาพเดิม) ใช้หาคอของแต่ละคน
     pub fn new(map: SubjectMap, fill: Fill, faces: &[[f64; 4]]) -> BodyPlan {
         let (w, h) = (map.image().width() as f64, map.image().height() as f64);
-        let necks = map
-            .people()
-            .iter()
-            .map(|p| {
-                let (top, n) = (p.top as f64, p.rows() as f64);
-                let mut neck = None::<(f64, f64)>;
-                for f in faces {
+        let (mut necks, mut groups) = (Vec::new(), Vec::new());
+        for p in map.people() {
+            let (top, n) = (p.top as f64, p.rows() as f64);
+            // ใบหน้าของคนนี้: อยู่ในความกว้างของคนนี้ และในครึ่งบนของคนนี้
+            let mine: Vec<&[f64; 4]> = faces
+                .iter()
+                .filter(|f| {
                     let (cx, cy) = ((f[0] + f[2] / 2.0) * w, (f[1] + f[3] / 2.0) * h);
-                    // ใบหน้าของคนนี้: อยู่ในความกว้างของคนนี้ และในครึ่งบนของคนนี้
-                    if (p.x0..p.x1).contains(&cx) && (top..top + 0.5 * n).contains(&cy) {
-                        let chin = (f[1] + f[3]) * h;
-                        let span = NECK_SPAN * f[3] * h;
-                        if neck.is_none_or(|(c, _)| chin > c) {
-                            neck = Some((chin, chin + span));
-                        }
-                    }
-                }
-                neck.unwrap_or((top + HEAD_FROM * n, top + (HEAD_FROM + HEAD_SPAN) * n))
-            })
-            .collect();
-        BodyPlan { map, fill, necks }
+                    (p.x0..p.x1).contains(&cx) && (top..top + 0.5 * n).contains(&cy)
+                })
+                .collect();
+            // หัวไม่ขยับลงถึงคางที่ต่ำที่สุด
+            let neck = mine
+                .iter()
+                .map(|f| ((f[1] + f[3]) * h, NECK_SPAN * f[3] * h))
+                .max_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(chin, span)| (chin, chin + span));
+            necks.push(neck.unwrap_or((top + HEAD_FROM * n, top + (HEAD_FROM + HEAD_SPAN) * n)));
+            let centres: Vec<f64> = mine.iter().map(|f| (f[0] + f[2] / 2.0) * w).collect();
+            let (lo, hi) = centres.iter().fold((f64::MAX, f64::MIN), |(a, b), &c| (a.min(c), b.max(c)));
+            groups.push((centres.len() >= 2 && hi > lo).then_some((lo, hi)));
+        }
+        BodyPlan { map, fill, necks, groups }
     }
 
     /// จุดต้นทาง (u บนภาพเดิม) ของชั้นตัวคนที่จุด (u, v) — None = ไม่ขยับ · `k` = สัดส่วนที่หด
@@ -461,7 +466,7 @@ impl BodyPlan {
         let map = self.map.image();
         let (w, h) = (map.width() as f64, map.height() as f64);
         let (x, y) = (u * w, v * h - 0.5);
-        for (p, &(from, full)) in self.map.people().iter().zip(&self.necks) {
+        for ((p, &(from, full)), group) in self.map.people().iter().zip(&self.necks).zip(&self.groups) {
             let n = p.rows();
             let ry = y - p.top as f64;
             if ry < -0.5 || ry > n as f64 - 0.5 {
@@ -480,7 +485,22 @@ impl BodyPlan {
                 return None;
             }
             let at = |a: &[f64]| a[i0] * (1.0 - f) + a[i1] * f;
-            let (cx, half) = (at(&p.centre), at(&p.half).max(1.0));
+            let (mut cx, mut half) = (at(&p.centre), at(&p.half).max(1.0));
+            // หลายคนในส่วนเดียว: ขอบนอกแต่ละข้างหดเข้าหาคนที่อยู่ข้างนั้น ระหว่างคนไม่ขยับ · แถวที่ลำตัวไม่เลยใบหน้าของคนริมออกไป
+            // ข้างนั้นไม่หด (ใช้วิธีเดียวทุกแถว — สลับวิธีเป็นบางแถวแล้วภาพฉีกเป็นแถบตามแนวนอน ลองกับรูปจริงแล้ว)
+            if let Some((lo, hi)) = *group {
+                let (start, end) = (cx - half, cx + half);
+                (cx, half) = if x < lo {
+                    (lo, lo - start)
+                } else if x > hi {
+                    (hi, end - hi)
+                } else {
+                    return None;
+                };
+                if half < 1.0 {
+                    return None;
+                }
+            }
             let o = x - cx;
             return Some((cx + o.signum() * unshift(o.abs(), kk, half)) / w);
         }
@@ -754,6 +774,41 @@ mod tests {
         // ไม่ใส่ = ภาพเดิม
         let same = apply(DynamicImage::ImageRgb8(img.clone()), 0.0, &plan, |u, v| (u, v)).into_rgb8();
         assert_eq!(same, img);
+    }
+
+    #[test]
+    fn people_standing_together_slim_on_their_outer_sides_only() {
+        // สองคนยืนชิดกันเป็นส่วนเดียว: ลำตัวรวม x 40–160 (หัว x 70 และ 130 ต่อกับลำตัว) · ตัวคนมีลายตามแนวนอน (เห็นว่าขยับไหม)
+        // มีกรอบใบหน้าสองหน้า = ขอบนอกหด ส่วนกลางไม่ขยับ
+        let map = GrayImage::from_fn(200, 300, |x, y| {
+            let (fx, fy) = (x as f64 + 0.5, y as f64 + 0.5);
+            let head = |c: f64| (fx - c).powi(2) + (fy - 40.0).powi(2) <= 18.0f64.powi(2);
+            let body = (40.0..160.0).contains(&fx) && (55.0..290.0).contains(&fy);
+            Luma([if head(70.0) || head(130.0) || body { 255 } else { 0 }])
+        });
+        assert_eq!(people(&map).len(), 1, "เป็นส่วนเดียว");
+        let img = RgbImage::from_fn(200, 300, |x, y| {
+            if map.get_pixel(x, y)[0] > 127 {
+                Rgb([200 + (x % 5) as u8 * 10, 20 + (x % 7) as u8 * 6, 30])
+            } else {
+                Rgb([40, (x * 255 / 200) as u8, 200])
+            }
+        });
+        let filled = fill(&img, &map, &Flat).unwrap();
+        let faces = [
+            [52.0 / 200.0, 22.0 / 300.0, 36.0 / 200.0, 36.0 / 300.0],
+            [112.0 / 200.0, 22.0 / 300.0, 36.0 / 200.0, 36.0 / 300.0],
+        ];
+        let run = |plan: &BodyPlan| apply(DynamicImage::ImageRgb8(img.clone()), 100.0, plan, |u, v| (u, v)).into_rgb8();
+        let together = run(&BodyPlan::new(SubjectMap::new(map.clone()), filled.clone(), &faces));
+        let (l, r) = red_span(&together, 250);
+        assert!(l >= 43 && r <= 157, "ขอบนอกหดทั้งสองข้างราว 12% ของครึ่งลำตัวของคนข้างนั้น (30) {l}..{r}");
+        for x in 70..131 {
+            assert_eq!(together.get_pixel(x, 250), img.get_pixel(x, 250), "ระหว่างสองคนไม่ขยับ x={x}");
+        }
+        // ไม่มีกรอบใบหน้า: หดเข้าหาเส้นกลางของทั้งกลุ่ม (ส่วนกลางขยับ)
+        let group = run(&BodyPlan::new(SubjectMap::new(map), filled, &[]));
+        assert!((70..131).any(|x| group.get_pixel(x, 250) != img.get_pixel(x, 250)), "ไม่มีกรอบใบหน้า ส่วนกลางขยับ");
     }
 
     #[test]
