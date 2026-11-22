@@ -210,6 +210,8 @@ pub struct SubjectState {
     recent: Mutex<Vec<(String, SubjectMap)>>,
     /// ฉากหลังที่เติมแล้ว (ตัวผอม) ตาม revision และภาพตั้งต้น
     fills: Mutex<Vec<(String, crate::body::Fill)>>,
+    /// ภาพที่เติมของส่วนที่ลบ (ลบคน/สิ่งของ) ตาม revision ภาพตั้งต้น และกรอบ — (key, ภาพ, พบสิ่งที่เด่นในกรอบ)
+    patches: Mutex<Vec<(String, crate::remove::Patch, bool)>>,
 }
 
 impl SubjectState {
@@ -225,6 +227,7 @@ impl SubjectState {
             busy: Mutex::new(()),
             recent: Mutex::new(Vec::new()),
             fills: Mutex::new(Vec::new()),
+            patches: Mutex::new(Vec::new()),
         }
     }
 
@@ -608,29 +611,166 @@ pub(crate) fn base_image(
     cache_dir: &Path,
     source: &Path,
     raw_frame: Option<(&crate::pair::RawBase, &str)>,
+    edge: u32,
 ) -> Result<RgbImage> {
     let bytes = match raw_frame {
         Some((base, revision_id)) => crate::assets::raw_frame_bytes(cache_dir, base, revision_id)?,
         None => media::read_file(source).map_err(|_| AppError::source_unavailable())?,
     };
-    let img = media::decode_upright(&bytes, MAP_EDGE)?;
-    let img = if img.width().max(img.height()) > MAP_EDGE { img.thumbnail(MAP_EDGE, MAP_EDGE) } else { img };
+    let img = media::decode_upright(&bytes, edge)?;
+    let img = if img.width().max(img.height()) > edge { img.thumbnail(edge, edge) } else { img };
     Ok(img.into_rgb8())
+}
+
+/// ตัวโหลดภาพตั้งต้นของการแต่งของรูป (ด้านยาวตามที่ขอ) — ไฟล์ของรูป หรือภาพจาก RAW คู่
+fn app_base<'a>(
+    app: &'a App,
+    photo_id: &'a str,
+    source: &'a Path,
+    from_raw: bool,
+) -> impl Fn(u32) -> Result<RgbImage> + 'a {
+    move |edge| {
+        if from_raw {
+            crate::pair::ensure_start(app, photo_id)?;
+            let (base, rev) = crate::assets::raw_frame_base(&app.db(), photo_id)?;
+            base_image(&app.cache_dir, source, Some((&base, &rev)), edge)
+        } else {
+            base_image(&app.cache_dir, source, None, edge)
+        }
+    }
+}
+
+// ───────────────────────── ลบคน/สิ่งของ (DECISIONS ข้อ 42) ─────────────────────────
+
+fn removal_name(revision_id: &str, from_raw: bool, r: &crate::remove::Removal) -> String {
+    use sha2::Digest;
+    let rect = r.rect;
+    let mut key = format!("{:.6},{:.6},{:.6},{:.6}", rect[0], rect[1], rect[2], rect[3]);
+    if let Some([x, y]) = r.anchor {
+        key.push_str(&format!("@{x:.6},{y:.6}"));
+    }
+    let hash = util::hex(&sha2::Sha256::digest(key.as_bytes()));
+    format!("{revision_id}-rm-{}{}", &hash[..16], if from_raw { "-raw" } else { "" })
+}
+
+/// ที่เก็บภาพที่เติมของกรอบหนึ่ง (`.png`) และส่วนที่ครอบ (`.json`)
+pub fn removal_path(cache_dir: &Path, revision_id: &str, from_raw: bool, r: &crate::remove::Removal) -> PathBuf {
+    map_path(cache_dir, revision_id).with_file_name(format!("{}.png", removal_name(revision_id, from_raw, r)))
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PatchInfo {
+    region: [f64; 4],
+    found: bool,
+}
+
+/// ภาพที่เติมของกรอบที่คิดไว้แล้ว — None = ยังไม่เคยคิด
+pub(crate) fn cached_removal(
+    state: &SubjectState,
+    cache_dir: &Path,
+    revision_id: &str,
+    from_raw: bool,
+    r: &crate::remove::Removal,
+) -> Option<(crate::remove::Patch, bool)> {
+    let key = removal_name(revision_id, from_raw, r);
+    if let Some((_, p, f)) = lock(&state.patches).iter().find(|(k, _, _)| *k == key) {
+        return Some((p.clone(), *f));
+    }
+    let path = removal_path(cache_dir, revision_id, from_raw, r);
+    let info: PatchInfo = serde_json::from_slice(&std::fs::read(path.with_extension("json")).ok()?).ok()?;
+    let image = image::load_from_memory(&std::fs::read(&path).ok()?).ok()?.into_rgba8();
+    let patch = crate::remove::Patch::new(info.region, image);
+    remember_patch(state, key, &patch, info.found);
+    Some((patch, info.found))
+}
+
+fn remember_patch(state: &SubjectState, key: String, patch: &crate::remove::Patch, found: bool) {
+    let mut patches = lock(&state.patches);
+    patches.retain(|(k, _, _)| *k != key);
+    patches.insert(0, (key, patch.clone(), found));
+    patches.truncate(4 * RECENT);
+}
+
+/// ภาพที่เติมของทุกกรอบ: ที่คิดไว้แล้ว หรือคิดตอนนี้ (ราว 3–8 วินาทีต่อกรอบ) · `base` = ภาพตั้งต้นด้านยาว [`crate::remove::REMOVE_EDGE`]
+pub(crate) fn compute_removals(
+    state: &SubjectState,
+    cache_dir: &Path,
+    revision_id: &str,
+    from_raw: bool,
+    removals: &[crate::remove::Removal],
+    base: impl FnOnce() -> Result<RgbImage>,
+) -> Result<Vec<(crate::remove::Patch, bool)>> {
+    let cached = |r: &crate::remove::Removal| cached_removal(state, cache_dir, revision_id, from_raw, r);
+    if let Some(all) = removals.iter().map(cached).collect::<Option<Vec<_>>>() {
+        return Ok(all);
+    }
+    let (Some(segmenter), Some(inpainter)) = (state.segmenter(), state.inpainter()) else {
+        let message = if state.model().is_none() || state.fill.model.is_none() {
+            "build นี้ยังไม่มีตัวแยกตัวคนหรือตัวเติมฉากหลัง จึงยังลบคน/สิ่งของไม่ได้".to_string()
+        } else {
+            "ลบคน/สิ่งของต้องติดตั้งตัวแยกตัวคนและตัวเติมฉากหลังก่อน".to_string()
+        };
+        return Err(AppError::new("MODEL_NOT_READY", message).next("install_subject_model"));
+    };
+    let _turn = lock(&state.busy);
+    let mut base = Some(base);
+    let mut image: Option<RgbImage> = None;
+    let mut out = Vec::with_capacity(removals.len());
+    for r in removals {
+        if let Some(done) = cached(r) {
+            out.push(done);
+            continue;
+        }
+        if image.is_none() {
+            image = Some((base.take().expect("โหลดครั้งเดียว"))()?);
+        }
+        let image = image.as_ref().expect("โหลดแล้ว");
+        let (patch, found) = crate::remove::compute(image, r.rect, r.anchor, segmenter.as_ref(), inpainter.as_ref())?;
+        let path = removal_path(cache_dir, revision_id, from_raw, r);
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(patch.image().clone())
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .map_err(AppError::internal)?;
+        // cache สร้างใหม่ได้: เขียนไม่สำเร็จก็ยังใช้ภาพนี้ต่อได้ · เขียนส่วนที่ครอบก่อน (ไม่มีไฟล์ภาพ = ยังไม่เคยคิด)
+        let info = serde_json::to_vec(&PatchInfo { region: patch.region(), found })?;
+        if media::write_cache_file(&path.with_extension("json"), &info).is_ok() {
+            let _ = media::write_cache_file(&path, &png);
+        }
+        remember_patch(state, removal_name(revision_id, from_raw, r), &patch, found);
+        out.push((patch, found));
+    }
+    Ok(out)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Removed {
+    /// ต่อกรอบ: พบคน/สิ่งที่เด่นในกรอบ (ไม่พบ = ลบทั้งกรอบ)
+    pub found: Vec<bool>,
+}
+
+/// คิดภาพที่เติมของกรอบที่จะลบไว้ก่อน (หน้าแต่งภาพเรียกตอนเพิ่มกรอบ) — จากภาพตั้งต้นของการแต่ง (`from_raw` = ภาพจาก RAW คู่)
+pub fn prepare_removals(
+    app: &App,
+    photo_id: &str,
+    from_raw: bool,
+    removals: &[crate::remove::Removal],
+) -> Result<Removed> {
+    crate::remove::validate(removals)?;
+    let (revision_id, source) = revision_of(app, photo_id)?;
+    let base = app_base(app, photo_id, &source, from_raw);
+    let done = compute_removals(&app.ai.subject, &app.cache_dir, &revision_id, from_raw, removals, || {
+        base(crate::remove::REMOVE_EDGE)
+    })?;
+    Ok(Removed { found: done.into_iter().map(|(_, f)| f).collect() })
 }
 
 /// ฉากหลังที่เติมแล้วของรูป: ที่เติมไว้แล้ว หรือเติมตอนนี้ (คิดภาพน้ำหนักก่อนถ้ายังไม่มี)
 pub fn ensure_fill(app: &App, photo_id: &str, from_raw: bool) -> Result<(SubjectMap, Fill)> {
     let map = ensure(app, photo_id)?;
     let (revision_id, source) = revision_of(app, photo_id)?;
-    let fill = compute_fill(&app.ai.subject, &app.cache_dir, &revision_id, from_raw, &map, || {
-        if from_raw {
-            crate::pair::ensure_start(app, photo_id)?;
-            let (base, rev) = crate::assets::raw_frame_base(&app.db(), photo_id)?;
-            base_image(&app.cache_dir, &source, Some((&base, &rev)))
-        } else {
-            base_image(&app.cache_dir, &source, None)
-        }
-    })?;
+    let base = app_base(app, photo_id, &source, from_raw);
+    let fill = compute_fill(&app.ai.subject, &app.cache_dir, &revision_id, from_raw, &map, || base(MAP_EDGE))?;
     Ok((map, fill))
 }
 
@@ -662,33 +802,76 @@ pub fn attach_body(settings: &mut EditSettings, map: &SubjectMap, fill: &Fill) {
     }
 }
 
-/// เตรียมค่าที่แต่งของรูปให้พร้อมสร้างภาพ: แนบภาพน้ำหนักถ้ามี Mask ตัวคน และฉากหลังที่เติมถ้ามีตัวผอม ·
-/// `compute` = คิดใหม่ได้ถ้ายังไม่เคยคิด · คืน false เมื่อยังขาดอย่างใดอย่างหนึ่ง (ภาพที่ได้ยังไม่มีผลของส่วนนั้น — อย่าเก็บลง cache)
-pub(crate) fn prepare(app: &App, photo_id: &str, settings: &mut EditSettings, compute: bool) -> bool {
-    let body = settings.has_body();
-    if !settings.has_subject() && !body {
-        return true;
-    }
-    let map = if compute { ensure(app, photo_id).ok() } else { cached(app, photo_id).ok().flatten() };
-    let Some(map) = map else { return false };
-    attach(settings, &map);
-    if !body {
-        return true;
-    }
-    let fill = if compute {
-        ensure_fill(app, photo_id, settings.from_raw).ok().map(|(_, f)| f)
-    } else {
-        revision_of(app, photo_id)
-            .ok()
-            .and_then(|(rev, _)| cached_fill(&app.ai.subject, &app.cache_dir, &rev, settings.from_raw))
-    };
-    match fill {
-        Some(fill) => {
-            attach_body(settings, &map, &fill);
-            true
+/// แนบทุกอย่างที่ค่าที่แต่งต้องใช้: ภาพที่เติมของส่วนที่ลบ (ลบคน/สิ่งของ) · ภาพน้ำหนัก (Mask ตัวคน ตัวผอม — ไม่นับคนที่ลบไปแล้ว) ·
+/// ฉากหลังที่เติม (ตัวผอม) · `base` = ภาพตั้งต้นของการแต่งด้านยาวตามที่ขอ · `compute` = คิดส่วนที่ยังไม่มี (คิดไม่ได้ = Err)
+/// ไม่คิด = ใช้เท่าที่มี · คืน false เมื่อยังขาดบางส่วน (ภาพที่ได้ยังไม่มีผลของส่วนนั้น — อย่าเก็บลง cache)
+pub(crate) fn attach_all(
+    state: &SubjectState,
+    cache_dir: &Path,
+    revision_id: &str,
+    source: &Path,
+    base: &dyn Fn(u32) -> Result<RgbImage>,
+    settings: &mut EditSettings,
+    compute: bool,
+) -> Result<bool> {
+    let from_raw = settings.from_raw;
+    let mut complete = true;
+    if !settings.removals.is_empty() {
+        let patches: Vec<Option<crate::remove::Patch>> = if compute {
+            compute_removals(state, cache_dir, revision_id, from_raw, &settings.removals, || {
+                base(crate::remove::REMOVE_EDGE)
+            })?
+            .into_iter()
+            .map(|(p, _)| Some(p))
+            .collect()
+        } else {
+            let cached = |r| cached_removal(state, cache_dir, revision_id, from_raw, r).map(|(p, _)| p);
+            settings.removals.iter().map(cached).collect()
+        };
+        for (r, p) in settings.removals.iter_mut().zip(patches) {
+            complete &= p.is_some();
+            r.patch = crate::remove::Attached(p);
         }
-        None => false,
     }
+    let body = settings.has_body();
+    if settings.has_subject() || body {
+        let map = if compute {
+            Some(compute_map(state, cache_dir, revision_id, source)?)
+        } else {
+            cached_map(state, cache_dir, revision_id)
+        };
+        let Some(map) = map else { return Ok(false) };
+        // คนที่ลบไปแล้วไม่อยู่ในภาพน้ำหนัก (ไม่งั้นเห็นเงาของคนที่ลบสว่าง/หดตามขึ้นมา)
+        let people = if crate::remove::active(&settings.removals) {
+            crate::remove::clear_map(&map, &settings.removals)
+        } else {
+            map.clone()
+        };
+        attach(settings, &people);
+        if body {
+            let fill = if compute {
+                Some(compute_fill(state, cache_dir, revision_id, from_raw, &map, || base(MAP_EDGE))?)
+            } else {
+                cached_fill(state, cache_dir, revision_id, from_raw)
+            };
+            match fill {
+                Some(fill) => attach_body(settings, &people, &fill),
+                None => complete = false,
+            }
+        }
+    }
+    Ok(complete)
+}
+
+/// เตรียมค่าที่แต่งของรูปให้พร้อมสร้างภาพ ([`attach_all`]) · `compute` = คิดใหม่ได้ถ้ายังไม่เคยคิด ·
+/// คืน false เมื่อยังขาดบางส่วน (ภาพที่ได้ยังไม่มีผลของส่วนนั้น — อย่าเก็บลง cache)
+pub(crate) fn prepare(app: &App, photo_id: &str, settings: &mut EditSettings, compute: bool) -> bool {
+    if !settings.has_subject() && !settings.has_body() && settings.removals.is_empty() {
+        return true;
+    }
+    let Ok((revision_id, source)) = revision_of(app, photo_id) else { return false };
+    let base = app_base(app, photo_id, &source, settings.from_raw);
+    attach_all(&app.ai.subject, &app.cache_dir, &revision_id, &source, &base, settings, compute).unwrap_or(false)
 }
 
 #[derive(Serialize)]

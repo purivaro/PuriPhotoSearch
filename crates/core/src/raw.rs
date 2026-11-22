@@ -601,7 +601,7 @@ pub fn render(bytes: &[u8], s: &crate::edit::EditSettings, max_edge: u32) -> Res
         None => lin,
     };
     // หน้าเรียว/หน้าผอมทำบนภาพเดิมก่อนตัด/หมุน (DECISIONS ข้อ 31)
-    let lin = crate::retouch::warp_image(DynamicImage::ImageRgb32F(lin), s.retouch.as_ref());
+    let lin = crate::retouch::warp_image(DynamicImage::ImageRgb32F(lin), s);
     let img = crate::edit::render_geometry(lin, s).into_rgb32f();
     let img = if max_edge == u32::MAX { img } else { shrink(img, max_edge) };
     let g = crate::edit::Geometry::new(info.width, info.height, s);

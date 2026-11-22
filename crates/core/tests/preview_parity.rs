@@ -260,6 +260,31 @@ fn retouch(rng: &mut Rng, masks: &[Mask]) -> Option<Retouch> {
     })
 }
 
+/// ลบคน/สิ่งของ (DECISIONS ข้อ 42): ภาพที่เติมสุ่มสี + ขอบนุ่ม ครอบส่วนสุ่มของภาพ (แนบไว้แล้ว)
+fn removals(rng: &mut Rng, s: &mut EditSettings) {
+    if !rng.chance(0.3) {
+        return;
+    }
+    s.removals = (0..rng.int(1, 2))
+        .map(|i| {
+            let (pw, ph) = (rng.int(6, 30), rng.int(6, 30));
+            let (cr, cg) = (rng.int(0, 255) as u8, rng.int(0, 255) as u8);
+            let image = image::RgbaImage::from_fn(pw, ph, |x, y| {
+                let (u, v) = ((x as f64 + 0.5) / pw as f64 - 0.5, (y as f64 + 0.5) / ph as f64 - 0.5);
+                let a = ((0.5 - (u * u + v * v).sqrt()) * 4.0).clamp(0.0, 1.0);
+                image::Rgba([cr, cg.wrapping_add((x * 9) as u8), (y * 13 % 256) as u8, (a * 255.0) as u8])
+            });
+            let region = [rng.range(-0.06, 0.7), rng.range(-0.06, 0.7), rng.range(0.1, 0.5), rng.range(0.1, 0.5)];
+            puri_core::remove::Removal {
+                id: format!("r{i}"),
+                rect: [region[0] + 0.02, region[1] + 0.02, region[2] * 0.6, region[3] * 0.6],
+                anchor: None,
+                patch: puri_core::remove::Attached(Some(puri_core::remove::Patch::new(region, image))),
+            }
+        })
+        .collect();
+}
+
 /// ตัวผอม (DECISIONS ข้อ 41): ภาพน้ำหนักเป็นคนหนึ่งคน (หัวกลม + ลำตัว) ขนาดไม่เท่าภาพ + ฉากหลังที่เติมแบบสุ่ม (แนบไว้แล้ว)
 fn body(rng: &mut Rng, s: &mut EditSettings) {
     if !rng.chance(0.3) {
@@ -406,6 +431,9 @@ fn features(s: &EditSettings, profile: Profile) -> Vec<&'static str> {
     if s.retouch.as_ref().is_some_and(|r| r.body > 0.0) {
         f.push("body");
     }
+    if !s.removals.is_empty() {
+        f.push("remove");
+    }
     if s.retouch.as_ref().is_some_and(Retouch::is_active) {
         f.push("retouch");
     }
@@ -428,6 +456,8 @@ fn live_preview_matches_the_saved_image_pixel_for_pixel() {
         s.retouch = retouch(&mut rr, &s.masks);
         let mut rb = Rng(SEED ^ 0x5EED_B0D1_u64.wrapping_add(id.wrapping_mul(104_729)));
         body(&mut rb, &mut s);
+        let mut rm = Rng(SEED ^ 0x0DE1_E7E5_u64.wrapping_add(id.wrapping_mul(15_485_863)));
+        removals(&mut rm, &mut s);
         let profile = if rng.chance(0.2) { Profile::Raw } else { Profile::Display };
         let (w, h) = (rng.int(16, 64), rng.int(16, 48));
         // ใบหน้าบนภาพต้นทาง (พิกเซล) ตรงกับกรอบของ Mask

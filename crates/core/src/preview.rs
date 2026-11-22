@@ -166,7 +166,14 @@ fn view_geometry(src: (u32, u32), s: &EditSettings, view: Rect) -> Geometry {
 
 /// สุ่มส่วนที่เห็นของภาพต้นทางลง canvas `w`×`h` (RGBA) แบบ bilinear จากระดับย่อที่ใกล้ขนาด canvas
 /// · หน้าเรียว/หน้าผอมและตัวผอมของ `retouch` ใส่ตอนสุ่ม (ภาพที่บันทึกทำบนภาพเดิมก่อนตัด/หมุน — จุดต้นทางเดียวกัน)
-fn sample(src: &Source, g: &Geometry, w: usize, h: usize, retouch: Option<&crate::retouch::Retouch>) -> Vec<u8> {
+fn sample(
+    src: &Source,
+    g: &Geometry,
+    w: usize,
+    h: usize,
+    retouch: Option<&crate::retouch::Retouch>,
+    removals: &[crate::remove::Removal],
+) -> Vec<u8> {
     let (sw, sh) = src.size();
     let aspect = sw as f64 / sh as f64;
     // พิกเซลของภาพต้นทางต่อหนึ่งพิกเซลของ canvas (วัดตามแนวนอนและแนวตั้งที่กลางภาพ)
@@ -181,7 +188,7 @@ fn sample(src: &Source, g: &Geometry, w: usize, h: usize, retouch: Option<&crate
     let img = src.level(level);
     let (lw, lh) = img.dimensions();
     let raw = img.as_raw();
-    let fetch = |u: f64, v: f64| -> [f64; 3] {
+    let original = |u: f64, v: f64| -> [f64; 3] {
         let fx = (u * lw as f64 - 0.5).clamp(0.0, (lw - 1) as f64);
         let fy = (v * lh as f64 - 0.5).clamp(0.0, (lh - 1) as f64);
         let (x0, y0) = (fx.floor() as u32, fy.floor() as u32);
@@ -194,6 +201,8 @@ fn sample(src: &Source, g: &Geometry, w: usize, h: usize, retouch: Option<&crate
             top * (1.0 - ty) + bottom * ty
         })
     };
+    // ลบคน/สิ่งของ (DECISIONS ข้อ 42) ทำบนภาพเดิมก่อน — ตัวผอมนำสีจากภาพหลังลบ
+    let fetch = |u: f64, v: f64| crate::remove::apply(removals, u, v, original(u, v), crate::body::Space::Bytes, 255.0);
     // ตัวผอม (DECISIONS ข้อ 41) ใช้ได้เมื่อแนบภาพน้ำหนักและฉากหลังที่เติมไว้แล้ว
     let body = retouch.and_then(|r| r.plan.0.as_ref().filter(|_| r.body > 0.0).map(|p| (r.body, p)));
     let mut out = vec![0u8; w * h * 4];
@@ -237,8 +246,8 @@ pub fn render(app: &App, req: &Request) -> Result<Vec<u8>> {
     check_view(&req.view)?;
     req.settings.validate()?;
     let src = source(app, &req.photo_id, req.source)?;
-    if req.settings.has_subject() || req.settings.has_body() {
-        // Mask ตัวคน / ตัวผอม: ใช้ภาพน้ำหนักและฉากหลังที่คิดไว้แล้ว (หน้าแต่งภาพสั่งคิดก่อนด้วย prepare_subject)
+    if req.settings.has_subject() || req.settings.has_body() || !req.settings.removals.is_empty() {
+        // Mask ตัวคน / ตัวผอม / ลบคน: ใช้ภาพน้ำหนักและฉากที่เติมไว้แล้ว (หน้าแต่งภาพสั่งคิดก่อนด้วย prepare_subject / prepare_removals)
         // — ยังไม่มี = ยังไม่เห็นผลของส่วนนั้น · ฉากหลังที่เติมเป็นของภาพต้นทางที่ใช้อยู่ (ไฟล์ของรูป หรือภาพจาก RAW คู่)
         let mut req = req.clone();
         req.settings.from_raw = req.source == SourceKind::Rawframe;
@@ -265,7 +274,8 @@ fn render_from(src: &Source, req: &Request) -> Vec<u8> {
     let g = view_geometry(src.size(), &req.settings, req.view);
     // "ก่อนปรับ" = ภาพเดิมไม่มีการแต่งใด ๆ รวมรีทัชใบหน้า
     let retouch = req.settings.retouch.as_ref().filter(|_| req.adjust);
-    let mut px = sample(src, &g, w, h, retouch);
+    let removals: &[_] = if req.adjust { &req.settings.removals } else { &[] };
+    let mut px = sample(src, &g, w, h, retouch, removals);
     if req.adjust {
         // รัศมีของ Texture/Clarity/Dehaze และขอบเผื่อของ Mask คิดจากทั้งกรอบ (ส่วนที่เห็นเป็นแค่บางส่วน)
         let long = g.frame_long(req.width, req.height);
@@ -292,7 +302,7 @@ fn plain(src: &Source, s: &EditSettings, edge: u32) -> (Vec<u8>, usize, usize) {
         (((edge as f64 * aspect).round() as u32).max(1), edge)
     };
     let g = view_geometry((sw, sh), s, crop);
-    (sample(src, &g, w as usize, h as usize, s.retouch.as_ref()), w as usize, h as usize)
+    (sample(src, &g, w as usize, h as usize, s.retouch.as_ref(), &s.removals), w as usize, h as usize)
 }
 
 /// ปัดแบบ `Math.round` ของ JavaScript (ครึ่งปัดขึ้น) ให้ค่าที่เสนอเท่าเดิมกับก่อนย้ายมา Rust

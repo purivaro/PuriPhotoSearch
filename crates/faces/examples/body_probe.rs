@@ -47,7 +47,8 @@ fn main() {
         let big = media::decode_upright(&bytes, edge).expect("ถอดรหัส");
         let big = if big.width().max(big.height()) > edge { big.thumbnail(edge, edge) } else { big }.to_rgb8();
         let t = Instant::now();
-        let out = body::apply(DynamicImage::ImageRgb8(big.clone()), amount, &plan, |u, v| (u, v)).into_rgb8();
+        let out =
+            body::apply(DynamicImage::ImageRgb8(big.clone()), Some((amount, &plan)), &[], |u, v| (u, v)).into_rgb8();
         let t_apply = t.elapsed().as_secs_f64();
         let name = Path::new(f).file_stem().unwrap_or_default().to_string_lossy().into_owned();
         out.save(out_dir.join(format!("{name}-body{amount}.jpg"))).expect("เขียนผล");

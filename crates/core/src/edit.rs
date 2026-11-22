@@ -42,6 +42,9 @@ pub struct EditSettings {
     /// รีทัชใบหน้า (DECISIONS ข้อ 31): ผิวเนียน ลดริ้วรอย หน้าเรียว หน้าผอม
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retouch: Option<crate::retouch::Retouch>,
+    /// ลบคน/สิ่งของ (DECISIONS ข้อ 42) — ทำก่อนทุกอย่างบนภาพเดิม
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub removals: Vec<crate::remove::Removal>,
     /// แต่งจากไฟล์ RAW คู่ของรูป (DECISIONS ข้อ 26) — แอปตั้งเองตอนบันทึก ไม่ใช่ค่าที่ผู้ใช้ปรับ
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub from_raw: bool,
@@ -56,6 +59,7 @@ impl EditSettings {
     pub fn validate(&self) -> Result<()> {
         self.adjust.validate()?;
         crate::masks::validate(&self.masks)?;
+        crate::remove::validate(&self.removals)?;
         if let Some(r) = &self.retouch {
             r.validate()?;
         }
@@ -82,7 +86,11 @@ impl EditSettings {
 
     /// ไม่ได้แต่งอะไรเลย (เก็บแบบนี้ = ลบการแต่ง)
     pub fn is_identity(&self) -> bool {
-        self.is_geometry_identity() && self.adjust.is_neutral() && !self.has_masks() && !self.has_retouch()
+        self.is_geometry_identity()
+            && self.adjust.is_neutral()
+            && !self.has_masks()
+            && !self.has_retouch()
+            && self.removals.is_empty()
     }
 
     /// มีรีทัชใบหน้าที่มีผล
@@ -119,6 +127,7 @@ impl EditSettings {
             && self.adjust == other.adjust
             && self.masks == other.masks
             && self.retouch.as_ref().filter(|r| r.is_active()) == other.retouch.as_ref().filter(|r| r.is_active())
+            && self.removals == other.removals
             && self.from_raw == other.from_raw
     }
 }
@@ -277,7 +286,7 @@ pub fn render(img: DynamicImage, s: &EditSettings) -> DynamicImage {
 pub fn render_with(img: DynamicImage, s: &EditSettings, profile: crate::adjust::Profile) -> DynamicImage {
     let g = Geometry::new(img.width(), img.height(), s);
     // หน้าเรียว/หน้าผอมทำบนภาพเดิมก่อนตัด/หมุน (DECISIONS ข้อ 31)
-    let framed = render_geometry(crate::retouch::warp_image(img, s.retouch.as_ref()), s);
+    let framed = render_geometry(crate::retouch::warp_image(img, s), s);
     let long = g.frame_long(framed.width(), framed.height());
     with_local_edits(crate::adjust::apply_profile_in_frame(framed, &s.adjust, profile, long), &g, s)
 }

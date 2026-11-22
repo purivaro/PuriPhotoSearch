@@ -151,13 +151,16 @@ fn band(t: f64, (start, peak, end): (f64, f64, f64)) -> f64 {
 
 /// ตัวผอม แล้วหน้าเรียว/หน้าผอม บนภาพเดิม (ขั้นแรกของภาพที่บันทึก ก่อนตัด/หมุน) — ไม่มีผล = ภาพเดิม
 /// · ภาพทศนิยมคือแสงเชิงเส้นของ RAW ([`crate::body::Space::RawLinear`])
-pub(crate) fn warp_image(img: DynamicImage, retouch: Option<&Retouch>) -> DynamicImage {
-    // ตัวผอม: รอบเดียวกับหน้าเรียว ลำดับเดียวกับตัวอย่างสด (จุดของหน้าเรียว → ตัวผอมที่จุดนั้น) ได้ภาพเดียวกันทุกพิกเซล
-    if let Some(r) = retouch {
-        if let Some(plan) = r.plan.0.as_ref().filter(|_| r.body > 0.0) {
-            let aspect = img.width() as f64 / img.height() as f64;
-            return crate::body::apply(img, r.body, plan, |u, v| r.source_point(u, v, aspect));
-        }
+pub(crate) fn warp_image(img: DynamicImage, s: &crate::edit::EditSettings) -> DynamicImage {
+    let retouch = s.retouch.as_ref();
+    // ลบคน/สิ่งของและตัวผอม: รอบเดียวกับหน้าเรียว ลำดับเดียวกับตัวอย่างสด (จุดของหน้าเรียว → ตัวผอมที่จุดนั้น → ภาพเดิมหลังลบ)
+    // ได้ภาพเดียวกันทุกพิกเซล
+    let body = retouch.and_then(|r| r.plan.0.as_ref().filter(|_| r.body > 0.0).map(|p| (r.body, p)));
+    if body.is_some() || crate::remove::active(&s.removals) {
+        let aspect = img.width() as f64 / img.height() as f64;
+        return crate::body::apply(img, body, &s.removals, |u, v| {
+            retouch.map_or((u, v), |r| r.source_point(u, v, aspect))
+        });
     }
     let Some(r) = retouch.filter(|r| r.warps()) else { return img };
     match img {
@@ -263,6 +266,10 @@ mod tests {
     use crate::edit::EditSettings;
     use image::RgbImage;
 
+    fn settings(r: &Retouch) -> crate::edit::EditSettings {
+        crate::edit::EditSettings { retouch: Some(r.clone()), ..Default::default() }
+    }
+
     fn face(level: f64) -> Retouch {
         Retouch { faces: vec![[0.3, 0.2, 0.4, 0.6]], smooth: level, wrinkles: level, ..Default::default() }
     }
@@ -333,7 +340,7 @@ mod tests {
         // ภาพจริง: กรอบตรงกับ "หน้า" ที่วาด (x 30–170, y 15–195) — ความกว้างที่ระดับกรามและแก้มแคบลง ตาไม่ขยับ
         let img = portrait();
         let fit = Retouch { faces: vec![[0.15, 0.075, 0.7, 0.9]], ..r.clone() };
-        let out = warp_image(DynamicImage::ImageRgb8(img.clone()), Some(&fit)).into_rgb8();
+        let out = warp_image(DynamicImage::ImageRgb8(img.clone()), &settings(&fit)).into_rgb8();
         let width = |im: &RgbImage, y: u32| (0..200).filter(|&x| im.get_pixel(x, y).0[0] > 160).count();
         for y in [110, 155] {
             assert!(width(&out, y) + 4 <= width(&img, y), "y {y}: {} → {}", width(&img, y), width(&out, y));
@@ -342,7 +349,7 @@ mod tests {
         assert_eq!(out.get_pixel(5, 5), img.get_pixel(5, 5));
         // ไม่ดัด = ภาพเดิมทุกพิกเซล
         let none = Retouch { slim: 0.0, thin: 0.0, ..r };
-        assert_eq!(warp_image(DynamicImage::ImageRgb8(img.clone()), Some(&none)).into_rgb8(), img);
+        assert_eq!(warp_image(DynamicImage::ImageRgb8(img.clone()), &settings(&none)).into_rgb8(), img);
     }
 
     #[test]
