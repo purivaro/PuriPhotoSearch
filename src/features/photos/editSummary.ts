@@ -14,6 +14,8 @@ export function maskName(m: EditMask): string {
   if (m.area.kind === 'subject') return `ตัวคน (AI)${invert}`;
   if (m.area.kind === 'people') return `${m.area.parts.map((p) => PART_LABELS[p]).join(' + ')} (AI)${invert}`;
   if (m.area.kind === 'sky') return `ท้องฟ้า (AI)${invert}`;
+  if (m.area.kind === 'linear') return `ไล่ระดับ${invert}`;
+  if (m.area.kind === 'radial') return `วงกลม${invert}`;
   return `ใบหน้า ${formatCount(m.area.boxes.length)} คน${m.area.skin ? ' · เฉพาะผิว' : ''}${invert}`;
 }
 
@@ -62,7 +64,11 @@ export function describeEdit(s: EditSettings) {
                   ? m.area.parts.map((p) => PART_LABELS[p]).join('+')
                   : m.area.kind === 'sky'
                     ? 'ท้องฟ้า'
-                    : m.area.skin
+                    : m.area.kind === 'linear'
+                      ? 'ไล่ระดับ'
+                      : m.area.kind === 'radial'
+                        ? 'วงกลม'
+                        : m.area.skin
                     ? 'ผิวหน้า'
                     : 'ใบหน้า',
             )

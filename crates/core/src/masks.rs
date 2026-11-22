@@ -6,6 +6,9 @@
 //!
 //! - **ใบหน้า:** วงรีนุ่ม ๆ รอบกรอบใบหน้าที่แอปตรวจไว้ (ใหญ่กว่ากรอบให้คลุมหน้าผากและคาง) · "เฉพาะผิว" = คูณความเป็นสีผิวจากช่วง Cb/Cr
 //!   ของ YCbCr (สีจีวรส้มสดอยู่นอกช่วง) จึงทำหน้าขาวใส/ผิวเนียนได้โดยจีวรและฉากหลังไม่โดน
+//! - **ไล่ระดับ / วงกลม (DECISIONS ข้อ 45):** แบบ Linear/Radial Gradient ของ Lightroom — ไล่ระดับ: เต็มที่ที่จุด `full` จางหมดที่จุด
+//!   `zero` (เส้นตั้งฉากกับแนวนั้น) · วงกลม: วงรีศูนย์กลาง `center` รัศมีเป็นสัดส่วนของความกว้าง/สูงของภาพเดิม (แบบกรอบ Top/Left/Bottom/Right
+//!   ของ Lightroom) หมุน `angle` องศา (ตามเข็มนาฬิกา) ข้างในเต็มที่ ขอบนุ่มตาม `feather` · คิดบนภาพเดิมที่สัดส่วนจริง วงกลมจึงกลมจริง
 //! - **ตัวคน (AI):** ภาพน้ำหนักจากตัวแยกตัวคน ([`crate::subject`] — DECISIONS ข้อ 40) แบบ "Select Subject" ของ Lightroom
 //!   ภาพน้ำหนักเป็นของรูป แนบตอนสร้างภาพ ([`crate::subject::attach`]) — ไม่ได้แนบ = บริเวณว่าง (ไม่มีผล)
 
@@ -79,7 +82,26 @@ pub enum Area {
         #[serde(skip)]
         map: Option<crate::sky::SkyMap>,
     },
+    /// ไล่ระดับ (DECISIONS ข้อ 45): เต็มที่ที่จุด `full` จางหมดที่จุด `zero` (สัดส่วนบนภาพเดิม)
+    Linear { full: [f64; 2], zero: [f64; 2] },
+    /// วงกลม/วงรี (DECISIONS ข้อ 45): รัศมีเป็นสัดส่วนของความกว้างและความสูงของภาพเดิม · `angle` องศาตามเข็มนาฬิกา ·
+    /// `feather` 0–100 = ขอบนุ่มกว้างแค่ไหนของรัศมี
+    Radial {
+        center: [f64; 2],
+        radius: [f64; 2],
+        #[serde(default)]
+        angle: f64,
+        #[serde(default = "half")]
+        feather: f64,
+    },
 }
+
+fn half() -> f64 {
+    50.0
+}
+
+/// ขอบนุ่มของวงกลมตั้งต้น (เท่ากับ Lightroom)
+pub const RADIAL_FEATHER: f64 = 50.0;
 
 /// ภาพน้ำหนักของตัวคนเป็นของรูป ไม่ใช่ของค่าที่แต่ง: แนบแล้วหรือยังไม่แนบก็นับว่าเป็นบริเวณเดียวกัน
 impl PartialEq for Area {
@@ -89,6 +111,11 @@ impl PartialEq for Area {
             (Area::Subject { .. }, Area::Subject { .. }) => true,
             (Area::People { parts: a, .. }, Area::People { parts: b, .. }) => a == b,
             (Area::Sky { .. }, Area::Sky { .. }) => true,
+            (Area::Linear { full: a, zero: b }, Area::Linear { full: c, zero: d }) => a == c && b == d,
+            (
+                Area::Radial { center: a, radius: b, angle: c, feather: d },
+                Area::Radial { center: e, radius: f, angle: g, feather: h },
+            ) => a == e && b == f && c == g && d == h,
             _ => false,
         }
     }
@@ -108,6 +135,7 @@ impl Mask {
             Area::Subject { .. } => Area::Subject { map: None },
             Area::People { parts, .. } => Area::People { parts: parts.clone(), map: None },
             Area::Sky { .. } => Area::Sky { map: None },
+            Area::Linear { .. } | Area::Radial { .. } => self.area.clone(),
         };
         Mask { area, ..self.clone() }
     }
@@ -134,6 +162,18 @@ impl Mask {
                 !parts.is_empty() && parts.len() <= 4 && parts.iter().enumerate().all(|(i, p)| !parts[..i].contains(p))
             }
             Area::Sky { .. } => true,
+            Area::Linear { full, zero } => {
+                let point = |p: &[f64; 2]| p.iter().all(|v| v.is_finite() && (-1.0..=2.0).contains(v));
+                point(full) && point(zero) && ((full[0] - zero[0]).abs() + (full[1] - zero[1]).abs()) > 1e-4
+            }
+            Area::Radial { center, radius, angle, feather } => {
+                center.iter().all(|v| v.is_finite() && (-1.0..=2.0).contains(v))
+                    && radius.iter().all(|v| v.is_finite() && *v > 1e-4 && *v <= 4.0)
+                    && angle.is_finite()
+                    && (-360.0..=360.0).contains(angle)
+                    && feather.is_finite()
+                    && (0.0..=100.0).contains(feather)
+            }
         };
         if ok_id && ok_amount && ok_area {
             Ok(())
@@ -216,7 +256,8 @@ pub(crate) fn face_weight(b: &[f64; 4], u: f64, v: f64) -> f64 {
 }
 
 /// น้ำหนักของบริเวณที่จุด (u, v) บนภาพเดิม สำหรับพิกเซลสี `rgb` (ก่อนกลับด้าน/ความแรง) · `tones` = สีผิวของแต่ละหน้า ([`face_tones`])
-pub fn area_weight(area: &Area, tones: &[Option<[f64; 2]>], u: f64, v: f64, rgb: [u8; 3]) -> f64 {
+/// `size` = ขนาดภาพเดิม (สัดส่วนกว้าง:สูง — ไล่ระดับและวงกลมคิดบนภาพที่สัดส่วนจริง)
+pub fn area_weight(area: &Area, tones: &[Option<[f64; 2]>], u: f64, v: f64, rgb: [u8; 3], size: (f64, f64)) -> f64 {
     match area {
         Area::Faces { boxes, skin } => {
             let mut w = 0f64;
@@ -235,7 +276,57 @@ pub fn area_weight(area: &Area, tones: &[Option<[f64; 2]>], u: f64, v: f64, rgb:
         Area::Subject { map } => map.as_ref().map_or(0.0, |m| m.weight(u, v)),
         Area::People { parts, map } => map.as_ref().map_or(0.0, |m| m.weight(u, v, parts)),
         Area::Sky { map } => map.as_ref().map_or(0.0, |m| m.weight(u, v)),
+        Area::Linear { full, zero } => linear_weight(full, zero, u, v, size),
+        Area::Radial { center, radius, angle, feather } => radial_weight(center, radius, *angle, *feather, u, v, size),
     }
+}
+
+/// ไล่ระดับ: 1 ฝั่ง `full` · 0 ฝั่ง `zero` · ระหว่างเส้นทั้งสองค่อย ๆ จาง (smoothstep)
+pub(crate) fn linear_weight(full: &[f64; 2], zero: &[f64; 2], u: f64, v: f64, (sw, sh): (f64, f64)) -> f64 {
+    let (dx, dy) = ((zero[0] - full[0]) * sw, (zero[1] - full[1]) * sh);
+    let len2 = (dx * dx + dy * dy).max(1e-12);
+    let t = (((u - full[0]) * sw * dx + (v - full[1]) * sh * dy) / len2).clamp(0.0, 1.0);
+    1.0 - t * t * (3.0 - 2.0 * t)
+}
+
+/// วงกลม: ระยะจากศูนย์กลางเทียบกับรัศมีของวงรีที่หมุนแล้ว (1 = ขอบ) · ข้างในถึง 1 − feather เต็มที่ แล้วจางหมดที่ขอบ
+pub(crate) fn radial_weight(
+    center: &[f64; 2],
+    radius: &[f64; 2],
+    angle: f64,
+    feather: f64,
+    u: f64,
+    v: f64,
+    (sw, sh): (f64, f64),
+) -> f64 {
+    let d = radial_distance(center, radius, angle, u, v, (sw, sh));
+    let inner = 1.0 - feather / 100.0;
+    if d >= 1.0 {
+        0.0
+    } else if d <= inner {
+        1.0
+    } else {
+        1.0 - smoothstep(inner, 1.0, d)
+    }
+}
+
+fn radial_distance(center: &[f64; 2], radius: &[f64; 2], angle: f64, u: f64, v: f64, (sw, sh): (f64, f64)) -> f64 {
+    let (dx, dy) = ((u - center[0]) * sw, (v - center[1]) * sh);
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let (x, y) = (cos * dx + sin * dy, -sin * dx + cos * dy);
+    let (rx, ry) = ((radius[0] * sw).max(1e-9), (radius[1] * sh).max(1e-9));
+    ((x / rx).powi(2) + (y / ry).powi(2)).sqrt()
+}
+
+/// มุมทั้งสี่ของกรอบที่ครอบวงรี (สัดส่วนบนภาพเดิม)
+fn radial_corners(center: &[f64; 2], radius: &[f64; 2], angle: f64, (sw, sh): (f64, f64)) -> [(f64, f64); 4] {
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let (rx, ry) = (radius[0] * sw, radius[1] * sh);
+    // ครึ่งความกว้าง/สูงของกรอบตั้งตรงที่ครอบวงรีที่หมุน (พิกเซล)
+    let hx = ((rx * cos).powi(2) + (ry * sin).powi(2)).sqrt() / sw;
+    let hy = ((rx * sin).powi(2) + (ry * cos).powi(2)).sqrt() / sh;
+    let (cx, cy) = (center[0], center[1]);
+    [(cx - hx, cy - hy), (cx + hx, cy - hy), (cx - hx, cy + hy), (cx + hx, cy + hy)]
 }
 
 /// ใกล้สีผิวของคนนั้นแค่ไหน (1 = ใกล้ · 0 = สีอื่นที่บังเอิญอยู่ในช่วงสีผิว) — ไม่รู้สีผิว = 1
@@ -321,6 +412,14 @@ pub(crate) fn bounds(area: &Area, g: &Geometry, w: usize, h: usize, long: f64) -
                 (x0, y0, x1, y1) = (x0.min(a), y0.min(b), x1.max(a), y1.max(b));
             }
         }
+        // ไล่ระดับ: ฝั่งเต็มที่ยาวไปถึงขอบภาพ — ทั้งภาพ
+        Area::Linear { .. } => (x0, y0, x1, y1) = (0.0, 0.0, 1.0, 1.0),
+        Area::Radial { center, radius, angle, .. } => {
+            for (u, v) in radial_corners(center, radius, *angle, g.source_size()) {
+                let (a, b) = g.forward(u, v);
+                (x0, y0, x1, y1) = (x0.min(a), y0.min(b), x1.max(a), y1.max(b));
+            }
+        }
     }
     let margin = MARGIN * long;
     let px = |v: f64, n: usize, extra: f64| (v * n as f64 + extra).clamp(0.0, n as f64);
@@ -384,12 +483,13 @@ pub fn apply_showing(
         });
         let amount = mask.amount / 100.0;
         let tones = face_tones(px, w, h, stride, g, &mask.area);
+        let size = g.source_size();
         px[y0 * w * stride..y1 * w * stride].par_chunks_mut(w * stride).enumerate().for_each(|(y, line)| {
             for x in 0..rw {
                 let i = (x0 + x) * stride;
                 let rgb = [line[i], line[i + 1], line[i + 2]];
                 let (u, v) = g.inverse(((x0 + x) as f64 + 0.5) / w as f64, ((y0 + y) as f64 + 0.5) / h as f64);
-                let mut t = area_weight(&mask.area, &tones, u, v, rgb);
+                let mut t = area_weight(&mask.area, &tones, u, v, rgb, size);
                 if mask.invert {
                     t = 1.0 - t;
                 }
@@ -523,13 +623,73 @@ mod tests {
     }
 
     #[test]
+    fn a_linear_gradient_is_full_at_one_line_and_gone_at_the_other() {
+        // เต็มที่ที่ด้านบน (v = 0.2) จางหมดที่ v = 0.6 · ภาพ 3:2
+        let (full, zero, size) = ([0.5, 0.2], [0.5, 0.6], (300.0, 200.0));
+        assert_eq!(linear_weight(&full, &zero, 0.1, 0.0, size), 1.0, "ฝั่งเต็มที่ถึงขอบภาพ");
+        assert_eq!(linear_weight(&full, &zero, 0.9, 0.9, size), 0.0, "ฝั่งจางหมด");
+        assert!((linear_weight(&full, &zero, 0.3, 0.4, size) - 0.5).abs() < 1e-9, "กลางทาง");
+        // เส้นเท่ากันตั้งฉากกับแนว full→zero บนภาพจริง (ไม่ใช่บนสัดส่วน 0–1): แนวทแยงบนภาพ 3:2
+        let (full, zero) = ([0.0, 0.0], [1.0, 1.0]);
+        let along = |x: f64, y: f64| linear_weight(&full, &zero, x / 300.0, y / 200.0, size);
+        // จุดสองจุดบนเส้นตั้งฉากเดียวกันในพิกเซล (ขยับ (2, −3) ตั้งฉากกับ (300, 200))
+        assert!((along(150.0, 100.0) - along(170.0, 70.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_radial_gradient_is_round_on_a_wide_photo_and_soft_at_the_edge() {
+        // ภาพ 300×200 · รัศมี 0.2 ของความกว้าง = 60 พิกเซล · 0.3 ของความสูง = 60 พิกเซล → วงกลมจริง
+        let (c, r, size) = ([0.5, 0.5], [0.2, 0.3], (300.0, 200.0));
+        let w = |u: f64, v: f64, feather: f64| radial_weight(&c, &r, 0.0, feather, u, v, size);
+        assert_eq!(w(0.5, 0.5, 50.0), 1.0);
+        assert_eq!(w(0.5 + 59.0 / 300.0, 0.5, 0.0), 1.0, "ไม่มีขอบนุ่ม: ข้างในเต็มที่ถึงขอบ");
+        assert_eq!(w(0.5 + 61.0 / 300.0, 0.5, 0.0), 0.0);
+        let side = w(0.5 + 45.0 / 300.0, 0.5, 50.0);
+        let down = w(0.5, 0.5 + 45.0 / 200.0, 50.0);
+        assert!((side - down).abs() < 1e-9 && side > 0.0 && side < 1.0, "กลมจริง ขอบนุ่ม {side} {down}");
+        assert_eq!(w(0.1, 0.1, 50.0), 0.0, "นอกวง");
+        // วงรีตั้งหมุน 90°: แกนยาวเปลี่ยนแนว
+        let tall = |u: f64, v: f64, angle: f64| radial_weight(&c, &[0.3, 0.2], angle, 0.0, u, v, size);
+        assert_eq!(tall(0.5 + 80.0 / 300.0, 0.5, 0.0), 1.0, "แกนยาวแนวนอน 90 พิกเซล");
+        assert_eq!(tall(0.5 + 80.0 / 300.0, 0.5, 90.0), 0.0, "หมุนแล้วแกนนอนเหลือ 40 พิกเซล");
+        assert_eq!(tall(0.5, 0.5 + 80.0 / 200.0, 90.0), 1.0);
+    }
+
+    #[test]
+    fn a_radial_mask_stays_on_the_photo_when_it_is_turned() {
+        // วงกลมมุมซ้ายบนของภาพเดิม · หมุน 90° ตามเข็ม → มุมขวาบนของภาพที่แต่ง
+        let (w, h) = (60usize, 40usize);
+        let s = EditSettings { rotate: 90, ..Default::default() };
+        let g = Geometry::new(w as u32, h as u32, &s);
+        let mut out = RgbImage::from_pixel(h as u32, w as u32, image::Rgb([100, 100, 100]));
+        let mask = Mask {
+            id: "r".into(),
+            area: Area::Radial { center: [0.15, 0.2], radius: [0.1, 0.15], angle: 0.0, feather: 0.0 },
+            adjust: brighter(),
+            amount: 100.0,
+            invert: false,
+        };
+        apply(&mut out, h, w, 3, &g, &[mask]);
+        assert!(out.get_pixel(31, 9).0[1] > 125, "มุมขวาบน (+1 EV: 100 → ราว 138): {:?}", out.get_pixel(31, 9));
+        assert_eq!(out.get_pixel(5, 50).0, [100, 100, 100], "มุมซ้ายล่างไม่เปลี่ยน");
+    }
+
+    #[test]
     fn validation_rejects_bad_masks() {
         let ok = face_mask(vec![[0.1, 0.1, 0.2, 0.2]], true, brighter());
         assert!(validate(std::slice::from_ref(&ok)).is_ok());
         assert!(validate(&[Mask { amount: 120.0, ..ok.clone() }]).is_err());
         assert!(validate(&[face_mask(vec![[0.1, 0.1, -0.2, 0.2]], true, brighter())]).is_err());
         assert!(validate(&[face_mask(vec![[f64::NAN, 0.1, 0.2, 0.2]], true, brighter())]).is_err());
-        assert!(validate(&vec![ok; MAX_MASKS + 1]).is_err());
+        assert!(validate(&vec![ok.clone(); MAX_MASKS + 1]).is_err());
+        let with = |area: Area| Mask { area, ..ok.clone() };
+        assert!(validate(&[with(Area::Linear { full: [0.5, 0.2], zero: [0.5, 0.6] })]).is_ok());
+        assert!(validate(&[with(Area::Linear { full: [0.5, 0.2], zero: [0.5, 0.2] })]).is_err(), "จุดเดียวกัน");
+        let radial =
+            |radius: [f64; 2], feather: f64| with(Area::Radial { center: [0.5, 0.5], radius, angle: 30.0, feather });
+        assert!(validate(&[radial([0.2, 0.3], 50.0)]).is_ok());
+        assert!(validate(&[radial([0.0, 0.3], 50.0)]).is_err());
+        assert!(validate(&[radial([0.2, 0.3], 120.0)]).is_err());
     }
 
     #[test]
