@@ -360,10 +360,19 @@ enum Command {
     SuggestComposition(crate::preview::CompositionRequest),
     /// Mask ตัวคน (DECISIONS ข้อ 40)
     GetSubjectStatus {},
-    InstallSubjectModel {},
+    /// `fill` = ตัวเติมฉากหลังของตัวผอมด้วย (DECISIONS ข้อ 41)
+    InstallSubjectModel {
+        #[serde(default)]
+        fill: bool,
+    },
     #[serde(rename_all = "camelCase")]
     PrepareSubject {
         photo_id: String,
+        /// เติมฉากหลังของตัวผอมด้วย จากภาพตั้งต้นของการแต่ง (`from_raw` = ภาพจาก RAW คู่)
+        #[serde(default)]
+        fill: bool,
+        #[serde(default)]
+        from_raw: bool,
     },
 }
 
@@ -690,8 +699,10 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         ClearAiPicks { event_id } => ok(serde_json::json!({ "cleared": crate::cull::clear(app, &event_id)? })),
         SuggestComposition(r) => ok(crate::preview::composition(app, &r)?),
         GetSubjectStatus {} => ok(crate::subject::status(app)?),
-        InstallSubjectModel {} => ok(crate::subject::install(app)?),
-        PrepareSubject { photo_id } => ok(crate::subject::prepare_photo(app, &photo_id)?),
+        InstallSubjectModel { fill } => ok(crate::subject::install(app, fill)?),
+        PrepareSubject { photo_id, fill, from_raw } => {
+            ok(crate::subject::prepare_photo(app, &photo_id, fill, from_raw)?)
+        }
     }
 }
 

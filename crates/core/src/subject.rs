@@ -9,6 +9,7 @@
 //! - ไฟล์โมเดลไม่อยู่ในตัวติดตั้ง แอปดาวน์โหลดเมื่อผู้ใช้กดครั้งเดียว แล้วตรวจ SHA-256 ก่อนใช้ (แบบเดียวกับตัววิเคราะห์ใบหน้า)
 //! - คิดทีละรูป (โมเดลใหญ่ ใช้ CPU ทุกแกนราว 7 วินาทีต่อรูป) — รูปอื่นที่ขอพร้อมกันรอคิว
 
+use crate::body::Fill;
 use crate::edit::EditSettings;
 use crate::error::{AppError, Result};
 use crate::jobs::{self, JobCtx, JobSnapshot, Outcome, ACTIVE_STATES};
@@ -39,6 +40,8 @@ pub struct SubjectMap {
     image: Arc<GrayImage>,
     /// กรอบ [x0, y0, x1, y1] (สัดส่วน) ของส่วนที่มีน้ำหนัก — None = ไม่พบตัวคนเลย
     bounds: Option<[f64; 4]>,
+    /// คนแต่ละคนและลำตัว (ตัวผอม) — คิดครั้งแรกที่ใช้
+    people: Arc<std::sync::OnceLock<Vec<crate::body::Person>>>,
 }
 
 impl SubjectMap {
@@ -52,7 +55,12 @@ impl SubjectMap {
         }
         let bounds = (x1 > x0 && y1 > y0)
             .then(|| [x0 as f64 / w as f64, y0 as f64 / h as f64, x1 as f64 / w as f64, y1 as f64 / h as f64]);
-        SubjectMap { image: Arc::new(image), bounds }
+        SubjectMap { image: Arc::new(image), bounds, people: Default::default() }
+    }
+
+    /// คนแต่ละคนในภาพน้ำหนัก (ตัวผอม — [`crate::body`])
+    pub fn people(&self) -> &[crate::body::Person] {
+        self.people.get_or_init(|| crate::body::people(&self.image))
     }
 
     /// น้ำหนัก 0–1 ที่จุด (u, v) บนภาพเดิม (bilinear · นอกภาพ = 0)
@@ -111,70 +119,132 @@ pub struct SubjectModel {
 
 pub type SegmenterFactory = Arc<dyn Fn(&Path) -> Result<Arc<dyn Segmenter>> + Send + Sync>;
 
+/// ตัวเติมฉากหลัง (ตัวผอม — DECISIONS ข้อ 41): เติมส่วนที่ตัวคนบังอยู่ให้เป็นฉากหลัง
+pub trait Inpainter: Send + Sync {
+    /// ด้านของภาพสี่เหลี่ยมจัตุรัสที่ตัวเติมรับ
+    fn side(&self) -> u32;
+    /// เติมช่องของภาพ `side`×`side` (`holes` มากกว่า 127 = ต้องเติม) คืนภาพขนาดเดียวกัน
+    fn inpaint(&self, image: &RgbImage, holes: &GrayImage) -> Result<RgbImage>;
+}
+
+pub type InpainterFactory = Arc<dyn Fn(&Path) -> Result<Arc<dyn Inpainter>> + Send + Sync>;
+
+pub struct FillProvider {
+    pub model: SubjectModel,
+    pub factory: InpainterFactory,
+}
+
 pub struct SubjectProvider {
     pub model: SubjectModel,
     pub factory: SegmenterFactory,
+    /// ตัวเติมฉากหลังของตัวผอม — None = build นี้ทำตัวผอมไม่ได้ (Mask ตัวคนยังใช้ได้)
+    pub fill: Option<FillProvider>,
 }
 
-pub struct SubjectState {
-    provider: Option<SubjectProvider>,
-    unsupported_reason: String,
-    pub model_dir: PathBuf,
-    loaded: Mutex<Option<Arc<dyn Segmenter>>>,
+/// ตัวโหลดโมเดลจากโฟลเดอร์ของมัน
+type Factory<T> = Arc<dyn Fn(&Path) -> Result<Arc<T>> + Send + Sync>;
+
+/// โมเดลหนึ่งตัว: ติดตั้งแล้วหรือยัง + ตัวที่โหลดแล้ว (โหลดครั้งแรกที่ถูกขอ)
+struct Slot<T: ?Sized> {
+    model: Option<SubjectModel>,
+    factory: Option<Factory<T>>,
+    /// ส่วนของ dedup_key ของงานติดตั้ง: subject | fill
+    kind: &'static str,
+    /// ชื่อที่ผู้ใช้เห็น
+    name: &'static str,
+    dir: PathBuf,
+    loaded: Mutex<Option<Arc<T>>>,
     load_error: Mutex<Option<String>>,
-    /// คิดทีละรูป
-    busy: Mutex<()>,
-    recent: Mutex<Vec<(String, SubjectMap)>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-impl SubjectState {
-    pub fn new(provider: Option<SubjectProvider>, unsupported_reason: &str, models_root: &Path) -> SubjectState {
-        let model_dir = match &provider {
-            Some(p) => models_root.join(p.model.id),
-            None => models_root.to_path_buf(),
+impl<T: ?Sized> Slot<T> {
+    fn new(spec: Option<(SubjectModel, Factory<T>)>, kind: &'static str, name: &'static str, root: &Path) -> Slot<T> {
+        let dir = spec.as_ref().map_or_else(|| root.to_path_buf(), |(m, _)| root.join(m.id));
+        let (model, factory) = match spec {
+            Some((m, f)) => (Some(m), Some(f)),
+            None => (None, None),
         };
-        SubjectState {
-            provider,
-            unsupported_reason: unsupported_reason.to_string(),
-            model_dir,
-            loaded: Mutex::new(None),
-            load_error: Mutex::new(None),
-            busy: Mutex::new(()),
-            recent: Mutex::new(Vec::new()),
-        }
-    }
-
-    pub fn model(&self) -> Option<&SubjectModel> {
-        self.provider.as_ref().map(|p| &p.model)
+        Slot { model, factory, kind, name, dir, loaded: Mutex::new(None), load_error: Mutex::new(None) }
     }
 
     fn marker(&self) -> PathBuf {
-        self.model_dir.join("verified")
+        self.dir.join("verified")
     }
 
     /// ไฟล์โมเดลอยู่ครบและผ่านการตรวจ SHA-256 แล้ว
-    pub fn installed(&self) -> bool {
-        self.model().is_some_and(|m| self.marker().is_file() && self.model_dir.join(m.file).is_file())
+    fn installed(&self) -> bool {
+        self.model.as_ref().is_some_and(|m| self.marker().is_file() && self.dir.join(m.file).is_file())
     }
 
-    /// ตัวแยกที่พร้อมใช้ (โหลดโมเดลครั้งแรกที่ถูกขอ) — None เมื่อยังไม่ติดตั้งหรือโหลดไม่ได้
-    pub fn segmenter(&self) -> Option<Arc<dyn Segmenter>> {
-        let provider = self.provider.as_ref()?;
+    /// ตัวที่พร้อมใช้ — None เมื่อยังไม่ติดตั้งหรือโหลดไม่ได้
+    fn get(&self) -> Option<Arc<T>> {
+        let factory = self.factory.as_ref()?;
         if !self.installed() {
             return None;
         }
         let mut loaded = lock(&self.loaded);
         if loaded.is_none() && lock(&self.load_error).is_none() {
-            match (provider.factory)(&self.model_dir) {
+            match factory(&self.dir) {
                 Ok(s) => *loaded = Some(s),
                 Err(e) => *lock(&self.load_error) = Some(e.message),
             }
         }
         loaded.clone()
+    }
+
+    fn dedup_key(&self) -> Option<String> {
+        self.model.as_ref().map(|m| format!("model:{}:{}", self.kind, m.id))
+    }
+}
+
+pub struct SubjectState {
+    segment: Slot<dyn Segmenter>,
+    fill: Slot<dyn Inpainter>,
+    unsupported_reason: String,
+    /// คิดทีละรูป (โมเดลใหญ่ทั้งสองตัวใช้ CPU ทุกแกน)
+    busy: Mutex<()>,
+    recent: Mutex<Vec<(String, SubjectMap)>>,
+    /// ฉากหลังที่เติมแล้ว (ตัวผอม) ตาม revision และภาพตั้งต้น
+    fills: Mutex<Vec<(String, crate::body::Fill)>>,
+}
+
+impl SubjectState {
+    pub fn new(provider: Option<SubjectProvider>, unsupported_reason: &str, models_root: &Path) -> SubjectState {
+        let (segment, fill) = match provider {
+            Some(p) => (Some((p.model, p.factory)), p.fill.map(|f| (f.model, f.factory))),
+            None => (None, None),
+        };
+        SubjectState {
+            segment: Slot::new(segment, "subject", "ตัวแยกตัวคน", models_root),
+            fill: Slot::new(fill, "fill", "ตัวเติมฉากหลัง", models_root),
+            unsupported_reason: unsupported_reason.to_string(),
+            busy: Mutex::new(()),
+            recent: Mutex::new(Vec::new()),
+            fills: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn model(&self) -> Option<&SubjectModel> {
+        self.segment.model.as_ref()
+    }
+
+    /// ไฟล์ตัวแยกตัวคนอยู่ครบและผ่านการตรวจ SHA-256 แล้ว
+    pub fn installed(&self) -> bool {
+        self.segment.installed()
+    }
+
+    /// ตัวแยกที่พร้อมใช้ (โหลดโมเดลครั้งแรกที่ถูกขอ) — None เมื่อยังไม่ติดตั้งหรือโหลดไม่ได้
+    pub fn segmenter(&self) -> Option<Arc<dyn Segmenter>> {
+        self.segment.get()
+    }
+
+    /// ตัวเติมฉากหลังที่พร้อมใช้
+    pub fn inpainter(&self) -> Option<Arc<dyn Inpainter>> {
+        self.fill.get()
     }
 
     fn remember(&self, revision_id: &str, map: &SubjectMap) {
@@ -189,9 +259,10 @@ impl SubjectState {
     }
 }
 
+/// สถานะของโมเดลหนึ่งตัว
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SubjectStatus {
+pub struct ModelStatus {
     /// unsupported | not_installed | installing | ready | failed
     pub state: &'static str,
     pub reason: String,
@@ -202,106 +273,152 @@ pub struct SubjectStatus {
     pub install_job_id: Option<String>,
 }
 
-fn dedup_key(model: &SubjectModel) -> String {
-    format!("model:subject:{}", model.id)
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubjectStatus {
+    /// ตัวแยกตัวคน (Mask ตัวคน และตัวผอม)
+    #[serde(flatten)]
+    pub segment: ModelStatus,
+    /// ตัวเติมฉากหลัง (ตัวผอมใช้ร่วมกับตัวแยกตัวคน)
+    pub fill: ModelStatus,
 }
 
-/// งานติดตั้งของตัวแยกตัวคน (คนละงานกับตัววิเคราะห์ใบหน้า — ชนิดงาน `model` เหมือนกัน แยกด้วย dedup_key)
+/// งานติดตั้งของตัวแยกตัวคน/ตัวเติมฉากหลัง (คนละงานกับตัววิเคราะห์ใบหน้า — ชนิดงาน `model` เหมือนกัน แยกด้วย dedup_key)
 pub(crate) fn is_install_job(dedup_key: Option<&str>) -> bool {
-    dedup_key.is_some_and(|k| k.starts_with("model:subject:"))
+    dedup_key.is_some_and(|k| k.starts_with("model:subject:") || k.starts_with("model:fill:"))
 }
 
-pub fn status(app: &App) -> Result<SubjectStatus> {
-    let state = &app.ai.subject;
-    let mut s = SubjectStatus {
+fn install_job(app: &App, key: &str) -> Result<Option<String>> {
+    Ok(app
+        .db()
+        .query_row(
+            &format!(
+                "SELECT id FROM jobs WHERE kind = 'model' AND dedup_key = ?1 AND state IN {ACTIVE_STATES} LIMIT 1"
+            ),
+            [key],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+fn slot_status<T: ?Sized>(
+    app: &App,
+    slot: &Slot<T>,
+    unsupported: String,
+    ready: &str,
+    offer: &str,
+) -> Result<ModelStatus> {
+    let mut s = ModelStatus {
         state: "unsupported",
-        reason: state.unsupported_reason.clone(),
+        reason: unsupported,
         model_name: String::new(),
         download_size_mb: 0,
         download_source: String::new(),
         license_note: String::new(),
         install_job_id: None,
     };
-    let Some(model) = state.model() else { return Ok(s) };
+    let (Some(model), Some(key)) = (slot.model.as_ref(), slot.dedup_key()) else { return Ok(s) };
     s.model_name = model.display_name.to_string();
     s.download_size_mb = model.download_bytes.div_ceil(1_000_000);
     s.download_source = model.download_source.to_string();
     s.license_note = model.license_note.to_string();
-    if state.installed() {
-        if state.segmenter().is_some() {
+    if slot.installed() {
+        if slot.get().is_some() {
             s.state = "ready";
-            s.reason = "พร้อมหาตัวคนในรูปบนเครื่องนี้".into();
+            s.reason = ready.to_string();
         } else {
             s.state = "failed";
-            let detail = lock(&state.load_error).clone().unwrap_or_default();
-            s.reason = format!("โหลดตัวแยกตัวคนไม่สำเร็จ ({detail})");
+            let detail = lock(&slot.load_error).clone().unwrap_or_default();
+            s.reason = format!("โหลด{}ไม่สำเร็จ ({detail})", slot.name);
         }
         return Ok(s);
     }
-    s.install_job_id = app
-        .db()
-        .query_row(
-            &format!(
-                "SELECT id FROM jobs WHERE kind = 'model' AND dedup_key = ?1 AND state IN {ACTIVE_STATES} LIMIT 1"
-            ),
-            [dedup_key(model)],
-            |r| r.get(0),
-        )
-        .optional()?;
+    s.install_job_id = install_job(app, &key)?;
     if s.install_job_id.is_some() {
         s.state = "installing";
-        s.reason = "กำลังดาวน์โหลดตัวแยกตัวคน แต่งภาพส่วนอื่นได้ระหว่างรอ".into();
+        s.reason = format!("กำลังดาวน์โหลด{} แต่งภาพส่วนอื่นได้ระหว่างรอ", slot.name);
     } else {
         s.state = "not_installed";
-        s.reason = format!(
-            "ดาวน์โหลดตัวแยกตัวคนครั้งเดียว ({} MB) แล้วแอปจะเลือกตัวคนในรูปให้เอง บนเครื่องนี้ ไม่ส่งรูปออกไปไหน",
-            s.download_size_mb
-        );
+        s.reason = format!("ดาวน์โหลด{}ครั้งเดียว ({} MB) {offer} บนเครื่องนี้ ไม่ส่งรูปออกไปไหน", slot.name, s.download_size_mb);
     }
     Ok(s)
 }
 
-/// เริ่มงานดาวน์โหลดตัวแยกตัวคน (หรือคืนงานเดิมที่ยังทำอยู่)
-pub fn install(app: &App) -> Result<JobSnapshot> {
+pub fn status(app: &App) -> Result<SubjectStatus> {
     let state = &app.ai.subject;
-    let model = state.model().ok_or_else(|| AppError::new("MODEL_NOT_READY", state.unsupported_reason.clone()))?;
-    let key = dedup_key(model);
-    let id = {
-        let conn = app.db();
-        let existing: Option<String> = conn
-            .query_row(
-                &format!(
-                    "SELECT id FROM jobs WHERE kind = 'model' AND dedup_key = ?1 AND state IN {ACTIVE_STATES} LIMIT 1"
-                ),
-                [&key],
-                |r| r.get(0),
-            )
-            .optional()?;
-        match existing {
-            Some(id) => {
-                conn.execute(
-                    "UPDATE jobs SET state = 'queued' WHERE id = ?1 AND state IN ('paused', 'blocked')",
-                    [&id],
-                )?;
-                id
-            }
-            None => {
-                let (id, now) = (util::new_id(), util::now());
-                conn.execute(
-                    "INSERT INTO jobs(id, kind, state, stage, title, dedup_key, total, total_known, created_at, updated_at)
-                     VALUES (?1, 'model', 'queued', 'download', ?2, ?3, ?4, 1, ?5, ?5)",
-                    params![
-                        id,
-                        format!("ดาวน์โหลดตัวแยกตัวคน ({})", model.display_name),
-                        key,
-                        model.download_bytes.div_ceil(1_000_000) as i64,
-                        now
-                    ],
-                )?;
-                db::bump_revision(&conn)?;
-                id
-            }
+    let fill_unsupported = if state.model().is_none() {
+        state.unsupported_reason.clone()
+    } else {
+        "build นี้ยังไม่มีตัวเติมฉากหลัง ตัวผอมจึงยังใช้ไม่ได้".to_string()
+    };
+    Ok(SubjectStatus {
+        segment: slot_status(
+            app,
+            &state.segment,
+            state.unsupported_reason.clone(),
+            "พร้อมหาตัวคนในรูปบนเครื่องนี้",
+            "แล้วแอปจะเลือกตัวคนในรูปให้เอง",
+        )?,
+        fill: slot_status(
+            app,
+            &state.fill,
+            fill_unsupported,
+            "พร้อมเติมฉากหลังบนเครื่องนี้",
+            "ใช้กับตัวผอม: เติมฉากหลังตรงที่ตัวคนหดเข้าไป",
+        )?,
+    })
+}
+
+/// เริ่มงานดาวน์โหลดของโมเดลหนึ่งตัว (หรือคืนงานเดิมที่ยังทำอยู่)
+fn start_install<T: ?Sized>(app: &App, slot: &Slot<T>, unsupported: &str) -> Result<String> {
+    let (Some(model), Some(key)) = (slot.model.as_ref(), slot.dedup_key()) else {
+        return Err(AppError::new("MODEL_NOT_READY", unsupported.to_string()));
+    };
+    let conn = app.db();
+    let existing: Option<String> = conn
+        .query_row(
+            &format!(
+                "SELECT id FROM jobs WHERE kind = 'model' AND dedup_key = ?1 AND state IN {ACTIVE_STATES} LIMIT 1"
+            ),
+            [&key],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(id) = existing {
+        conn.execute("UPDATE jobs SET state = 'queued' WHERE id = ?1 AND state IN ('paused', 'blocked')", [&id])?;
+        return Ok(id);
+    }
+    let (id, now) = (util::new_id(), util::now());
+    conn.execute(
+        "INSERT INTO jobs(id, kind, state, stage, title, dedup_key, total, total_known, created_at, updated_at)
+         VALUES (?1, 'model', 'queued', 'download', ?2, ?3, ?4, 1, ?5, ?5)",
+        params![
+            id,
+            format!("ดาวน์โหลด{} ({})", slot.name, model.display_name),
+            key,
+            model.download_bytes.div_ceil(1_000_000) as i64,
+            now
+        ],
+    )?;
+    db::bump_revision(&conn)?;
+    Ok(id)
+}
+
+/// เริ่มงานดาวน์โหลดตัวแยกตัวคน (หรือคืนงานเดิมที่ยังทำอยู่) · `fill` = ตัวเติมฉากหลังของตัวผอมด้วย
+/// (เริ่มดาวน์โหลดตัวแยกตัวคนถ้ายังไม่มี แล้วคืนงานของตัวเติมฉากหลัง)
+pub fn install(app: &App, fill: bool) -> Result<JobSnapshot> {
+    let state = &app.ai.subject;
+    let id = if fill {
+        let fill_unsupported = "build นี้ยังไม่มีตัวเติมฉากหลัง ตัวผอมจึงยังใช้ไม่ได้";
+        if state.fill.model.is_none() {
+            return Err(AppError::new("MODEL_NOT_READY", fill_unsupported));
         }
+        if !state.segment.installed() {
+            start_install(app, &state.segment, &state.unsupported_reason)?;
+        }
+        start_install(app, &state.fill, fill_unsupported)?
+    } else {
+        start_install(app, &state.segment, &state.unsupported_reason)?
     };
     app.worker.wake();
     app.notify(&["jobs"]);
@@ -309,14 +426,22 @@ pub fn install(app: &App) -> Result<JobSnapshot> {
 }
 
 /// งานติดตั้ง: ดาวน์โหลด (ทำต่อจากเดิมได้) → ตรวจ checksum → ย้ายเข้าที่
-pub(crate) fn run_install(ctx: &JobCtx) -> Result<Outcome> {
+pub(crate) fn run_install(ctx: &JobCtx, dedup_key: Option<&str>) -> Result<Outcome> {
     let state = &ctx.ai().subject;
-    let model = state.model().ok_or_else(|| AppError::new("MODEL_NOT_READY", state.unsupported_reason.clone()))?;
-    if state.installed() {
+    if dedup_key.is_some_and(|k| k.starts_with("model:fill:")) {
+        install_slot(ctx, &state.fill, "install_subject_model", "build นี้ยังไม่มีตัวเติมฉากหลัง")
+    } else {
+        install_slot(ctx, &state.segment, "install_subject_model", &state.unsupported_reason)
+    }
+}
+
+fn install_slot<T: ?Sized>(ctx: &JobCtx, slot: &Slot<T>, next: &'static str, unsupported: &str) -> Result<Outcome> {
+    let model = slot.model.as_ref().ok_or_else(|| AppError::new("MODEL_NOT_READY", unsupported.to_string()))?;
+    if slot.installed() {
         return Ok(Outcome::Done);
     }
-    std::fs::create_dir_all(&state.model_dir)?;
-    let part = state.model_dir.join("download.part");
+    std::fs::create_dir_all(&slot.dir)?;
+    let part = slot.dir.join("download.part");
     ctx.stage("download")?;
     if let Some(stopped) =
         crate::ai::download(ctx, &model.download_url, &part, model.download_bytes.div_ceil(1_000_000) as i64)?
@@ -328,15 +453,15 @@ pub(crate) fn run_install(ctx: &JobCtx) -> Result<Outcome> {
         let _ = std::fs::remove_file(&part);
         return Err(AppError::new(
             "MODEL_NOT_READY",
-            "ไฟล์ตัวแยกตัวคนที่ดาวน์โหลดมาไม่ตรงกับรุ่นที่แอปรองรับ (checksum ไม่ตรง) กรุณาดาวน์โหลดใหม่",
+            format!("ไฟล์{}ที่ดาวน์โหลดมาไม่ตรงกับรุ่นที่แอปรองรับ (checksum ไม่ตรง) กรุณาดาวน์โหลดใหม่", slot.name),
         )
         .retryable()
-        .next("install_subject_model"));
+        .next(next));
     }
-    std::fs::rename(&part, state.model_dir.join(model.file))?;
-    std::fs::write(state.marker(), model.sha256)?;
-    *lock(&state.loaded) = None;
-    *lock(&state.load_error) = None;
+    std::fs::rename(&part, slot.dir.join(model.file))?;
+    std::fs::write(slot.marker(), model.sha256)?;
+    *lock(&slot.loaded) = None;
+    *lock(&slot.load_error) = None;
     Ok(Outcome::Done)
 }
 
@@ -408,6 +533,107 @@ pub(crate) fn compute_map(
     Ok(map)
 }
 
+// ───────────────────────── ฉากหลังที่เติมไว้ (ตัวผอม — DECISIONS ข้อ 41) ─────────────────────────
+
+/// ที่เก็บฉากหลังที่เติมแล้ว: ตาม revision และภาพตั้งต้นของการแต่ง (ไฟล์ของรูป หรือภาพจาก RAW คู่ — สีต้องเป็นของภาพที่แต่ง)
+pub fn fill_path(cache_dir: &Path, revision_id: &str, from_raw: bool) -> PathBuf {
+    map_path(cache_dir, revision_id)
+        .with_file_name(format!("{revision_id}-fill{}.png", if from_raw { "-raw" } else { "" }))
+}
+
+fn fill_key(revision_id: &str, from_raw: bool) -> String {
+    format!("{revision_id}:{from_raw}")
+}
+
+/// ฉากหลังที่เติมไว้แล้ว (ในหน่วยความจำ หรือใน cache) — None = ยังไม่เคยเติม
+pub(crate) fn cached_fill(state: &SubjectState, cache_dir: &Path, revision_id: &str, from_raw: bool) -> Option<Fill> {
+    let key = fill_key(revision_id, from_raw);
+    if let Some(fill) = lock(&state.fills).iter().find(|(k, _)| *k == key).map(|(_, f)| f.clone()) {
+        return Some(fill);
+    }
+    let bytes = std::fs::read(fill_path(cache_dir, revision_id, from_raw)).ok()?;
+    let fill = Fill::new(image::load_from_memory(&bytes).ok()?.into_rgba8());
+    remember_fill(state, key, &fill);
+    Some(fill)
+}
+
+fn remember_fill(state: &SubjectState, key: String, fill: &Fill) {
+    let mut fills = lock(&state.fills);
+    fills.retain(|(k, _)| *k != key);
+    fills.insert(0, (key, fill.clone()));
+    fills.truncate(RECENT);
+}
+
+/// ฉากหลังที่เติมแล้วของ revision: ที่เติมไว้แล้ว หรือเติมตอนนี้ (ราว 2 วินาที) · `base` = ภาพตั้งต้นของการแต่ง
+pub(crate) fn compute_fill(
+    state: &SubjectState,
+    cache_dir: &Path,
+    revision_id: &str,
+    from_raw: bool,
+    map: &SubjectMap,
+    base: impl FnOnce() -> Result<RgbImage>,
+) -> Result<Fill> {
+    if let Some(fill) = cached_fill(state, cache_dir, revision_id, from_raw) {
+        return Ok(fill);
+    }
+    let inpainter = state.inpainter().ok_or_else(|| {
+        let message = if state.fill.model.is_none() {
+            "build นี้ยังไม่มีตัวเติมฉากหลัง ตัวผอมจึงยังใช้ไม่ได้".to_string()
+        } else {
+            "รูปนี้ใช้ตัวผอม ต้องติดตั้งตัวเติมฉากหลังก่อน".to_string()
+        };
+        AppError::new("MODEL_NOT_READY", message).next("install_subject_model")
+    })?;
+    let _turn = lock(&state.busy);
+    if let Some(fill) = cached_fill(state, cache_dir, revision_id, from_raw) {
+        return Ok(fill);
+    }
+    let fill = if map.bounds().is_none() {
+        Fill::empty()
+    } else {
+        crate::body::fill(&base()?, map.image(), inpainter.as_ref())?
+    };
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(fill.image().clone())
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(AppError::internal)?;
+    let _ = media::write_cache_file(&fill_path(cache_dir, revision_id, from_raw), &png);
+    remember_fill(state, fill_key(revision_id, from_raw), &fill);
+    Ok(fill)
+}
+
+/// ภาพตั้งต้นของการแต่ง ด้านยาวไม่เกิน [`MAP_EDGE`]: ไฟล์ของรูป (JPEG หรือโทนตั้งต้นของ RAW) หรือภาพจาก RAW คู่ในกรอบของ JPEG
+/// — ภาพเดียวกับที่ตัวอย่างสดและภาพที่บันทึกใช้ ฉากหลังที่เติมจึงสีตรงกัน
+pub(crate) fn base_image(
+    cache_dir: &Path,
+    source: &Path,
+    raw_frame: Option<(&crate::pair::RawBase, &str)>,
+) -> Result<RgbImage> {
+    let bytes = match raw_frame {
+        Some((base, revision_id)) => crate::assets::raw_frame_bytes(cache_dir, base, revision_id)?,
+        None => media::read_file(source).map_err(|_| AppError::source_unavailable())?,
+    };
+    let img = media::decode_upright(&bytes, MAP_EDGE)?;
+    let img = if img.width().max(img.height()) > MAP_EDGE { img.thumbnail(MAP_EDGE, MAP_EDGE) } else { img };
+    Ok(img.into_rgb8())
+}
+
+/// ฉากหลังที่เติมแล้วของรูป: ที่เติมไว้แล้ว หรือเติมตอนนี้ (คิดภาพน้ำหนักก่อนถ้ายังไม่มี)
+pub fn ensure_fill(app: &App, photo_id: &str, from_raw: bool) -> Result<(SubjectMap, Fill)> {
+    let map = ensure(app, photo_id)?;
+    let (revision_id, source) = revision_of(app, photo_id)?;
+    let fill = compute_fill(&app.ai.subject, &app.cache_dir, &revision_id, from_raw, &map, || {
+        if from_raw {
+            crate::pair::ensure_start(app, photo_id)?;
+            let (base, rev) = crate::assets::raw_frame_base(&app.db(), photo_id)?;
+            base_image(&app.cache_dir, &source, Some((&base, &rev)))
+        } else {
+            base_image(&app.cache_dir, &source, None)
+        }
+    })?;
+    Ok((map, fill))
+}
+
 /// ภาพน้ำหนักที่คิดไว้แล้วของรูป (ไม่คิดใหม่) — None = ยังไม่เคยคิด
 pub fn cached(app: &App, photo_id: &str) -> Result<Option<SubjectMap>> {
     let (revision_id, _) = revision_of(app, photo_id)?;
@@ -429,16 +655,36 @@ pub fn attach(settings: &mut EditSettings, map: &SubjectMap) {
     }
 }
 
-/// เตรียมค่าที่แต่งของรูปให้พร้อมสร้างภาพ: แนบภาพน้ำหนักถ้ามี Mask ตัวคน · `compute` = คิดใหม่ได้ถ้ายังไม่เคยคิด
-/// คืน false เมื่อมี Mask ตัวคนแต่ยังไม่มีภาพน้ำหนัก (ภาพที่ได้ยังไม่มีผลของ Mask นั้น — อย่าเก็บลง cache)
+/// แนบสิ่งที่ตัวผอมใช้ (ภาพน้ำหนัก + ฉากหลังที่เติม) ให้รีทัชในค่าที่แต่ง
+pub fn attach_body(settings: &mut EditSettings, map: &SubjectMap, fill: &Fill) {
+    if let Some(r) = settings.retouch.as_mut() {
+        r.plan = crate::body::Attached(Some(crate::body::BodyPlan::new(map.clone(), fill.clone(), &r.faces)));
+    }
+}
+
+/// เตรียมค่าที่แต่งของรูปให้พร้อมสร้างภาพ: แนบภาพน้ำหนักถ้ามี Mask ตัวคน และฉากหลังที่เติมถ้ามีตัวผอม ·
+/// `compute` = คิดใหม่ได้ถ้ายังไม่เคยคิด · คืน false เมื่อยังขาดอย่างใดอย่างหนึ่ง (ภาพที่ได้ยังไม่มีผลของส่วนนั้น — อย่าเก็บลง cache)
 pub(crate) fn prepare(app: &App, photo_id: &str, settings: &mut EditSettings, compute: bool) -> bool {
-    if !settings.has_subject() {
+    let body = settings.has_body();
+    if !settings.has_subject() && !body {
         return true;
     }
     let map = if compute { ensure(app, photo_id).ok() } else { cached(app, photo_id).ok().flatten() };
-    match map {
-        Some(map) => {
-            attach(settings, &map);
+    let Some(map) = map else { return false };
+    attach(settings, &map);
+    if !body {
+        return true;
+    }
+    let fill = if compute {
+        ensure_fill(app, photo_id, settings.from_raw).ok().map(|(_, f)| f)
+    } else {
+        revision_of(app, photo_id)
+            .ok()
+            .and_then(|(rev, _)| cached_fill(&app.ai.subject, &app.cache_dir, &rev, settings.from_raw))
+    };
+    match fill {
+        Some(fill) => {
+            attach_body(settings, &map, &fill);
             true
         }
         None => false,
@@ -452,9 +698,10 @@ pub struct Prepared {
     pub found: bool,
 }
 
-/// คิดภาพน้ำหนักของรูปไว้ก่อน (หน้าแต่งภาพเรียกตอนเพิ่ม Mask ตัวคน หรือเปิดรูปที่มี Mask นี้)
-pub fn prepare_photo(app: &App, photo_id: &str) -> Result<Prepared> {
-    let map = ensure(app, photo_id)?;
+/// คิดภาพน้ำหนักของรูปไว้ก่อน (หน้าแต่งภาพเรียกตอนเพิ่ม Mask ตัวคน หรือเปิดรูปที่มี Mask นี้) · `fill` = เติมฉากหลังของตัวผอมด้วย
+/// จากภาพตั้งต้นของการแต่ง (`from_raw` = ภาพจาก RAW คู่)
+pub fn prepare_photo(app: &App, photo_id: &str, fill: bool, from_raw: bool) -> Result<Prepared> {
+    let map = if fill { ensure_fill(app, photo_id, from_raw)?.0 } else { ensure(app, photo_id)? };
     Ok(Prepared { found: map.bounds().is_some() })
 }
 

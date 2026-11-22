@@ -344,6 +344,9 @@
     const addSubject = await see('mask-add-subject');
     expect(addSubject.disabled, 'ปุ่ม “ตัวคน (AI)” กดไม่ได้เมื่อไม่มีตัวแยกตัวคน');
     expect(text(tid('mask-panel')).includes('ยังไม่มีตัวแยกตัวคน'), 'บอกเหตุที่ใช้ Mask ตัวคนไม่ได้');
+    // ตัวผอม (ข้อ 41): ไม่มีตัวแยกตัวคน → ปุ่มระดับกดไม่ได้ พร้อมเหตุผล
+    await see('body-unsupported', 'เหตุที่ใช้ตัวผอมไม่ได้');
+    expect([...document.querySelectorAll('[data-testid="retouch-body-level"]')].every((b) => b.disabled), 'ปุ่มระดับตัวผอมกดไม่ได้');
     const addFaces = await see('mask-add-faces');
     expect(text(addFaces).includes('2 คน'), `ปุ่มบอกจำนวนใบหน้า (ได้ "${text(addFaces)}")`);
     // แก้มของใบหน้าซ้าย (ใต้ตา) และฉากหลังมุมซ้ายบน

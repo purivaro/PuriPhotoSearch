@@ -9,6 +9,7 @@ pub mod api;
 pub mod assets;
 pub mod assistant;
 pub mod backup;
+pub mod body;
 pub mod catalog;
 pub mod compose;
 pub mod cull;

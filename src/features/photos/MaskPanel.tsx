@@ -11,7 +11,7 @@ import { SliderRow } from './AdjustControls';
 import { maskName } from './editSummary';
 import { MAX_MASKS } from './masks';
 import { COLOR, LIGHT, PRESENCE, SliderGroup } from './SliderGroup';
-import type { SubjectMapState } from './useSubjectMap';
+import { missingForBody, type SubjectMapState } from './useSubjectMap';
 
 // แถบของการปรับเฉพาะส่วน: เฉพาะค่าที่มีความหมายกับบริเวณเล็ก ๆ (จุดขาว/ดำ ความสด เส้นโค้ง ฯลฯ ปรับที่ทั้งภาพ)
 const MASK_LIGHT = LIGHT.filter((s) => ['exposure', 'contrast', 'highlights', 'shadows'].includes(s.key));
@@ -269,19 +269,22 @@ function SubjectInstall({ subject, onCancel }: { subject: SubjectMapState; onCan
   );
 }
 
-/** สถานะของ Mask ตัวคนที่เลือก: กำลังหาตัวคน / ไม่พบ / ต้องดาวน์โหลด / ผิดพลาด */
+/** สถานะของ Mask ตัวคน / ตัวผอมของรูป: กำลังหาตัวคน / ไม่พบ / ต้องดาวน์โหลด / ผิดพลาด */
 export function SubjectProgress({ subject }: { subject: SubjectMapState }) {
+  const status = subject.status;
   switch (subject.phase) {
     case 'preparing':
       return (
         <InlineNotice tone="info" icon={<Spinner className="size-4" />}>
-          <span data-testid="subject-preparing">กำลังหาตัวคนในรูปนี้… ครั้งแรกของแต่ละรูปราว 10 วินาที</span>
+          <span data-testid="subject-preparing">
+            {subject.body ? 'กำลังหาตัวคนและเตรียมฉากหลังของรูปนี้…' : 'กำลังหาตัวคนในรูปนี้…'} ครั้งแรกของแต่ละรูปราว 10 วินาที
+          </span>
         </InlineNotice>
       );
     case 'ready':
       return subject.found === false ? (
         <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />}>
-          <span data-testid="subject-none">ไม่พบตัวคนในรูปนี้ Mask นี้จึงยังไม่มีผล</span>
+          <span data-testid="subject-none">ไม่พบตัวคนในรูปนี้ {subject.body ? 'ตัวผอม' : 'Mask ตัวคน'}จึงยังไม่มีผล</span>
         </InlineNotice>
       ) : null;
     case 'failed':
@@ -298,14 +301,16 @@ export function SubjectProgress({ subject }: { subject: SubjectMapState }) {
           <span data-testid="subject-failed">{subject.error}</span>
         </InlineNotice>
       );
-    case 'needs_model':
-      return subject.status?.state === 'unsupported' ? (
+    case 'needs_model': {
+      const unsupported = status?.state === 'unsupported' ? status : subject.body && status?.fill.state === 'unsupported' ? status.fill : null;
+      const size = subject.body ? missingForBody(status).reduce((sum, m) => sum + m.downloadSizeMb, 0) : (status?.downloadSizeMb ?? 0);
+      return unsupported ? (
         <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />}>
-          {subject.status.reason}
+          {unsupported.reason}
         </InlineNotice>
       ) : subject.installing ? (
         <InlineNotice tone="info" icon={<Spinner className="size-4" />}>
-          กำลังดาวน์โหลดตัวแยกตัวคน — เห็นผลเมื่อดาวน์โหลดเสร็จ
+          {subject.body ? 'กำลังดาวน์โหลดตัวแยกตัวคนและตัวเติมฉากหลัง' : 'กำลังดาวน์โหลดตัวแยกตัวคน'} — เห็นผลเมื่อดาวน์โหลดเสร็จ
         </InlineNotice>
       ) : (
         <InlineNotice
@@ -313,13 +318,18 @@ export function SubjectProgress({ subject }: { subject: SubjectMapState }) {
           icon={<TriangleAlert aria-hidden />}
           action={
             <Button size="sm" icon={<Download className="size-4" aria-hidden />} onClick={subject.install} data-testid="subject-needs-install">
-              ดาวน์โหลด ({formatCount(subject.status?.downloadSizeMb ?? 0)} MB)
+              ดาวน์โหลด ({formatCount(size)} MB)
             </Button>
           }
         >
-          <span data-testid="subject-needs-model">รูปนี้มี Mask ตัวคน ต้องดาวน์โหลดตัวแยกตัวคนก่อนจึงจะเห็นผล (ครั้งเดียว)</span>
+          <span data-testid="subject-needs-model">
+            {subject.body
+              ? 'รูปนี้ใช้ตัวผอม ต้องดาวน์โหลดตัวแยกตัวคนและตัวเติมฉากหลังก่อนจึงจะเห็นผล (ครั้งเดียว)'
+              : 'รูปนี้มี Mask ตัวคน ต้องดาวน์โหลดตัวแยกตัวคนก่อนจึงจะเห็นผล (ครั้งเดียว)'}
+          </span>
         </InlineNotice>
       );
+    }
     default:
       return null;
   }

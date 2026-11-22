@@ -165,7 +165,7 @@ fn view_geometry(src: (u32, u32), s: &EditSettings, view: Rect) -> Geometry {
 }
 
 /// สุ่มส่วนที่เห็นของภาพต้นทางลง canvas `w`×`h` (RGBA) แบบ bilinear จากระดับย่อที่ใกล้ขนาด canvas
-/// · หน้าเรียว/หน้าผอมของ `retouch` ใส่ตอนสุ่ม (ภาพที่บันทึกทำบนภาพเดิมก่อนตัด/หมุน — จุดต้นทางเดียวกัน)
+/// · หน้าเรียว/หน้าผอมและตัวผอมของ `retouch` ใส่ตอนสุ่ม (ภาพที่บันทึกทำบนภาพเดิมก่อนตัด/หมุน — จุดต้นทางเดียวกัน)
 fn sample(src: &Source, g: &Geometry, w: usize, h: usize, retouch: Option<&crate::retouch::Retouch>) -> Vec<u8> {
     let (sw, sh) = src.size();
     let aspect = sw as f64 / sh as f64;
@@ -181,21 +181,32 @@ fn sample(src: &Source, g: &Geometry, w: usize, h: usize, retouch: Option<&crate
     let img = src.level(level);
     let (lw, lh) = img.dimensions();
     let raw = img.as_raw();
+    let fetch = |u: f64, v: f64| -> [f64; 3] {
+        let fx = (u * lw as f64 - 0.5).clamp(0.0, (lw - 1) as f64);
+        let fy = (v * lh as f64 - 0.5).clamp(0.0, (lh - 1) as f64);
+        let (x0, y0) = (fx.floor() as u32, fy.floor() as u32);
+        let (x1, y1) = ((x0 + 1).min(lw - 1), (y0 + 1).min(lh - 1));
+        let (tx, ty) = (fx - x0 as f64, fy - y0 as f64);
+        let px = |xx: u32, yy: u32, c: usize| raw[((yy * lw + xx) * 3) as usize + c] as f64;
+        std::array::from_fn(|c| {
+            let top = px(x0, y0, c) * (1.0 - tx) + px(x1, y0, c) * tx;
+            let bottom = px(x0, y1, c) * (1.0 - tx) + px(x1, y1, c) * tx;
+            top * (1.0 - ty) + bottom * ty
+        })
+    };
+    // ตัวผอม (DECISIONS ข้อ 41) ใช้ได้เมื่อแนบภาพน้ำหนักและฉากหลังที่เติมไว้แล้ว
+    let body = retouch.and_then(|r| r.plan.0.as_ref().filter(|_| r.body > 0.0).map(|p| (r.body, p)));
     let mut out = vec![0u8; w * h * 4];
     out.par_chunks_mut(w * 4).enumerate().for_each(|(y, line)| {
         for x in 0..w {
             let (u, v) = g.inverse((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
             let (u, v) = retouch.map_or((u, v), |r| r.source_point(u, v, aspect));
-            let fx = (u * lw as f64 - 0.5).clamp(0.0, (lw - 1) as f64);
-            let fy = (v * lh as f64 - 0.5).clamp(0.0, (lh - 1) as f64);
-            let (x0, y0) = (fx.floor() as u32, fy.floor() as u32);
-            let (x1, y1) = ((x0 + 1).min(lw - 1), (y0 + 1).min(lh - 1));
-            let (tx, ty) = (fx - x0 as f64, fy - y0 as f64);
-            let px = |xx: u32, yy: u32, c: usize| raw[((yy * lw + xx) * 3) as usize + c] as f64;
+            let value = match body {
+                Some((amount, plan)) => plan.sample(amount, u, v, crate::body::Space::Bytes, 255.0, fetch),
+                None => fetch(u, v),
+            };
             for c in 0..3 {
-                let top = px(x0, y0, c) * (1.0 - tx) + px(x1, y0, c) * tx;
-                let bottom = px(x0, y1, c) * (1.0 - tx) + px(x1, y1, c) * tx;
-                line[x * 4 + c] = (top * (1.0 - ty) + bottom * ty).round().clamp(0.0, 255.0) as u8;
+                line[x * 4 + c] = value[c].round().clamp(0.0, 255.0) as u8;
             }
             line[x * 4 + 3] = 255;
         }
@@ -226,12 +237,12 @@ pub fn render(app: &App, req: &Request) -> Result<Vec<u8>> {
     check_view(&req.view)?;
     req.settings.validate()?;
     let src = source(app, &req.photo_id, req.source)?;
-    if req.settings.has_subject() {
-        // Mask ตัวคน: ใช้ภาพน้ำหนักที่คิดไว้แล้ว (หน้าแต่งภาพสั่งคิดก่อนด้วย prepare_subject) — ยังไม่มี = ยังไม่เห็นผลของ Mask นั้น
+    if req.settings.has_subject() || req.settings.has_body() {
+        // Mask ตัวคน / ตัวผอม: ใช้ภาพน้ำหนักและฉากหลังที่คิดไว้แล้ว (หน้าแต่งภาพสั่งคิดก่อนด้วย prepare_subject)
+        // — ยังไม่มี = ยังไม่เห็นผลของส่วนนั้น · ฉากหลังที่เติมเป็นของภาพต้นทางที่ใช้อยู่ (ไฟล์ของรูป หรือภาพจาก RAW คู่)
         let mut req = req.clone();
-        if let Some(map) = crate::subject::cached(app, &req.photo_id)? {
-            crate::subject::attach(&mut req.settings, &map);
-        }
+        req.settings.from_raw = req.source == SourceKind::Rawframe;
+        crate::subject::prepare(app, &req.photo_id, &mut req.settings, false);
         return Ok(render_from(&src, &req));
     }
     Ok(render_from(&src, req))

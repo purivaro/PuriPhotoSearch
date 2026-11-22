@@ -95,6 +95,11 @@ impl EditSettings {
         self.masks.iter().any(crate::masks::Mask::is_active)
     }
 
+    /// มีตัวผอม — ต้องแนบภาพน้ำหนักและฉากหลังที่เติมของรูปก่อนสร้างภาพ ([`crate::subject::prepare`])
+    pub fn has_body(&self) -> bool {
+        self.retouch.as_ref().is_some_and(|r| r.body > 0.0)
+    }
+
     /// มี Mask ตัวคน (AI) — ต้องแนบภาพน้ำหนักของรูปก่อนสร้างภาพ ([`crate::subject::prepare`])
     pub fn has_subject(&self) -> bool {
         self.masks.iter().any(|m| matches!(m.area, crate::masks::Area::Subject { .. }))

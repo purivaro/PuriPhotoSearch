@@ -535,7 +535,8 @@ export type MaskArea =
   | { kind: 'subject' };
 
 /** สถานะของตัวแยกตัวคน (Mask ตัวคน) */
-export interface SubjectStatus {
+/** สถานะของโมเดลหนึ่งตัวที่ดาวน์โหลดในแอป */
+export interface ModelStatus {
   state: 'unsupported' | 'not_installed' | 'installing' | 'ready' | 'failed';
   reason: string;
   modelName: string;
@@ -543,6 +544,11 @@ export interface SubjectStatus {
   downloadSource: string;
   licenseNote: string;
   installJobId: Id | null;
+}
+
+/** ตัวแยกตัวคน (Mask ตัวคน และตัวผอม) + ตัวเติมฉากหลังของตัวผอม (DECISIONS ข้อ 41) */
+export interface SubjectStatus extends ModelStatus {
+  fill: ModelStatus;
 }
 
 export interface EditMask {
@@ -614,6 +620,8 @@ export interface Retouch {
   slim: number;
   /** หน้าผอม (แก้ม) */
   thin: number;
+  /** ตัวผอม (DECISIONS ข้อ 41) — ไม่ต้องมีกรอบใบหน้า · ใช้ตัวแยกตัวคนและตัวเติมฉากหลัง (ไม่มีในการแต่งรุ่นก่อน) */
+  body?: number;
 }
 
 /** ส่วนของการแต่งที่จะวางให้รูปอื่น */
@@ -1303,9 +1311,13 @@ export interface Commands {
   suggest_composition: [{ photoId: Id; source: PreviewSource; settings: EditSettings; ratio?: number | null }, Composition];
   /** Mask ตัวคน (DECISIONS ข้อ 40): สถานะของตัวแยกตัวคน */
   get_subject_status: [Record<string, never>, SubjectStatus];
-  install_subject_model: [Record<string, never>, JobSnapshot];
-  /** คิดภาพน้ำหนักตัวคนของรูปไว้ก่อน (ราว 7 วินาทีครั้งแรก) — ยังไม่ติดตั้ง = MODEL_NOT_READY */
-  prepare_subject: [{ photoId: Id }, { found: boolean }];
+  /** `fill` = ตัวเติมฉากหลังของตัวผอมด้วย (ดาวน์โหลดตัวแยกตัวคนด้วยถ้ายังไม่มี) */
+  install_subject_model: [{ fill?: boolean }, JobSnapshot];
+  /**
+   * คิดภาพน้ำหนักตัวคนของรูปไว้ก่อน (ราว 7 วินาทีครั้งแรก) · `fill` = เติมฉากหลังของตัวผอมด้วย จากภาพตั้งต้นของการแต่ง
+   * (`fromRaw` = ภาพจาก RAW คู่) — ยังไม่ติดตั้ง = MODEL_NOT_READY
+   */
+  prepare_subject: [{ photoId: Id; fill?: boolean; fromRaw?: boolean }, { found: boolean }];
   /** ย้อน "ไม่ใช่บุคคลนี้": ใบหน้ากลับไปให้ AI จัดได้ตามเดิม */
   restore_suggestions: [{ faceIds: Id[]; personId: Id }, { dataRevision: number }];
 }

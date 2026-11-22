@@ -250,7 +250,48 @@ fn retouch(rng: &mut Rng, masks: &[Mask]) -> Option<Retouch> {
         4 => 80.0,
         _ => rng.int(1, 100) as f64,
     };
-    Some(Retouch { faces, smooth: amount(rng), wrinkles: amount(rng), slim: amount(rng), thin: amount(rng) })
+    Some(Retouch {
+        faces,
+        smooth: amount(rng),
+        wrinkles: amount(rng),
+        slim: amount(rng),
+        thin: amount(rng),
+        ..Default::default()
+    })
+}
+
+/// ตัวผอม (DECISIONS ข้อ 41): ภาพน้ำหนักเป็นคนหนึ่งคน (หัวกลม + ลำตัว) ขนาดไม่เท่าภาพ + ฉากหลังที่เติมแบบสุ่ม (แนบไว้แล้ว)
+fn body(rng: &mut Rng, s: &mut EditSettings) {
+    if !rng.chance(0.3) {
+        return;
+    }
+    let (mw, mh) = (rng.int(20, 60), rng.int(20, 60));
+    let (cx, half, top) = (rng.range(0.3, 0.7), rng.range(0.08, 0.25), rng.range(0.05, 0.3));
+    let map = image::GrayImage::from_fn(mw, mh, |x, y| {
+        let (u, v) = ((x as f64 + 0.5) / mw as f64, (y as f64 + 0.5) / mh as f64);
+        let head = ((u - cx).powi(2) + (v - top - 0.08).powi(2)).sqrt() < 0.08;
+        let torso = (u - cx).abs() < half && v > top + 0.15;
+        image::Luma([if head || torso {
+            255
+        } else if (u - cx).abs() < half + 0.03 && v > top + 0.15 {
+            90
+        } else {
+            0
+        }])
+    });
+    let fill = image::RgbaImage::from_fn(mw, mh, |x, y| {
+        let on = map.get_pixel(x, y)[0] > 8;
+        image::Rgba([(x * 7 % 256) as u8, (y * 11 % 256) as u8, 120, if on { 255 } else { 0 }])
+    });
+    let faces = s.retouch.as_ref().map(|r| r.faces.clone()).unwrap_or_default();
+    let plan = puri_core::body::BodyPlan::new(
+        puri_core::subject::SubjectMap::new(map),
+        puri_core::body::Fill::new(fill),
+        &faces,
+    );
+    let r = s.retouch.get_or_insert_with(Default::default);
+    r.body = if rng.chance(0.5) { 80.0 } else { rng.int(1, 100) as f64 };
+    r.plan = puri_core::body::Attached(Some(plan));
 }
 
 /// หมุนทีละ 90° (ตัด/ปรับเอียงต้องสุ่มภาพใหม่ — ตัวอย่างกับไฟล์จึงต่างกันตามวิธีย่อภาพ ไม่ใช่สูตร)
@@ -362,6 +403,9 @@ fn features(s: &EditSettings, profile: Profile) -> Vec<&'static str> {
     if s.masks.iter().any(Mask::is_active) {
         f.push("masks");
     }
+    if s.retouch.as_ref().is_some_and(|r| r.body > 0.0) {
+        f.push("body");
+    }
     if s.retouch.as_ref().is_some_and(Retouch::is_active) {
         f.push("retouch");
     }
@@ -382,6 +426,8 @@ fn live_preview_matches_the_saved_image_pixel_for_pixel() {
         // รีทัชใช้ลำดับสุ่มของตัวเอง (ชุดเดิมของค่าอื่นไม่เปลี่ยน)
         let mut rr = Rng(SEED ^ 0xA5A5_5A5A_u64.wrapping_add(id.wrapping_mul(7919)));
         s.retouch = retouch(&mut rr, &s.masks);
+        let mut rb = Rng(SEED ^ 0x5EED_B0D1_u64.wrapping_add(id.wrapping_mul(104_729)));
+        body(&mut rb, &mut s);
         let profile = if rng.chance(0.2) { Profile::Raw } else { Profile::Display };
         let (w, h) = (rng.int(16, 64), rng.int(16, 48));
         // ใบหน้าบนภาพต้นทาง (พิกเซล) ตรงกับกรอบของ Mask

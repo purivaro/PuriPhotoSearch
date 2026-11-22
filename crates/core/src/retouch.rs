@@ -61,12 +61,18 @@ pub struct Retouch {
     pub slim: f64,
     /// หน้าผอม (แก้ม) 0–100
     pub thin: f64,
+    /// ตัวผอม 0–100 (DECISIONS ข้อ 41 — ใช้ตัวแยกตัวคนและตัวเติมฉากหลัง ไม่ต้องมีกรอบใบหน้า)
+    pub body: f64,
+    /// ภาพน้ำหนักและฉากหลังที่เติมของรูป แนบตอนสร้างภาพ ([`crate::subject::attach_body`]) — ไม่ใช่ส่วนของค่าที่แต่ง ไม่ถูกเก็บ
+    #[serde(skip)]
+    pub plan: crate::body::Attached,
 }
 
 impl Retouch {
     /// มีผลกับภาพ
     pub fn is_active(&self) -> bool {
-        !self.faces.is_empty() && (self.smooth > 0.0 || self.wrinkles > 0.0 || self.slim > 0.0 || self.thin > 0.0)
+        (!self.faces.is_empty() && (self.smooth > 0.0 || self.wrinkles > 0.0 || self.slim > 0.0 || self.thin > 0.0))
+            || self.body > 0.0
     }
 
     fn warps(&self) -> bool {
@@ -89,7 +95,7 @@ impl Retouch {
                     && (-1.0..=2.0).contains(&b[0])
                     && (-1.0..=2.0).contains(&b[1])
             });
-        if boxes && [self.smooth, self.wrinkles, self.slim, self.thin].into_iter().all(amount) {
+        if boxes && [self.smooth, self.wrinkles, self.slim, self.thin, self.body].into_iter().all(amount) {
             Ok(())
         } else {
             Err(AppError::invalid("ค่าของรีทัชใบหน้าไม่ถูกต้อง"))
@@ -98,7 +104,7 @@ impl Retouch {
 
     /// รีทัชเดียวกันสำหรับรูปอื่น (วางการแต่ง): ใช้ใบหน้าของรูปนั้น
     pub fn on_faces(&self, faces: &[[f64; 4]]) -> Retouch {
-        Retouch { faces: faces.to_vec(), ..self.clone() }
+        Retouch { faces: faces.to_vec(), plan: Default::default(), ..self.clone() }
     }
 
     /// จุดบนภาพเดิม (สัดส่วน) ที่ภาพหลังหน้าเรียว/หน้าผอมนำสีมา — `aspect` = กว้าง/สูงของภาพเดิม
@@ -143,8 +149,16 @@ fn band(t: f64, (start, peak, end): (f64, f64, f64)) -> f64 {
     }
 }
 
-/// หน้าเรียว/หน้าผอมบนภาพเดิม (ขั้นแรกของภาพที่บันทึก ก่อนตัด/หมุน) — ไม่มีผล = ภาพเดิม
+/// ตัวผอม แล้วหน้าเรียว/หน้าผอม บนภาพเดิม (ขั้นแรกของภาพที่บันทึก ก่อนตัด/หมุน) — ไม่มีผล = ภาพเดิม
+/// · ภาพทศนิยมคือแสงเชิงเส้นของ RAW ([`crate::body::Space::RawLinear`])
 pub(crate) fn warp_image(img: DynamicImage, retouch: Option<&Retouch>) -> DynamicImage {
+    // ตัวผอม: รอบเดียวกับหน้าเรียว ลำดับเดียวกับตัวอย่างสด (จุดของหน้าเรียว → ตัวผอมที่จุดนั้น) ได้ภาพเดียวกันทุกพิกเซล
+    if let Some(r) = retouch {
+        if let Some(plan) = r.plan.0.as_ref().filter(|_| r.body > 0.0) {
+            let aspect = img.width() as f64 / img.height() as f64;
+            return crate::body::apply(img, r.body, plan, |u, v| r.source_point(u, v, aspect));
+        }
+    }
     let Some(r) = retouch.filter(|r| r.warps()) else { return img };
     match img {
         DynamicImage::ImageRgb8(src) => DynamicImage::ImageRgb8(warp(&src, r)),
@@ -250,7 +264,7 @@ mod tests {
     use image::RgbImage;
 
     fn face(level: f64) -> Retouch {
-        Retouch { faces: vec![[0.3, 0.2, 0.4, 0.6]], smooth: level, wrinkles: level, slim: 0.0, thin: 0.0 }
+        Retouch { faces: vec![[0.3, 0.2, 0.4, 0.6]], smooth: level, wrinkles: level, ..Default::default() }
     }
 
     /// ภาพ 200×200: ฉากเทา + "หน้า" สีผิวมีลายละเอียด (รูขุมขน ±6) และร่องเข้ม (ริ้วรอย) กับตาสีเข้มขอบชัด
@@ -308,7 +322,7 @@ mod tests {
 
     #[test]
     fn slimming_pulls_the_jaw_and_cheeks_in_and_leaves_the_rest() {
-        let r = Retouch { faces: vec![[0.3, 0.2, 0.4, 0.6]], smooth: 0.0, wrinkles: 0.0, slim: 80.0, thin: 80.0 };
+        let r = Retouch { faces: vec![[0.3, 0.2, 0.4, 0.6]], slim: 80.0, thin: 80.0, ..Default::default() };
         // จุดที่ขอบกรามซ้ายนำสีมาจากด้านนอก (ขอบหน้าจึงขยับเข้า) · กลางหน้าและฉากไกล ๆ อยู่ที่เดิม
         let (u, v) = (0.3 + 0.4 * 0.12, 0.2 + 0.6 * 0.78);
         let (su, _) = r.source_point(u, v, 1.0);

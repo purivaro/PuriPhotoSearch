@@ -738,12 +738,27 @@ fn develop_framed(raw_bytes: &[u8], base: &RawBase, s: &EditSettings, max_edge: 
     let aspect = base.jpeg.0 as f64 / base.jpeg.1.max(1) as f64;
     // แก้เลนส์: กรอบของ JPEG อยู่บนภาพที่แก้แล้ว → จุดเดียวกันบนภาพจากเซนเซอร์ (DECISIONS ข้อ 34)
     let lens = info.lens.filter(|_| base.lens);
-    let framed: Linear = sample(&lin, sw, sh, |a, b| {
+    let point = |a: f64, b: f64| {
         let (u, v) = g.inverse(a, b);
-        let (u, v) = s.retouch.as_ref().map_or((u, v), |r| r.source_point(u, v, aspect));
+        s.retouch.as_ref().map_or((u, v), |r| r.source_point(u, v, aspect))
+    };
+    let to_raw = |u: f64, v: f64| {
         let (x, y) = base.frame.to_raw(u, v, upright, o);
         lens.as_ref().map_or((x, y), |l| l.source_point(x, y, true))
-    });
+    };
+    // ตัวผอม (DECISIONS ข้อ 41): บนกรอบของ JPEG เหมือนหน้าเรียว — ฉากหลังที่เติมมาจากภาพจาก RAW โทนตั้งต้น แปลงกลับเป็นแสงเชิงเส้น
+    let body = s.retouch.as_ref().and_then(|r| r.plan.0.as_ref().filter(|_| r.body > 0.0).map(|p| (r.body, p)));
+    let framed: Linear = match body {
+        None => sample(&lin, sw, sh, |a, b| {
+            let (u, v) = point(a, b);
+            to_raw(u, v)
+        }),
+        Some((amount, plan)) => Linear::from_fn(sw, sh, |i, j| {
+            let (u, v) = point((i as f64 + 0.5) / sw as f64, (j as f64 + 0.5) / sh as f64);
+            let fetch = |u: f64, v: f64| bilinear(&lin, to_raw(u, v)).map(f64::from);
+            Rgb(plan.sample(amount, u, v, crate::body::Space::RawLinear, 1.0, fetch).map(|c| c as f32))
+        }),
+    };
     Ok(if (sw, sh) == (tw, th) {
         framed
     } else {
@@ -854,20 +869,20 @@ fn is_srgb(jpeg: &[u8]) -> bool {
 
 /// ทุกพิกเซลของภาพผลย้อนไปหาจุดบน `src` ด้วย `map` (สัดส่วน → สัดส่วน) แล้วผสมสี่พิกเซลรอบ ๆ (bilinear)
 fn sample(src: &Linear, w: u32, h: u32, map: impl Fn(f64, f64) -> (f64, f64)) -> Linear {
+    ImageBuffer::from_fn(w, h, |i, j| Rgb(bilinear(src, map((i as f64 + 0.5) / w as f64, (j as f64 + 0.5) / h as f64))))
+}
+
+/// สีของภาพที่จุด (u, v) (สัดส่วน) แบบ bilinear
+fn bilinear(src: &Linear, (u, v): (f64, f64)) -> [f32; 3] {
     let (sw, sh) = (src.width() as f64, src.height() as f64);
     let (max_x, max_y) = (src.width() - 1, src.height() - 1);
-    ImageBuffer::from_fn(w, h, |i, j| {
-        let (u, v) = map((i as f64 + 0.5) / w as f64, (j as f64 + 0.5) / h as f64);
-        let (x, y) = ((u * sw - 0.5).clamp(0.0, max_x as f64), (v * sh - 0.5).clamp(0.0, max_y as f64));
-        let (x0, y0) = (x.floor() as u32, y.floor() as u32);
-        let (x1, y1) = ((x0 + 1).min(max_x), (y0 + 1).min(max_y));
-        let (fx, fy) = ((x - x0 as f64) as f32, (y - y0 as f64) as f32);
-        let (a, b, c, d) =
-            (src.get_pixel(x0, y0).0, src.get_pixel(x1, y0).0, src.get_pixel(x0, y1).0, src.get_pixel(x1, y1).0);
-        Rgb(std::array::from_fn(|k| {
-            (a[k] * (1.0 - fx) + b[k] * fx) * (1.0 - fy) + (c[k] * (1.0 - fx) + d[k] * fx) * fy
-        }))
-    })
+    let (x, y) = ((u * sw - 0.5).clamp(0.0, max_x as f64), (v * sh - 0.5).clamp(0.0, max_y as f64));
+    let (x0, y0) = (x.floor() as u32, y.floor() as u32);
+    let (x1, y1) = ((x0 + 1).min(max_x), (y0 + 1).min(max_y));
+    let (fx, fy) = ((x - x0 as f64) as f32, (y - y0 as f64) as f32);
+    let (a, b, c, d) =
+        (src.get_pixel(x0, y0).0, src.get_pixel(x1, y0).0, src.get_pixel(x0, y1).0, src.get_pixel(x1, y1).0);
+    std::array::from_fn(|k| (a[k] * (1.0 - fx) + b[k] * fx) * (1.0 - fy) + (c[k] * (1.0 - fx) + d[k] * fx) * fy)
 }
 
 #[cfg(test)]
