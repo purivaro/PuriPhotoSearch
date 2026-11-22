@@ -24,6 +24,13 @@ pub struct FakeSegmenter;
 impl puri_core::subject::Segmenter for FakeSegmenter {
     fn segment(&self, image: &image::RgbImage) -> Result<image::GrayImage, AppError> {
         let w = image.width();
+        // ภาพที่มีตัวคนสีแดงสด (เทสต์ตัวผอม): ตัวคนคือส่วนที่เป็นสีแดง · ภาพอื่น: ครึ่งขวาของภาพ
+        let person = |p: &image::Rgb<u8>| p[0] > 170 && p[1] < 90 && p[2] < 90;
+        if image.pixels().filter(|p| person(p)).count() > (image.len() / 3) / 50 {
+            return Ok(image::GrayImage::from_fn(w, image.height(), |x, y| {
+                image::Luma([if person(image.get_pixel(x, y)) { 255 } else { 0 }])
+            }));
+        }
         Ok(image::GrayImage::from_fn(w, image.height(), |x, _| image::Luma([if x >= w / 2 { 255 } else { 0 }])))
     }
 }
@@ -44,6 +51,40 @@ fn fake_subject(base: &Path) -> puri_core::subject::SubjectProvider {
             license_note: "ใช้ในเทสต์เท่านั้น",
         },
         factory: Arc::new(|_| Ok(Arc::new(FakeSegmenter) as Arc<dyn puri_core::subject::Segmenter>)),
+        fill: Some(puri_core::subject::FillProvider {
+            model: puri_core::subject::SubjectModel {
+                id: "fake-fill",
+                display_name: "ตัวเติมทดสอบ",
+                file: "fill.onnx",
+                sha256: sha(FAKE_FILL_MODEL),
+                download_url: file_url(&base.join("model-source/fill.onnx")),
+                download_bytes: 1_000_000,
+                download_source: "โฟลเดอร์ทดสอบ",
+                license_note: "ใช้ในเทสต์เท่านั้น",
+            },
+            factory: Arc::new(|_| Ok(Arc::new(FakeInpainter) as Arc<dyn puri_core::subject::Inpainter>)),
+        }),
+    }
+}
+
+pub const FAKE_FILL_MODEL: &[u8] = b"fake fill weights";
+
+/// ตัวเติมจำลอง: ช่องเป็นสีฟ้าล้วน (40, 120, 200)
+pub struct FakeInpainter;
+
+impl puri_core::subject::Inpainter for FakeInpainter {
+    fn side(&self) -> u32 {
+        64
+    }
+
+    fn inpaint(&self, image: &image::RgbImage, holes: &image::GrayImage) -> Result<image::RgbImage, AppError> {
+        Ok(image::RgbImage::from_fn(64, 64, |x, y| {
+            if holes.get_pixel(x, y)[0] > 127 {
+                image::Rgb([40, 120, 200])
+            } else {
+                *image.get_pixel(x, y)
+            }
+        }))
     }
 }
 
@@ -187,6 +228,7 @@ impl Lib {
             let dir = tmp.path().join("model-source");
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("subject.onnx"), FAKE_SUBJECT_MODEL).unwrap();
+            std::fs::write(dir.join("fill.onnx"), FAKE_FILL_MODEL).unwrap();
         }
         let app = open(tmp.path(), false, true);
         Lib { tmp, app, ai: false, subject: true }

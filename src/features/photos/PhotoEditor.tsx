@@ -16,7 +16,7 @@ import { EditPresets } from './EditPresets';
 import { MaskPanel, SubjectProgress } from './MaskPanel';
 import { addMasks, isSubjectMask } from './masks';
 import { RetouchPanel } from './RetouchPanel';
-import { retouchIsActive } from './retouch';
+import { bodyAmount, retouchIsActive } from './retouch';
 import { COLOR, LIGHT, PRESENCE, SliderGroup } from './SliderGroup';
 import { useSubjectMap } from './useSubjectMap';
 import {
@@ -135,7 +135,12 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
   const [activeMask, setActiveMask] = useState<string | null>(null);
   const [showArea, setShowArea] = useState<string | null>(null);
   // Mask ตัวคน (DECISIONS ข้อ 40): Rust หาตัวคนของรูปนี้ครั้งแรกที่ต้องใช้ แล้วตัวอย่างสดวาดใหม่
-  const subject = useSubjectMap(details.id, (settings.masks ?? []).some(isSubjectMask));
+  // ตัวผอม (ข้อ 41) ใช้ภาพน้ำหนักเดียวกัน + ฉากหลังที่เติมจากภาพต้นทางของตัวอย่างสด
+  const subject = useSubjectMap(details.id, {
+    mask: (settings.masks ?? []).some(isSubjectMask),
+    body: bodyAmount(settings.retouch) > 0,
+    fromRaw,
+  });
   // ค่าที่วาดบนภาพ: ระหว่างชี้ที่ preset ใช้ค่าของ preset (memo ไว้ ไม่ให้วาดซ้ำทุกครั้งที่ฮิสโตแกรมอัปเดต)
   const shown = useMemo(() => (previewAdjust ? { ...settings, adjust: previewAdjust } : settings), [settings, previewAdjust]);
   // ทิ้งการแต่งที่ยังไม่บันทึกแล้ว: ปิดหน้าแต่งภาพ หรือข้ามไปรูปถัดไป
@@ -576,7 +581,12 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
               </>
             ) : tab === 'masks' ? (
               <>
-                <RetouchPanel retouch={settings.retouch ?? null} faces={details.faces} onChange={(retouch) => setSettings((s) => ({ ...s, retouch }))} />
+                <RetouchPanel
+                  retouch={settings.retouch ?? null}
+                  faces={details.faces}
+                  onChange={(retouch) => setSettings((s) => ({ ...s, retouch }))}
+                  subject={subject}
+                />
                 <BeforeButton disabled={!retouchIsActive(settings.retouch) && !(settings.masks ?? []).length} onHold={setBefore} label="กดค้างเพื่อดูภาพก่อนรีทัชและปรับ" />
                 <div className="border-t border-line pt-4">
                   <MaskPanel

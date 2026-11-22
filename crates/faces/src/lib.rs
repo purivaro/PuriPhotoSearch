@@ -42,6 +42,20 @@ pub struct Detection {
     pub score: f32,
 }
 
+/// environment ของ ONNX Runtime ที่ทุกโมเดลใช้ร่วมกัน — ort ยอมให้สร้างได้ครั้งเดียวต่อโปรเซส (สร้างใหม่ไม่ได้แม้ตัวเดิมถูกปล่อยไปแล้ว)
+/// ตัววิเคราะห์ใบหน้า ตัวแยกตัวคน และตัวเติมฉากหลังจึงต้องใช้ตัวเดียวกัน ไม่งั้นตัวที่โหลดทีหลังโหลดไม่ได้
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+pub fn environment() -> ort::Result<Environment> {
+    static SHARED: std::sync::Mutex<Option<Environment>> = std::sync::Mutex::new(None);
+    let mut shared = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(env) = shared.as_ref() {
+        return Ok(env.clone());
+    }
+    let env = ort::init().with_name("puri").build()?;
+    *shared = Some(env.clone());
+    Ok(env)
+}
+
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 pub struct FaceEngine {
     detector: Session,
@@ -54,7 +68,7 @@ impl FaceEngine {
     pub fn load(model_dir: &Path, detector: &str, embedder: &str, threads: usize) -> Result<Self> {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         coreml::remove_stale_temp_files(&std::env::temp_dir());
-        let env = ort::init().with_name("puri-faces").build()?;
+        let env = environment()?;
         let open = |file: &str| -> Result<Session> {
             let path = model_dir.join(file);
             if !path.is_file() {
@@ -484,7 +498,7 @@ pub mod app {
 // ───────────────────────── ตัวแยกตัวคน (Mask ตัวคน — DECISIONS ข้อ 40) ─────────────────────────
 
 pub mod subject {
-    use puri_core::subject::{SubjectModel, SubjectProvider};
+    use puri_core::subject::{FillProvider, SubjectModel, SubjectProvider};
 
     /// BiRefNet รุ่นเล็ก (Swin-T) สำหรับวัตถุทั่วไป — ไฟล์ .onnx ไฟล์เดียวจาก release ของผู้พัฒนาโมเดล
     pub fn model() -> SubjectModel {
@@ -504,11 +518,32 @@ pub mod subject {
         }
     }
 
-    /// ตัวแยกตัวคนของ build นี้; None บนแพลตฟอร์มที่ไม่มี ONNX Runtime สำเร็จรูป
+    /// ตัวเติมฉากหลังของตัวผอม (DECISIONS ข้อ 41): LaMa (big-lama) แปลงเป็น ONNX ขนาด 512×512 — ไฟล์เดียวจาก Hugging Face
+    /// (ตรึงรุ่นด้วย commit ของ repo)
+    pub fn fill_model() -> SubjectModel {
+        SubjectModel {
+            id: "lama-fp32",
+            display_name: "LaMa",
+            file: "lama_fp32.onnx",
+            sha256: "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6",
+            download_url: std::env::var("PURI_FILL_MODEL_URL").unwrap_or_else(|_| {
+                "https://huggingface.co/Carve/LaMa-ONNX/resolve/c3c0c9e468934d62e79c329e35d82dd09ff8c444/lama_fp32.onnx".into()
+            }),
+            download_bytes: 208_044_816,
+            download_source: "huggingface.co/Carve/LaMa-ONNX (จาก github.com/advimman/lama)",
+            license_note: "LaMa เผยแพร่ด้วยสัญญาอนุญาต Apache-2.0 ใช้ได้ทั้งงานทั่วไปและเชิงพาณิชย์",
+        }
+    }
+
+    /// ตัวแยกตัวคน (+ ตัวเติมฉากหลัง) ของ build นี้; None บนแพลตฟอร์มที่ไม่มี ONNX Runtime สำเร็จรูป
     pub fn provider() -> Option<SubjectProvider> {
         #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
         {
-            Some(SubjectProvider { model: model(), factory: std::sync::Arc::new(super::segmenter::load) })
+            Some(SubjectProvider {
+                model: model(),
+                factory: std::sync::Arc::new(super::segmenter::load),
+                fill: Some(FillProvider { model: fill_model(), factory: std::sync::Arc::new(super::inpainter::load) }),
+            })
         }
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
         {
@@ -546,7 +581,7 @@ mod segmenter {
         if !path.is_file() {
             return Err(AppError::new("MODEL_NOT_READY", "ไม่พบไฟล์ตัวแยกตัวคน"));
         }
-        let env = ort::init().with_name("puri-subject").build().map_err(failed)?;
+        let env = crate::environment().map_err(failed)?;
         // CPU เท่านั้น: ONNX Runtime บน Mac เปิด CoreML ให้เองถ้าไม่สั่ง PreferCPU — ลองโมเดลนี้บน CoreML (GPU)
         // แล้วเครื่องค้างจนรีบูต (22 พ.ย. 69) แบบ Neural Engine ก็แปลงโมเดลนานเกินครึ่งชั่วโมง · เหลือสองแกนให้หน้าจอลื่น
         let threads = std::thread::available_parallelism().map(|n| n.get().saturating_sub(2)).unwrap_or(2).max(1);
@@ -590,6 +625,86 @@ mod segmenter {
                 image::Luma([((1.0 / (1.0 + (-v).exp())) * 255.0).round() as u8])
             });
             Ok(imageops::resize(&mask, w, h, imageops::FilterType::Triangle))
+        }
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+mod inpainter {
+    use image::{GrayImage, RgbImage};
+    use ort::{environment::Environment, session::Session, value::Tensor};
+    use puri_core::subject::Inpainter;
+    use puri_core::AppError;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    /// ขนาดภาพที่โมเดลรับ (ตายตัว)
+    const SIDE: u32 = 512;
+
+    struct Lama {
+        session: Mutex<Session>,
+        _env: Environment,
+    }
+
+    fn failed(e: impl std::fmt::Display) -> AppError {
+        AppError::new("DECODE_FAILED", format!("เติมฉากหลังของรูปนี้ไม่สำเร็จ ({e})"))
+    }
+
+    pub fn load(model_dir: &Path) -> Result<Arc<dyn Inpainter>, AppError> {
+        let path = model_dir.join(super::subject::fill_model().file);
+        if !path.is_file() {
+            return Err(AppError::new("MODEL_NOT_READY", "ไม่พบไฟล์ตัวเติมฉากหลัง"));
+        }
+        let env = crate::environment().map_err(failed)?;
+        // CPU เท่านั้น (โมเดลใหญ่บน CoreML ทำเครื่องค้างจนรีบูต — ข้อ 40) · เหลือสองแกนให้หน้าจอลื่น
+        let threads = std::thread::available_parallelism().map(|n| n.get().saturating_sub(2)).unwrap_or(2).max(1);
+        let mut builder = Session::builder(&env)
+            .map_err(failed)?
+            .with_intra_threads(threads)
+            .map_err(failed)?
+            .with_auto_device(ort::session::builder::AutoDevicePolicy::PreferCPU)
+            .map_err(failed)?;
+        let session = builder
+            .commit_from_file(&path)
+            .map_err(|e| AppError::new("MODEL_NOT_READY", format!("โหลดตัวเติมฉากหลังไม่ได้ ({e})")))?;
+        Ok(Arc::new(Lama { session: Mutex::new(session), _env: env }))
+    }
+
+    impl Inpainter for Lama {
+        fn side(&self) -> u32 {
+            SIDE
+        }
+
+        fn inpaint(&self, image: &RgbImage, holes: &GrayImage) -> Result<RgbImage, AppError> {
+            if image.dimensions() != (SIDE, SIDE) || holes.dimensions() != (SIDE, SIDE) {
+                return Err(failed("ภาพผิดขนาด"));
+            }
+            let plane = (SIDE * SIDE) as usize;
+            let mut pixels = vec![0f32; 3 * plane];
+            let mut mask = vec![0f32; plane];
+            for (x, y, p) in image.enumerate_pixels() {
+                let i = (y * SIDE + x) as usize;
+                let hole = holes.get_pixel(x, y)[0] > 127;
+                // ช่องต้องเป็นศูนย์: โมเดลไม่ลบให้เอง (ไม่ลบ = เห็นเงาของสิ่งเดิมในช่อง)
+                for c in 0..3 {
+                    pixels[c * plane + i] = if hole { 0.0 } else { f32::from(p[c]) / 255.0 };
+                }
+                mask[i] = if hole { 1.0 } else { 0.0 };
+            }
+            let side = SIDE as usize;
+            let image_t = Tensor::from_array(([1usize, 3, side, side], pixels)).map_err(failed)?;
+            let mask_t = Tensor::from_array(([1usize, 1, side, side], mask)).map_err(failed)?;
+            let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
+            let outputs = session.run(ort::inputs!["image" => image_t, "mask" => mask_t]).map_err(failed)?;
+            // ผล 1×3×512×512 ค่า 0–255 (นอกช่องเท่าภาพที่ส่งเข้า)
+            let (_, data) = outputs[0].try_extract_tensor::<f32>().map_err(failed)?;
+            if data.len() != 3 * plane {
+                return Err(failed(format!("โมเดลคืนผล {} ค่า ไม่ใช่ {}", data.len(), 3 * plane)));
+            }
+            Ok(RgbImage::from_fn(SIDE, SIDE, |x, y| {
+                let i = (y * SIDE + x) as usize;
+                image::Rgb([0, 1, 2].map(|c| data[c * plane + i].round().clamp(0.0, 255.0) as u8))
+            }))
         }
     }
 }
@@ -673,6 +788,16 @@ mod analyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn every_model_shares_one_onnx_environment() {
+        // ort สร้าง environment ได้ครั้งเดียวต่อโปรเซส: ขอซ้ำต้องได้ตัวเดิม ไม่ใช่ข้อผิดพลาด
+        let first = environment().expect("ครั้งแรก");
+        drop(first);
+        environment().expect("ครั้งที่สอง หลังตัวแรกถูกปล่อย");
+        assert!(ort::init().build().is_err(), "ort ไม่ยอมให้สร้างตัวที่สอง — เหตุผลที่ต้องใช้ร่วมกัน");
+    }
 
     #[test]
     fn similarity_recovers_a_known_transform() {

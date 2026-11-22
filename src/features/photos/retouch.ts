@@ -21,11 +21,14 @@ export const RETOUCH_ITEMS: { key: RetouchKey; label: string; description: strin
   { key: 'thin', label: 'หน้าผอม', description: 'แก้มเล็กลง' },
 ];
 
-export const NO_RETOUCH: Retouch = { faces: [], smooth: 0, wrinkles: 0, slim: 0, thin: 0 };
+export const NO_RETOUCH: Retouch = { faces: [], smooth: 0, wrinkles: 0, slim: 0, thin: 0, body: 0 };
 
-/** มีผลกับภาพ */
+/** ตัวผอม (DECISIONS ข้อ 41) — ระดับเดียวกับรีทัชใบหน้า */
+export const bodyAmount = (r: Retouch | null | undefined): number => r?.body ?? 0;
+
+/** มีผลกับภาพ (ตัวผอมไม่ต้องมีกรอบใบหน้า) */
 export const retouchIsActive = (r: Retouch | null | undefined): r is Retouch =>
-  !!r && r.faces.length > 0 && RETOUCH_ITEMS.some(({ key }) => r[key] > 0);
+  !!r && ((r.faces.length > 0 && RETOUCH_ITEMS.some(({ key }) => r[key] > 0)) || bodyAmount(r) > 0);
 
 /** กรอบของใบหน้าทุกหน้าของรูป (บนภาพเดิม) */
 export const faceBoxes = (faces: FaceBox[]): Retouch['faces'] => faces.map((f) => [f.sourceBbox.x, f.sourceBbox.y, f.sourceBbox.w, f.sourceBbox.h]);
@@ -33,7 +36,7 @@ export const faceBoxes = (faces: FaceBox[]): Retouch['faces'] => faces.map((f) =
 /** สรุปเป็นภาษาผู้ใช้ เช่น "ผิวเนียน 50 · หน้าเรียว 25" */
 export function describeRetouch(r: Retouch | null | undefined): string | null {
   if (!retouchIsActive(r)) return null;
-  return RETOUCH_ITEMS.filter(({ key }) => r[key] > 0)
-    .map(({ key, label }) => `${label} ${r[key]}`)
-    .join(' · ');
+  const parts = r.faces.length > 0 ? RETOUCH_ITEMS.filter(({ key }) => r[key] > 0).map(({ key, label }) => `${label} ${r[key]}`) : [];
+  if (bodyAmount(r) > 0) parts.push(`ตัวผอม ${bodyAmount(r)}`);
+  return parts.join(' · ');
 }

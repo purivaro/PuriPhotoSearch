@@ -265,7 +265,9 @@ fn run_next(inner: &Inner, conn: &Connection) -> Result<bool> {
         "catalog" => run_catalog(&ctx),
         "export" => crate::export::run(&ctx),
         "shrink" => crate::shrink::run(&ctx),
-        "model" if crate::subject::is_install_job(job.dedup_key.as_deref()) => crate::subject::run_install(&ctx),
+        "model" if crate::subject::is_install_job(job.dedup_key.as_deref()) => {
+            crate::subject::run_install(&ctx, job.dedup_key.as_deref())
+        }
         "model" => crate::ai::run_install(&ctx),
         "cull" => crate::cull::run(&ctx),
         other => Err(AppError::internal(format!("ไม่รู้จักชนิดงาน {other}"))),
@@ -360,6 +362,10 @@ fn edited_for_faces(settings_json: Option<String>) -> Option<crate::edit::EditSe
     let mut light = crate::edit::EditSettings { rotate: 0, straighten: 0.0, crop: None, ..s };
     // Mask ตัวคนต้องใช้โมเดลอีกตัว (ราว 7 วินาทีต่อรูป) แต่แค่ลดรายละเอียดบนตัวคน — ตรวจใบหน้าจากภาพที่ไม่มีส่วนนี้
     light.masks.retain(|m| !matches!(m.area, crate::masks::Area::Subject { .. }));
+    // ตัวผอมก็เช่นกัน (หัวไม่ขยับอยู่แล้ว)
+    if let Some(r) = light.retouch.as_mut() {
+        r.body = 0.0;
+    }
     (!light.adjust.is_neutral() || light.has_masks() || light.has_retouch()).then_some(light)
 }
 

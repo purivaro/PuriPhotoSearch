@@ -93,31 +93,40 @@ fn raw_view(app: &App, photo_id: &str, path: &Path) -> Result<Asset> {
 /// (ตัวอย่างสดถอดกลับเป็นแสงเชิงเส้นแบบเดียวกับรูป RAW) · เก็บใน cache ตาม revision ไฟล์ RAW และกรอบ
 fn raw_frame(app: &App, photo_id: &str) -> Result<Asset> {
     crate::pair::ensure_start(app, photo_id)?;
-    let (base, revision_id) = {
-        let conn = app.db();
-        let base = match crate::pair::raw_edit(&conn, photo_id)? {
-            crate::pair::RawEdit::Ready(base) => base,
-            crate::pair::RawEdit::Unusable(why) => return Err(AppError::new("SOURCE_UNAVAILABLE", why)),
-            crate::pair::RawEdit::None => return Err(AppError::not_found("ไฟล์ RAW คู่")),
-        };
-        let revision_id: String =
-            conn.query_row("SELECT current_revision_id FROM photos WHERE id = ?1", [photo_id], |r| r.get(0))?;
-        (base, revision_id)
+    let (base, revision_id) = raw_frame_base(&app.db(), photo_id)?;
+    Ok(jpeg(raw_frame_bytes(&app.cache_dir, &base, &revision_id)?))
+}
+
+/// ไฟล์ RAW คู่และกรอบของรูป (อ่านฐานข้อมูลอย่างเดียว — ถอดไฟล์ทีหลังโดยไม่ถือฐานข้อมูล)
+pub(crate) fn raw_frame_base(
+    conn: &rusqlite::Connection,
+    photo_id: &str,
+) -> Result<(Box<crate::pair::RawBase>, String)> {
+    let base = match crate::pair::raw_edit(conn, photo_id)? {
+        crate::pair::RawEdit::Ready(base) => base,
+        crate::pair::RawEdit::Unusable(why) => return Err(AppError::new("SOURCE_UNAVAILABLE", why)),
+        crate::pair::RawEdit::None => return Err(AppError::not_found("ไฟล์ RAW คู่")),
     };
+    let revision_id: String =
+        conn.query_row("SELECT current_revision_id FROM photos WHERE id = ?1", [photo_id], |r| r.get(0))?;
+    Ok((base, revision_id))
+}
+
+/// JPEG ของภาพจาก RAW คู่ในกรอบของ JPEG โทนตั้งต้น (ต้นทางของหน้าแต่งภาพ และภาพตั้งต้นของตัวผอม)
+pub(crate) fn raw_frame_bytes(cache_dir: &Path, base: &crate::pair::RawBase, revision_id: &str) -> Result<Vec<u8>> {
     let stamp = media::stamp(&base.raw_path).map_err(|_| AppError::source_unavailable())?;
     let frame = serde_json::to_vec(&base.frame)?;
     let key = &crate::util::hex(&sha2::Sha256::digest(&frame))[..12];
-    let cached =
-        app.cache_dir.join("raw").join(format!("{revision_id}-{}-{}-{key}-frame.jpg", stamp.size, stamp.mtime_ns));
+    let cached = cache_dir.join("raw").join(format!("{revision_id}-{}-{}-{key}-frame.jpg", stamp.size, stamp.mtime_ns));
     if let Ok(bytes) = std::fs::read(&cached) {
-        return Ok(jpeg(bytes));
+        return Ok(bytes);
     }
     let raw = media::read_file(&base.raw_path).map_err(|_| AppError::source_unavailable())?;
     let plain = crate::edit::EditSettings { from_raw: true, ..Default::default() };
-    let img = crate::pair::render(&raw, &base, &plain, crate::edit::VIEW_EDGE)?;
+    let img = crate::pair::render(&raw, base, &plain, crate::edit::VIEW_EDGE)?;
     let bytes = media::encode_jpeg(&image::DynamicImage::ImageRgb8(img), 92)?;
     let _ = media::write_cache_file(&cached, &bytes);
-    Ok(jpeg(bytes))
+    Ok(bytes)
 }
 
 /// ภาพที่แต่งแล้ว (เก็บใน cache ตามรหัสการแต่ง): ภาพย่อ หรือภาพสำหรับตัวดูภาพ
