@@ -7,8 +7,9 @@ import { describeRetouch } from './retouch';
 
 /** ชื่อของบริเวณที่ปรับ (แผงปรับเฉพาะส่วน · สรุปการแต่ง) */
 export function maskName(m: EditMask): string {
-  const n = m.area.boxes.length;
-  return `ใบหน้า ${formatCount(n)} คน${m.area.skin ? ' · เฉพาะผิว' : ''}${m.invert ? ' · กลับด้าน' : ''}`;
+  const invert = m.invert ? ' · กลับด้าน' : '';
+  if (m.area.kind === 'subject') return `ตัวคน (AI)${invert}`;
+  return `ใบหน้า ${formatCount(m.area.boxes.length)} คน${m.area.skin ? ' · เฉพาะผิว' : ''}${invert}`;
 }
 
 const LIGHT: [SliderKey, string][] = [
@@ -46,7 +47,7 @@ export function describeEdit(s: EditSettings) {
   const masks = (s.masks ?? []).filter(maskIsActive);
   return {
     geometry: geometry.length > 0 ? geometry.join(' · ') : null,
-    masks: masks.length > 0 ? `${formatCount(masks.length)} บริเวณ (${masks.map((m) => (m.area.skin ? 'ผิวหน้า' : 'ใบหน้า')).join(', ')})` : null,
+    masks: masks.length > 0 ? `${formatCount(masks.length)} บริเวณ (${masks.map((m) => (m.area.kind === 'subject' ? 'ตัวคน' : m.area.skin ? 'ผิวหน้า' : 'ใบหน้า')).join(', ')})` : null,
     retouch: describeRetouch(s.retouch),
     light: list(s, LIGHT, [hasLevels(s.adjust) && 'Levels', hasCurves(s.adjust) && 'เส้นโค้งโทน', hasVignette(s.adjust) && 'Vignette', hasSharpen(s.adjust) && 'ความคม']),
     color: list(s, COLOR, [hasHsl(s.adjust) && 'สีแยกช่วง (HSL)', gradingIsActive(s.adjust.grading) && 'Color Grading']),

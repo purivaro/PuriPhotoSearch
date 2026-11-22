@@ -481,6 +481,119 @@ pub mod app {
     }
 }
 
+// ───────────────────────── ตัวแยกตัวคน (Mask ตัวคน — DECISIONS ข้อ 40) ─────────────────────────
+
+pub mod subject {
+    use puri_core::subject::{SubjectModel, SubjectProvider};
+
+    /// BiRefNet รุ่นเล็ก (Swin-T) สำหรับวัตถุทั่วไป — ไฟล์ .onnx ไฟล์เดียวจาก release ของผู้พัฒนาโมเดล
+    pub fn model() -> SubjectModel {
+        SubjectModel {
+            id: "birefnet-lite",
+            display_name: "BiRefNet (รุ่นเล็ก)",
+            file: "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
+            sha256: "5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333",
+            // นักพัฒนาชี้ไปไฟล์ในเครื่องได้ (file://…) เพื่อไม่ต้องดาวน์โหลดซ้ำระหว่างทดสอบ
+            download_url: std::env::var("PURI_SUBJECT_MODEL_URL").unwrap_or_else(|_| {
+                "https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx"
+                    .into()
+            }),
+            download_bytes: 224_005_088,
+            download_source: "github.com/ZhengPeng7/BiRefNet (release v1)",
+            license_note: "BiRefNet เผยแพร่ด้วยสัญญาอนุญาต MIT ใช้ได้ทั้งงานทั่วไปและเชิงพาณิชย์",
+        }
+    }
+
+    /// ตัวแยกตัวคนของ build นี้; None บนแพลตฟอร์มที่ไม่มี ONNX Runtime สำเร็จรูป
+    pub fn provider() -> Option<SubjectProvider> {
+        #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+        {
+            Some(SubjectProvider { model: model(), factory: std::sync::Arc::new(super::segmenter::load) })
+        }
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        {
+            None
+        }
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+mod segmenter {
+    use image::{imageops, GrayImage, RgbImage};
+    use ort::{environment::Environment, session::Session, value::Tensor};
+    use puri_core::subject::Segmenter;
+    use puri_core::AppError;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    /// ขนาดภาพที่โมเดลรับ (ตายตัว)
+    const SIDE: u32 = 1024;
+    /// ค่าปรับสีแบบ ImageNet ที่โมเดลฝึกมา
+    const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+    const STD: [f32; 3] = [0.229, 0.224, 0.225];
+
+    struct BiRefNet {
+        session: Mutex<Session>,
+        _env: Environment,
+    }
+
+    fn failed(e: impl std::fmt::Display) -> AppError {
+        AppError::new("DECODE_FAILED", format!("หาตัวคนในรูปนี้ไม่สำเร็จ ({e})"))
+    }
+
+    pub fn load(model_dir: &Path) -> Result<Arc<dyn Segmenter>, AppError> {
+        let path = model_dir.join(super::subject::model().file);
+        if !path.is_file() {
+            return Err(AppError::new("MODEL_NOT_READY", "ไม่พบไฟล์ตัวแยกตัวคน"));
+        }
+        let env = ort::init().with_name("puri-subject").build().map_err(failed)?;
+        // CPU เท่านั้น: ONNX Runtime บน Mac เปิด CoreML ให้เองถ้าไม่สั่ง PreferCPU — ลองโมเดลนี้บน CoreML (GPU)
+        // แล้วเครื่องค้างจนรีบูต (22 พ.ย. 69) แบบ Neural Engine ก็แปลงโมเดลนานเกินครึ่งชั่วโมง · เหลือสองแกนให้หน้าจอลื่น
+        let threads = std::thread::available_parallelism().map(|n| n.get().saturating_sub(2)).unwrap_or(2).max(1);
+        let mut builder = Session::builder(&env)
+            .map_err(failed)?
+            .with_intra_threads(threads)
+            .map_err(failed)?
+            .with_auto_device(ort::session::builder::AutoDevicePolicy::PreferCPU)
+            .map_err(failed)?;
+        let session = builder
+            .commit_from_file(&path)
+            .map_err(|e| AppError::new("MODEL_NOT_READY", format!("โหลดตัวแยกตัวคนไม่ได้ ({e})")))?;
+        Ok(Arc::new(BiRefNet { session: Mutex::new(session), _env: env }))
+    }
+
+    impl Segmenter for BiRefNet {
+        fn segment(&self, image: &RgbImage) -> Result<GrayImage, AppError> {
+            let (w, h) = image.dimensions();
+            if w == 0 || h == 0 {
+                return Err(failed("ภาพว่าง"));
+            }
+            let small = imageops::resize(image, SIDE, SIDE, imageops::FilterType::Triangle);
+            let plane = (SIDE * SIDE) as usize;
+            let mut input = vec![0f32; 3 * plane];
+            for (x, y, p) in small.enumerate_pixels() {
+                let i = (y * SIDE + x) as usize;
+                for c in 0..3 {
+                    input[c * plane + i] = (f32::from(p[c]) / 255.0 - MEAN[c]) / STD[c];
+                }
+            }
+            let tensor = Tensor::from_array(([1usize, 3, SIDE as usize, SIDE as usize], input)).map_err(failed)?;
+            let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
+            let outputs = session.run(ort::inputs![tensor]).map_err(failed)?;
+            // ผลสุดท้ายของโมเดล (ค่าก่อน sigmoid) ขนาด 1×1×1024×1024
+            let (_, data) = outputs[outputs.len() - 1].try_extract_tensor::<f32>().map_err(failed)?;
+            if data.len() != plane {
+                return Err(failed(format!("โมเดลคืนผล {} ค่า ไม่ใช่ {plane}", data.len())));
+            }
+            let mask = GrayImage::from_fn(SIDE, SIDE, |x, y| {
+                let v = data[(y * SIDE + x) as usize];
+                image::Luma([((1.0 / (1.0 + (-v).exp())) * 255.0).round() as u8])
+            });
+            Ok(imageops::resize(&mask, w, h, imageops::FilterType::Triangle))
+        }
+    }
+}
+
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 mod analyzer {
     use super::{prepare, FaceEngine, ALIGNED, ARCFACE_DST};

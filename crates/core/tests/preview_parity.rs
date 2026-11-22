@@ -203,9 +203,21 @@ fn masks(rng: &mut Rng) -> Vec<Mask> {
             let boxes = (0..rng.int(1, 3))
                 .map(|_| [rng.range(-0.1, 0.9), rng.range(-0.1, 0.9), rng.range(0.03, 0.45), rng.range(0.03, 0.5)])
                 .collect();
+            // ตัวคน (DECISIONS ข้อ 40): ภาพน้ำหนักวงรีนุ่ม ๆ ขนาดไม่เท่าภาพ (แนบไว้แล้วเหมือนตอนแอปสร้างภาพ)
+            let area = if rng.chance(0.3) {
+                let (mw, mh) = (rng.int(7, 40), rng.int(7, 40));
+                let (cx, cy, r) = (rng.range(0.2, 0.8), rng.range(0.2, 0.8), rng.range(0.15, 0.5));
+                let map = image::GrayImage::from_fn(mw, mh, |x, y| {
+                    let d = ((x as f64 / mw as f64 - cx).powi(2) + (y as f64 / mh as f64 - cy).powi(2)).sqrt() / r;
+                    image::Luma([((1.2 - d).clamp(0.0, 1.0) * 255.0) as u8])
+                });
+                Area::Subject { map: Some(puri_core::subject::SubjectMap::new(map)) }
+            } else {
+                Area::Faces { boxes, skin: rng.chance(0.6) }
+            };
             Mask {
                 id: format!("m{i}"),
-                area: Area::Faces { boxes, skin: rng.chance(0.6) },
+                area,
                 adjust: mask_adjust(rng),
                 amount: if rng.chance(0.6) { 100.0 } else { rng.int(0, 100) as f64 },
                 invert: rng.chance(0.25),
@@ -223,6 +235,7 @@ fn retouch(rng: &mut Rng, masks: &[Mask]) -> Option<Retouch> {
         .iter()
         .flat_map(|m| match &m.area {
             Area::Faces { boxes, .. } => boxes.clone(),
+            Area::Subject { .. } => vec![],
         })
         .collect();
     if faces.is_empty() || rng.chance(0.3) {
@@ -377,6 +390,7 @@ fn live_preview_matches_the_saved_image_pixel_for_pixel() {
             .iter()
             .flat_map(|m| match &m.area {
                 Area::Faces { boxes, .. } => boxes.clone(),
+                Area::Subject { .. } => vec![],
             })
             .map(|b| {
                 (

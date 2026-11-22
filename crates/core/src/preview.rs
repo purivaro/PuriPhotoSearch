@@ -226,6 +226,14 @@ pub fn render(app: &App, req: &Request) -> Result<Vec<u8>> {
     check_view(&req.view)?;
     req.settings.validate()?;
     let src = source(app, &req.photo_id, req.source)?;
+    if req.settings.has_subject() {
+        // Mask ตัวคน: ใช้ภาพน้ำหนักที่คิดไว้แล้ว (หน้าแต่งภาพสั่งคิดก่อนด้วย prepare_subject) — ยังไม่มี = ยังไม่เห็นผลของ Mask นั้น
+        let mut req = req.clone();
+        if let Some(map) = crate::subject::cached(app, &req.photo_id)? {
+            crate::subject::attach(&mut req.settings, &map);
+        }
+        return Ok(render_from(&src, &req));
+    }
     Ok(render_from(&src, req))
 }
 

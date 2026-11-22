@@ -13,10 +13,12 @@ import type { CropSuggestion, EditSettings, PhotoDetails, PreviewRequest, Previe
 import { NEUTRAL, histogram, isNeutral, type Adjust, type Histogram } from './adjust';
 import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, SharpenPanel, ToneCurvePanel, VignettePanel } from './AdjustControls';
 import { EditPresets } from './EditPresets';
-import { MaskPanel } from './MaskPanel';
+import { MaskPanel, SubjectProgress } from './MaskPanel';
+import { addMasks, isSubjectMask } from './masks';
 import { RetouchPanel } from './RetouchPanel';
 import { retouchIsActive } from './retouch';
 import { COLOR, LIGHT, PRESENCE, SliderGroup } from './SliderGroup';
+import { useSubjectMap } from './useSubjectMap';
 import {
   FULL,
   IDENTITY,
@@ -132,6 +134,8 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
   // ปรับเฉพาะส่วน: บริเวณที่เลือก และบริเวณที่แสดงเป็นสีแดงทับ (กดค้าง / เพิ่งเพิ่ม)
   const [activeMask, setActiveMask] = useState<string | null>(null);
   const [showArea, setShowArea] = useState<string | null>(null);
+  // Mask ตัวคน (DECISIONS ข้อ 40): Rust หาตัวคนของรูปนี้ครั้งแรกที่ต้องใช้ แล้วตัวอย่างสดวาดใหม่
+  const subject = useSubjectMap(details.id, (settings.masks ?? []).some(isSubjectMask));
   // ค่าที่วาดบนภาพ: ระหว่างชี้ที่ preset ใช้ค่าของ preset (memo ไว้ ไม่ให้วาดซ้ำทุกครั้งที่ฮิสโตแกรมอัปเดต)
   const shown = useMemo(() => (previewAdjust ? { ...settings, adjust: previewAdjust } : settings), [settings, previewAdjust]);
   // ทิ้งการแต่งที่ยังไม่บันทึกแล้ว: ปิดหน้าแต่งภาพ หรือข้ามไปรูปถัดไป
@@ -325,6 +329,7 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
           onCrop={(next) => setSettings((s) => ({ ...s, crop: next }))}
           onHistogram={setHist}
           overlay={tab === 'masks' ? showArea : null}
+          subjectToken={subject.token}
           picking={picking}
           onPick={async (fx, fy) => {
             setPicking(false);
@@ -361,6 +366,7 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
           </div>
           <div className="scroll-thin min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
             {pair && <RawPairNotice pair={pair} fromRaw={fromRaw} />}
+            <SubjectProgress subject={subject} />
             {tab === 'crop' ? (
               <>
                 <section aria-labelledby="editor-ai-compose" className="rounded-xl border border-brand-line bg-brand-soft/60 p-3">
@@ -580,12 +586,18 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
                     onSelect={setActiveMask}
                     onChange={(masks) => setSettings((s) => ({ ...s, masks }))}
                     onShowArea={setShowArea}
+                    subject={subject}
                   />
                 </div>
               </>
             ) : (
               <>
-                <EditPresets adjust={settings.adjust} onApply={(adjust) => setSettings((s) => ({ ...s, adjust }))} onPreview={setPreviewAdjust} />
+                <EditPresets
+                  adjust={settings.adjust}
+                  masks={settings.masks ?? []}
+                  onApply={(preset) => setSettings((s) => ({ ...s, adjust: preset.adjust, masks: addMasks(s.masks ?? [], preset.masks) }))}
+                  onPreview={setPreviewAdjust}
+                />
                 <BeforeButton disabled={isNeutral(settings.adjust)} onHold={setBefore} />
               </>
             )}
@@ -664,6 +676,8 @@ interface EditCanvasProps {
   onPick: (fx: number, fy: number) => void;
   /** แสดงบริเวณของ Mask นี้เป็นสีแดงทับ */
   overlay: string | null;
+  /** เปลี่ยนเมื่อภาพน้ำหนักตัวคนพร้อม (วาดใหม่ให้เห็นผลของ Mask ตัวคน) */
+  subjectToken: number;
 }
 
 /** ตัวอย่างภาพที่แต่ง: แท็บตัดและหมุนแสดงทั้งกรอบพร้อมกรอบตัดที่ลากได้ · แท็บแสงและสีแสดงเฉพาะส่วนที่ตัดพร้อมแสงสี */
@@ -686,6 +700,7 @@ function EditCanvas({
   picking,
   onPick,
   overlay,
+  subjectToken,
 }: EditCanvasProps) {
   const area = useRef<HTMLDivElement>(null);
   // เส้นที่กำลังลาก (พิกเซลในกรอบภาพ)
@@ -765,7 +780,8 @@ function EditCanvas({
     const req: PreviewRequest = { photoId, source: sourceKind, settings, width: w, height: h, view, whole: mode !== 'crop', adjust: !before, show: overlay };
     if (busy.current) pending.current = req;
     else void send(req);
-  }, [photoId, sourceKind, settings, view, before, boxW, boxH, mode, overlay, send]);
+    // subjectToken: ภาพน้ำหนักตัวคนเพิ่งพร้อม — คำขอเดิมแต่ภาพที่ได้ต่างจากเดิม
+  }, [photoId, sourceKind, settings, view, before, boxW, boxH, mode, overlay, send, subjectToken]);
 
   const pct = (v: number) => `${v * 100}%`;
   const begin = (handle: Handle) => (event: React.PointerEvent) => {

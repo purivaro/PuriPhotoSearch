@@ -57,6 +57,8 @@ pub struct FaceEngineProvider {
 
 pub struct AiState {
     provider: Option<FaceEngineProvider>,
+    /// ตัวแยกตัวคน (Mask ตัวคน — DECISIONS ข้อ 40) อยู่ที่นี่ด้วย งานเบื้องหลังเข้าถึงได้ทางเดียวกัน
+    pub subject: crate::subject::SubjectState,
     unsupported_reason: String,
     pub model_dir: PathBuf,
     loaded: Mutex<Option<Arc<dyn FaceAnalyzer>>>,
@@ -64,13 +66,23 @@ pub struct AiState {
 }
 
 impl AiState {
-    pub fn new(provider: Option<FaceEngineProvider>, unsupported_reason: &str, models_root: &Path) -> Self {
+    pub fn new(
+        provider: Option<FaceEngineProvider>,
+        unsupported_reason: &str,
+        subject: Option<crate::subject::SubjectProvider>,
+        models_root: &Path,
+    ) -> Self {
         let model_dir = match &provider {
             Some(p) => models_root.join(p.spec.id),
             None => models_root.to_path_buf(),
         };
         Self {
             provider,
+            subject: crate::subject::SubjectState::new(
+                subject,
+                "build นี้ยังไม่มีตัวแยกตัวคน (Mac รุ่นชิป Intel ยังใช้ไม่ได้) ใช้ Mask ใบหน้าแทนได้",
+                models_root,
+            ),
             unsupported_reason: unsupported_reason.to_string(),
             model_dir,
             loaded: Mutex::new(None),
@@ -101,19 +113,10 @@ impl AiState {
         let spec = self.spec().ok_or_else(|| AppError::new("MODEL_NOT_READY", self.unsupported_reason.clone()))?;
         for file in spec.files {
             let path = self.model_dir.join(file.name);
-            let mut reader = std::fs::File::open(&path).map_err(|_| {
+            let hash = sha256_file(&path).map_err(|_| {
                 AppError::new("MODEL_NOT_READY", format!("ไม่พบไฟล์โมเดล {}", file.name)).next("install_model")
             })?;
-            let mut hasher = Sha256::new();
-            let mut buf = vec![0u8; 1 << 20];
-            loop {
-                let n = reader.read(&mut buf)?;
-                if n == 0 {
-                    break;
-                }
-                hasher.update(&buf[..n]);
-            }
-            if util::hex(&hasher.finalize()) != file.sha256 {
+            if hash != file.sha256 {
                 return Err(AppError::new(
                     "MODEL_NOT_READY",
                     format!("ไฟล์โมเดล {} ไม่ตรงกับรุ่นที่แอปรองรับ (checksum ไม่ตรง) กรุณาดาวน์โหลดใหม่", file.name),
@@ -193,9 +196,13 @@ pub fn status(app: &App) -> Result<FaceAnalysisStatus> {
     }
     s.install_job_id = app
         .db()
-        .query_row(&format!("SELECT id FROM jobs WHERE kind = 'model' AND state IN {ACTIVE_STATES} LIMIT 1"), [], |r| {
-            r.get(0)
-        })
+        .query_row(
+            &format!(
+                "SELECT id FROM jobs WHERE kind = 'model' AND dedup_key = ?1 AND state IN {ACTIVE_STATES} LIMIT 1"
+            ),
+            [format!("model:{}", spec.id)],
+            |r| r.get(0),
+        )
         .optional()?;
     if s.install_job_id.is_some() {
         s.state = "installing";
@@ -214,8 +221,10 @@ pub fn install(app: &App) -> Result<JobSnapshot> {
         let conn = app.db();
         let existing: Option<String> = conn
             .query_row(
-                &format!("SELECT id FROM jobs WHERE kind = 'model' AND state IN {ACTIVE_STATES} LIMIT 1"),
-                [],
+                &format!(
+                    "SELECT id FROM jobs WHERE kind = 'model' AND dedup_key = ?1 AND state IN {ACTIVE_STATES} LIMIT 1"
+                ),
+                [format!("model:{}", spec.id)],
                 |r| r.get(0),
             )
             .optional()?;
@@ -254,57 +263,12 @@ pub(crate) fn run_install(ctx: &JobCtx) -> Result<Outcome> {
     std::fs::create_dir_all(&ai.model_dir)?;
     let archive = ai.model_dir.join("download.part");
     let total_mb = spec.download_bytes.div_ceil(1_000_000) as i64;
-    let size_mb = |p: &Path| std::fs::metadata(p).map(|m| (m.len() / 1_000_000) as i64).unwrap_or(0);
 
     if !ai.installed() {
         ctx.stage("download")?;
-        let mut child = platform::system_tool("curl")
-            .args([
-                "--location",
-                "--fail",
-                "--silent",
-                "--show-error",
-                "--continue-at",
-                "-",
-                "--retry",
-                "3",
-                "--output",
-            ])
-            .arg(&archive)
-            .arg(&spec.download_url)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| AppError::internal(format!("เรียกตัวดาวน์โหลดของระบบไม่ได้: {e}")))?;
-        let status = loop {
-            if let Some(status) = child.try_wait().map_err(AppError::internal)? {
-                break status;
-            }
-            let c = ctx.control()?;
-            if c != Control::Continue {
-                let _ = child.kill();
-                let _ = child.wait();
-                // ไฟล์ที่ได้มาแล้วเก็บไว้ให้ดาวน์โหลดต่อ ยกเว้นผู้ใช้สั่งยกเลิก
-                if c == Control::Cancel {
-                    let _ = std::fs::remove_file(&archive);
-                }
-                return Ok(JobCtx::outcome_for(c));
-            }
-            ctx.progress(total_mb, size_mb(&archive).min(total_mb), 0, 0, true)?;
-            std::thread::sleep(Duration::from_millis(400));
-        };
-        if !status.success() {
-            let mut detail = String::new();
-            if let Some(mut e) = child.stderr.take() {
-                let _ = e.read_to_string(&mut detail);
-            }
-            return Ok(Outcome::Blocked(format!(
-                "ดาวน์โหลดไม่สำเร็จ ตรวจการเชื่อมต่ออินเทอร์เน็ตแล้วสั่งทำต่อ ({})",
-                detail.trim().chars().take(160).collect::<String>()
-            )));
+        if let Some(stopped) = download(ctx, &spec.download_url, &archive, total_mb)? {
+            return Ok(stopped);
         }
-        ctx.progress(total_mb, total_mb, 0, 0, true)?;
 
         ctx.stage("verify")?;
         // แตกเฉพาะไฟล์ที่ใช้ (ชุดโมเดลวางไฟล์ไว้ที่รากของ zip)
@@ -336,6 +300,65 @@ pub(crate) fn run_install(ctx: &JobCtx) -> Result<Outcome> {
     // โมเดลพร้อมแล้ว: วิเคราะห์รูปที่มีอยู่ในคลังต่อเลย ผู้ใช้ไม่ต้องกดอะไรอีก
     enqueue_analysis(ctx.conn, None)?;
     Ok(Outcome::Done)
+}
+
+/// ดาวน์โหลด `url` ลง `dest` ด้วยตัวดาวน์โหลดของระบบ (ทำต่อจากที่ได้ไว้แล้ว) พร้อมรายงานความคืบหน้าเป็น MB
+/// · Some(ผล) = ผู้ใช้พัก/ยกเลิก หรือดาวน์โหลดไม่สำเร็จ (งานควรจบด้วยผลนั้น) · None = ได้ไฟล์ครบแล้ว
+pub(crate) fn download(ctx: &JobCtx, url: &str, dest: &Path, total_mb: i64) -> Result<Option<Outcome>> {
+    let size_mb = |p: &Path| std::fs::metadata(p).map(|m| (m.len() / 1_000_000) as i64).unwrap_or(0);
+    let mut child = platform::system_tool("curl")
+        .args(["--location", "--fail", "--silent", "--show-error", "--continue-at", "-", "--retry", "3", "--output"])
+        .arg(dest)
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| AppError::internal(format!("เรียกตัวดาวน์โหลดของระบบไม่ได้: {e}")))?;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(AppError::internal)? {
+            break status;
+        }
+        let c = ctx.control()?;
+        if c != Control::Continue {
+            let _ = child.kill();
+            let _ = child.wait();
+            // ไฟล์ที่ได้มาแล้วเก็บไว้ให้ดาวน์โหลดต่อ ยกเว้นผู้ใช้สั่งยกเลิก
+            if c == Control::Cancel {
+                let _ = std::fs::remove_file(dest);
+            }
+            return Ok(Some(JobCtx::outcome_for(c)));
+        }
+        ctx.progress(total_mb, size_mb(dest).min(total_mb), 0, 0, true)?;
+        std::thread::sleep(Duration::from_millis(400));
+    };
+    if !status.success() {
+        let mut detail = String::new();
+        if let Some(mut e) = child.stderr.take() {
+            let _ = e.read_to_string(&mut detail);
+        }
+        return Ok(Some(Outcome::Blocked(format!(
+            "ดาวน์โหลดไม่สำเร็จ ตรวจการเชื่อมต่ออินเทอร์เน็ตแล้วสั่งทำต่อ ({})",
+            detail.trim().chars().take(160).collect::<String>()
+        ))));
+    }
+    ctx.progress(total_mb, total_mb, 0, 0, true)?;
+    Ok(None)
+}
+
+/// SHA-256 ของไฟล์ (ตัวอักษรฐานสิบหก)
+pub(crate) fn sha256_file(path: &Path) -> Result<String> {
+    let mut reader = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(util::hex(&hasher.finalize()))
 }
 
 /// เข้าคิววิเคราะห์ใบหน้าของกิจกรรมที่ยังมีรูปค้าง (ทั้งคลัง หรือกิจกรรมเดียว); คืน job IDs

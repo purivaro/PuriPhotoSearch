@@ -189,6 +189,9 @@ enum Command {
     SaveEditPreset {
         name: String,
         adjust: crate::adjust::Adjust,
+        /// Mask ตัวคนที่รวมไว้ใน preset (DECISIONS ข้อ 40)
+        #[serde(default)]
+        masks: Vec<crate::masks::Mask>,
     },
     RenameEditPreset {
         id: String,
@@ -355,6 +358,13 @@ enum Command {
     },
     /// AI ช่วยจัดองค์ประกอบ (DECISIONS ข้อ 38)
     SuggestComposition(crate::preview::CompositionRequest),
+    /// Mask ตัวคน (DECISIONS ข้อ 40)
+    GetSubjectStatus {},
+    InstallSubjectModel {},
+    #[serde(rename_all = "camelCase")]
+    PrepareSubject {
+        photo_id: String,
+    },
 }
 
 /// ชื่อคำสั่งทั้งหมด — ต้องตรงกับ `Commands` ใน `src/lib/ipc/types.ts` (มีเทสต์ตรวจ)
@@ -453,6 +463,9 @@ pub const COMMAND_NAMES: &[&str] = &[
     "apply_cull",
     "clear_ai_picks",
     "suggest_composition",
+    "get_subject_status",
+    "install_subject_model",
+    "prepare_subject",
 ];
 
 #[derive(Serialize)]
@@ -593,7 +606,7 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         ResetPhotoEdit { photo_id } => ok(edit::reset(app, &photo_id)?),
         ApplyPhotoEdits { selection, settings, parts } => ok(edit::apply_many(app, &selection, &settings, parts)?),
         ListEditPresets {} => ok(preset::list(&app.db())?),
-        SaveEditPreset { name, adjust } => ok(preset::save(app, &name, &adjust)?),
+        SaveEditPreset { name, adjust, masks } => ok(preset::save(app, &name, &adjust, &masks)?),
         RenameEditPreset { id, name } => ok(preset::rename(app, &id, &name)?),
         DeleteEditPreset { id } => ok(preset::delete(app, &id)?),
         ImportLightroomPreset { path } => ok(preset::import_lightroom(app, &path)?),
@@ -676,6 +689,9 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         ApplyCull { event_id, level } => ok(crate::cull::apply(app, &event_id, level)?),
         ClearAiPicks { event_id } => ok(serde_json::json!({ "cleared": crate::cull::clear(app, &event_id)? })),
         SuggestComposition(r) => ok(crate::preview::composition(app, &r)?),
+        GetSubjectStatus {} => ok(crate::subject::status(app)?),
+        InstallSubjectModel {} => ok(crate::subject::install(app)?),
+        PrepareSubject { photo_id } => ok(crate::subject::prepare_photo(app, &photo_id)?),
     }
 }
 

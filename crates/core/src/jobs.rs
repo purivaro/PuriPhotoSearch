@@ -60,6 +60,7 @@ pub(crate) struct JobRow {
     pub done: i64,
     pub failed: i64,
     pub skipped: i64,
+    pub dedup_key: Option<String>,
 }
 
 /// สิ่งที่ตัวรันงานแต่ละชนิดใช้ร่วมกัน: ตรวจคำขอพัก/ยกเลิก บันทึกความคืบหน้า และบันทึกข้อผิดพลาดรายไฟล์
@@ -72,6 +73,10 @@ pub(crate) struct JobCtx<'a> {
 impl JobCtx<'_> {
     pub fn ai(&self) -> &crate::ai::AiState {
         &self.inner.ai
+    }
+
+    pub fn cache_dir(&self) -> &Path {
+        &self.inner.cache_dir
     }
 
     pub fn control(&self) -> Result<Control> {
@@ -229,7 +234,8 @@ fn finish_cancelled(conn: &Connection, job_id: &str) -> Result<()> {
 fn run_next(inner: &Inner, conn: &Connection) -> Result<bool> {
     let job = conn
         .query_row(
-            "SELECT id, kind, event_id, done, failed, skipped FROM jobs WHERE state = 'queued' ORDER BY created_at, id LIMIT 1",
+            "SELECT id, kind, event_id, done, failed, skipped, dedup_key FROM jobs WHERE state = 'queued'
+             ORDER BY created_at, id LIMIT 1",
             [],
             |r| {
                 Ok(JobRow {
@@ -239,6 +245,7 @@ fn run_next(inner: &Inner, conn: &Connection) -> Result<bool> {
                     done: r.get(3)?,
                     failed: r.get(4)?,
                     skipped: r.get(5)?,
+                    dedup_key: r.get(6)?,
                 })
             },
         )
@@ -258,6 +265,7 @@ fn run_next(inner: &Inner, conn: &Connection) -> Result<bool> {
         "catalog" => run_catalog(&ctx),
         "export" => crate::export::run(&ctx),
         "shrink" => crate::shrink::run(&ctx),
+        "model" if crate::subject::is_install_job(job.dedup_key.as_deref()) => crate::subject::run_install(&ctx),
         "model" => crate::ai::run_install(&ctx),
         "cull" => crate::cull::run(&ctx),
         other => Err(AppError::internal(format!("ไม่รู้จักชนิดงาน {other}"))),
@@ -349,7 +357,9 @@ fn edited_for_faces(settings_json: Option<String>) -> Option<crate::edit::EditSe
     if s.from_raw {
         return None;
     }
-    let light = crate::edit::EditSettings { rotate: 0, straighten: 0.0, crop: None, ..s };
+    let mut light = crate::edit::EditSettings { rotate: 0, straighten: 0.0, crop: None, ..s };
+    // Mask ตัวคนต้องใช้โมเดลอีกตัว (ราว 7 วินาทีต่อรูป) แต่แค่ลดรายละเอียดบนตัวคน — ตรวจใบหน้าจากภาพที่ไม่มีส่วนนี้
+    light.masks.retain(|m| !matches!(m.area, crate::masks::Area::Subject { .. }));
     (!light.adjust.is_neutral() || light.has_masks() || light.has_retouch()).then_some(light)
 }
 

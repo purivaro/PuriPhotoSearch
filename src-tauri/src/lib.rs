@@ -151,6 +151,9 @@ domain_commands!(
     apply_cull,
     clear_ai_picks,
     suggest_composition,
+    get_subject_status,
+    install_subject_model,
+    prepare_subject,
 );
 
 /// เปิด native file picker สำหรับไฟล์รูป (ลายน้ำ); คืน path ที่ผู้ใช้เลือกเอง (หรือ None เมื่อยกเลิก)
@@ -288,6 +291,12 @@ pub fn run() {
                     puri_faces::app::provider()
                 },
                 face_engine_unavailable: puri_faces::app::UNAVAILABLE,
+                // ตัวแยกตัวคนปิดพร้อมกันในเทสต์ e2e (ผลไม่ขึ้นกับไฟล์โมเดลในเครื่อง)
+                subject_engine: if std::env::var_os("PURI_DISABLE_FACE_ENGINE").is_some() {
+                    None
+                } else {
+                    puri_faces::subject::provider()
+                },
             });
             match opened {
                 Ok(core) => {

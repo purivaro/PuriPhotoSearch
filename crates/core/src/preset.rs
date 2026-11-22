@@ -1,11 +1,13 @@
 //! preset ของการแต่งภาพ (DECISIONS ข้อ 20): ค่าแสงและสีที่บันทึกไว้ใช้ซ้ำ และนำเข้าจาก preset `.xmp` ของ Lightroom
 //!
 //! การนำเข้าอ่านเฉพาะค่าที่ตัวแต่งภาพของเราทำได้ (แสงพื้นฐาน Texture Clarity Dehaze ความสด/ความอิ่ม HSL เส้นโค้งโทน Parametric curve
-//! สมดุลแสงขาว ขาวดำ Color Grading Vignette ความคม) ที่เหลือ (Profile, Mask, ลดนอยส์ …) บันทึกเป็นรายการ "นำเข้าไม่ได้" ให้ผู้ใช้เห็นตามจริง
+//! สมดุลแสงขาว ขาวดำ Color Grading Vignette ความคม และ Mask ตัวคน — DECISIONS ข้อ 40) ที่เหลือ (Profile, Mask แบบอื่น, ลดนอยส์ …)
+//! บันทึกเป็นรายการ "นำเข้าไม่ได้" ให้ผู้ใช้เห็นตามจริง
 //! ผลจึงใกล้เคียงกับ Lightroom ไม่ใช่เท่ากันทุกพิกเซล — สูตรของ Adobe ไม่เปิดเผย
 
 use crate::adjust::{Adjust, Grading, Vignette, Wheel};
 use crate::error::{AppError, Result};
+use crate::masks::{Area, Mask};
 use crate::{util, App};
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -20,6 +22,8 @@ pub struct Preset {
     pub id: String,
     pub name: String,
     pub adjust: Adjust,
+    /// Mask ตัวคนของ preset (ใช้ preset = เพิ่ม Mask เหล่านี้ให้รูป แทนอันที่รหัสเดียวกัน)
+    pub masks: Vec<Mask>,
     /// user | lightroom
     pub source: String,
     /// ส่วนของ preset ที่นำเข้าไม่ได้
@@ -27,18 +31,19 @@ pub struct Preset {
 }
 
 pub fn list(conn: &Connection) -> Result<Vec<Preset>> {
-    let rows: Vec<(String, String, String, String, String)> = conn
+    let rows: Vec<(String, String, String, String, String, String)> = conn
         .prepare(
-            "SELECT id, name, adjust, source, unsupported FROM edit_presets ORDER BY name COLLATE NOCASE, created_at",
+            "SELECT id, name, adjust, source, unsupported, masks FROM edit_presets ORDER BY name COLLATE NOCASE, created_at",
         )?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
         .collect::<rusqlite::Result<_>>()?;
     rows.into_iter()
-        .map(|(id, name, adjust, source, unsupported)| {
+        .map(|(id, name, adjust, source, unsupported, masks)| {
             Ok(Preset {
                 id,
                 name,
                 adjust: serde_json::from_str(&adjust)?,
+                masks: serde_json::from_str(&masks).unwrap_or_default(),
                 source,
                 unsupported: serde_json::from_str(&unsupported).unwrap_or_default(),
             })
@@ -54,35 +59,51 @@ fn clean_name(name: &str) -> Result<String> {
     Ok(name.chars().take(MAX_NAME).collect())
 }
 
-fn insert(app: &App, name: &str, adjust: &Adjust, source: &str, unsupported: &[String]) -> Result<Preset> {
+fn insert(
+    app: &App,
+    name: &str,
+    adjust: &Adjust,
+    masks: &[Mask],
+    source: &str,
+    unsupported: &[String],
+) -> Result<Preset> {
     adjust.validate()?;
-    if adjust.is_neutral() {
+    // preset เก็บเฉพาะ Mask ตัวคน: Mask ใบหน้าผูกกับใบหน้าของรูปนั้น
+    let masks: Vec<Mask> = masks
+        .iter()
+        .filter(|m| matches!(m.area, Area::Subject { .. }) && m.is_active())
+        .map(|m| Mask { area: Area::Subject { map: None }, ..m.clone() })
+        .collect();
+    crate::masks::validate(&masks)?;
+    if adjust.is_neutral() && masks.is_empty() {
         return Err(AppError::invalid("preset นี้ไม่ได้ปรับแสงหรือสีเลย"));
     }
     let preset = Preset {
         id: util::new_id(),
         name: clean_name(name)?,
         adjust: adjust.clone(),
+        masks,
         source: source.into(),
         unsupported: unsupported.to_vec(),
     };
     app.db().execute(
-        "INSERT INTO edit_presets(id, name, adjust, source, unsupported, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO edit_presets(id, name, adjust, source, unsupported, masks, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             preset.id,
             preset.name,
             serde_json::to_string(&preset.adjust)?,
             preset.source,
             serde_json::to_string(&preset.unsupported)?,
+            serde_json::to_string(&preset.masks)?,
             util::now()
         ],
     )?;
     Ok(preset)
 }
 
-/// บันทึกค่าแสงและสีที่ปรับไว้เป็น preset
-pub fn save(app: &App, name: &str, adjust: &Adjust) -> Result<Preset> {
-    insert(app, name, adjust, "user", &[])
+/// บันทึกค่าแสงและสีที่ปรับไว้เป็น preset (รวม Mask ตัวคนที่มีผล)
+pub fn save(app: &App, name: &str, adjust: &Adjust, masks: &[Mask]) -> Result<Preset> {
+    insert(app, name, adjust, masks, "user", &[])
 }
 
 pub fn rename(app: &App, id: &str, name: &str) -> Result<Vec<Preset>> {
@@ -111,12 +132,21 @@ pub fn import_lightroom(app: &App, path: &str) -> Result<Preset> {
     let text = std::fs::read_to_string(path).map_err(|_| AppError::new("UNSUPPORTED_FORMAT", "อ่านไฟล์ preset ไม่ได้"))?;
     let parsed = parse_lightroom(&text)?;
     let fallback = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Lightroom".into());
-    insert(app, parsed.name.as_deref().unwrap_or(&fallback), &parsed.adjust, "lightroom", &parsed.unsupported)
+    insert(
+        app,
+        parsed.name.as_deref().unwrap_or(&fallback),
+        &parsed.adjust,
+        &parsed.masks,
+        "lightroom",
+        &parsed.unsupported,
+    )
 }
 
 pub struct Parsed {
     pub name: Option<String>,
     pub adjust: Adjust,
+    /// Mask ที่ทำตามได้ (ตัวคน)
+    pub masks: Vec<crate::masks::Mask>,
     pub unsupported: Vec<String>,
 }
 
@@ -294,17 +324,122 @@ pub fn parse_lightroom(text: &str) -> Result<Parsed> {
     if text.contains("<crs:Filters>") {
         unsupported.push(if text.contains("Filter/Title/Denoise") { "Denoise (AI)" } else { "Enhance (AI)" }.into());
     }
-    let mut masks: Vec<String> = text
-        .match_indices("crs:CorrectionName=\"")
-        .filter_map(|(i, m)| {
-            let start = i + m.len();
-            text[start..].find('"').map(|end| text[start..start + end].to_string())
-        })
-        .collect();
-    masks.dedup();
-    unsupported.extend(masks.into_iter().map(|m| format!("Mask “{m}”")));
+    // Mask: ตัวคน (Select Subject) ทำได้ (DECISIONS ข้อ 40) ที่เหลือบอกชื่อไว้
+    let (masks, skipped) = lightroom_masks(text);
+    unsupported.extend(skipped);
 
-    Ok(Parsed { name: first_li(text, "Name"), adjust: a, unsupported })
+    Ok(Parsed { name: first_li(text, "Name"), adjust: a, masks, unsupported })
+}
+
+/// ค่าของ Mask ใน XMP (−1 ถึง 1) → ค่าของเรา: (ชื่อใน xmp, ตัวคูณ)
+const LOCAL_SLIDERS: [(&str, f64); 12] = [
+    // Lightroom เก็บค่าแสงของ Mask เป็นสัดส่วนของช่วง ±4 stop (ค่าอื่น ×100 เหมือน Texture/Clarity ที่ตรวจกับ preset จริงแล้ว)
+    ("LocalExposure2012", 4.0),
+    ("LocalContrast2012", 100.0),
+    ("LocalHighlights2012", 100.0),
+    ("LocalShadows2012", 100.0),
+    ("LocalWhites2012", 100.0),
+    ("LocalBlacks2012", 100.0),
+    ("LocalTexture", 100.0),
+    ("LocalClarity2012", 100.0),
+    ("LocalDehaze", 100.0),
+    ("LocalSaturation", 100.0),
+    ("LocalTemperature", 100.0),
+    ("LocalTint", 100.0),
+];
+
+/// ค่าของ Mask ที่ยังทำตามไม่ได้ (บอกผู้ใช้เมื่อตั้งไว้)
+const LOCAL_UNSUPPORTED: [(&str, &str); 7] = [
+    ("LocalSharpness", "ความคม"),
+    ("LocalLuminanceNoise", "ลดนอยส์"),
+    ("LocalMoire", "Moiré"),
+    ("LocalDefringe", "Defringe"),
+    ("LocalHue", "Hue"),
+    ("LocalGrain", "Grain"),
+    ("LocalToningSaturation", "ทาสี (Color)"),
+];
+
+/// Mask ของ Lightroom (`<crs:MaskGroupBasedCorrections>`) ที่ทำตามได้ + รายการที่ทำตามไม่ได้
+/// — ทำได้เฉพาะ Mask ที่เป็น "Select Subject" อย่างเดียว (Mask/Image ชนิดย่อย 1) · Mask ที่ปิดไว้ใน Lightroom ข้าม
+pub(crate) fn lightroom_masks(text: &str) -> (Vec<crate::masks::Mask>, Vec<String>) {
+    let (mut masks, mut skipped) = (Vec::new(), Vec::new());
+    let Some(block) = element(text, "MaskGroupBasedCorrections") else { return (masks, skipped) };
+    // ลำดับใน XMP: Description ของการปรับ ตามด้วย Description ของบริเวณที่ประกอบกันเป็นการปรับนั้น
+    let mut corrections: Vec<(&str, Vec<&str>)> = Vec::new();
+    // ค่าอยู่ใน attribute ของ `<rdf:Description …>` หรือของ `<rdf:li …/>` เอง (Lightroom Classic เขียนบริเวณแบบหลัง)
+    for part in block.split('<').skip(1) {
+        let tag = &part[..part.find('>').unwrap_or(part.len())];
+        if !(tag.starts_with("rdf:Description") || tag.starts_with("rdf:li")) || !tag.contains("crs:") {
+            continue;
+        }
+        if attr(tag, "What").is_some_and(|w| w.starts_with("Mask/")) {
+            if let Some((_, areas)) = corrections.last_mut() {
+                areas.push(tag);
+            }
+        } else {
+            corrections.push((tag, Vec::new()));
+        }
+    }
+    for (i, (head, areas)) in corrections.into_iter().enumerate() {
+        if attr(head, "CorrectionActive") == Some("false") {
+            continue;
+        }
+        let name = attr(head, "CorrectionName").unwrap_or("Mask").to_string();
+        let subject = match areas.as_slice() {
+            [area] => {
+                attr(area, "What") == Some("Mask/Image")
+                    && attr(area, "MaskSubType") == Some("1")
+                    && attr(area, "MaskActive") != Some("false")
+                    && num(area, "MaskValue").is_none_or(|v| v == 1.0)
+                    && num(area, "MaskBlendMode").is_none_or(|v| v == 0.0)
+            }
+            _ => false,
+        };
+        if !subject {
+            skipped.push(format!("Mask “{name}”"));
+            continue;
+        }
+        let mut adjust = Adjust::default();
+        for (key, scale) in LOCAL_SLIDERS {
+            let value = num(head, key).unwrap_or(0.0) * scale;
+            let field = match key {
+                "LocalExposure2012" => {
+                    adjust.exposure = value.clamp(-3.0, 3.0);
+                    continue;
+                }
+                "LocalContrast2012" => &mut adjust.contrast,
+                "LocalHighlights2012" => &mut adjust.highlights,
+                "LocalShadows2012" => &mut adjust.shadows,
+                "LocalWhites2012" => &mut adjust.whites,
+                "LocalBlacks2012" => &mut adjust.blacks,
+                "LocalTexture" => &mut adjust.texture,
+                "LocalClarity2012" => &mut adjust.clarity,
+                "LocalDehaze" => &mut adjust.dehaze,
+                "LocalSaturation" => &mut adjust.saturation,
+                "LocalTemperature" => &mut adjust.temperature,
+                _ => &mut adjust.tint,
+            };
+            *field = value.clamp(-100.0, 100.0);
+        }
+        let missing: Vec<&str> = LOCAL_UNSUPPORTED
+            .iter()
+            .filter(|(key, _)| num(head, key).is_some_and(|v| v != 0.0))
+            .map(|(_, l)| *l)
+            .collect();
+        if !missing.is_empty() {
+            skipped.push(format!("Mask “{name}”: {}", missing.join(", ")));
+        }
+        let id = attr(head, "CorrectionSyncID").map_or_else(|| format!("lr-{i}"), |sync| format!("lr-{sync}"));
+        masks.push(crate::masks::Mask {
+            id: id.chars().take(64).collect(),
+            area: crate::masks::Area::Subject { map: None },
+            adjust,
+            amount: (num(head, "CorrectionAmount").unwrap_or(1.0) * 100.0).clamp(0.0, 100.0),
+            invert: attr(areas[0], "MaskInverted") == Some("true"),
+        });
+    }
+    masks.truncate(crate::masks::MAX_MASKS);
+    (masks, skipped)
 }
 
 #[cfg(test)]
@@ -416,6 +551,69 @@ mod tests {
             (150.0, 3.0, 70.0)
         );
         assert!(!parse_lightroom(r#"<x crs:Sharpness="0"/>"#).unwrap().adjust.sharpen.is_active());
+    }
+
+    /// โครงเดียวกับ Mask ที่ Lightroom Classic เขียนลง preset: การปรับหนึ่งชุด + บริเวณของมัน
+    fn correction(name: &str, locals: &str, areas: &str) -> String {
+        format!(
+            r#"<rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="0.9" crs:CorrectionActive="true"
+       crs:CorrectionName="{name}" crs:CorrectionSyncID="SYNC{name}" {locals}>
+      <crs:CorrectionMasks><rdf:Seq>{areas}</rdf:Seq></crs:CorrectionMasks></rdf:Description></rdf:li>"#
+        )
+    }
+
+    /// บริเวณแบบที่ Lightroom Classic เขียนจริง: attribute อยู่บน `<rdf:li …/>` เอง
+    fn area(what: &str, extra: &str) -> String {
+        format!(
+            r#"<rdf:li
+         crs:What="{what}" crs:MaskActive="true" crs:MaskBlendMode="0" crs:MaskInverted="false" crs:MaskValue="1" {extra}/>"#
+        )
+    }
+
+    /// แบบห่อด้วย `<rdf:Description>` ก็อ่านได้
+    fn wrapped_area(what: &str, extra: &str) -> String {
+        format!(r#"<rdf:li><rdf:Description crs:What="{what}" crs:MaskActive="true" {extra}/></rdf:li>"#)
+    }
+
+    #[test]
+    fn subject_masks_are_imported_and_other_masks_are_listed() {
+        let subject = area("Mask/Image", r#"crs:MaskName="Subject 1" crs:MaskSubType="1""#);
+        let sky = wrapped_area("Mask/Image", r#"crs:MaskName="Sky 1" crs:MaskSubType="2""#);
+        let brush = area("Mask/Paint", "");
+        let xmp = format!(
+            r#"<x crs:Exposure2012="+0.30"><crs:MaskGroupBasedCorrections><rdf:Seq>{}{}{}{}{}</rdf:Seq></crs:MaskGroupBasedCorrections></x>"#,
+            correction(
+                "Mask 1",
+                r#"crs:LocalTexture="-0.35" crs:LocalClarity2012="-0.15" crs:LocalSharpness="0""#,
+                &subject
+            ),
+            correction("Sky", r#"crs:LocalDehaze="0.2""#, &sky),
+            correction("Brush", r#"crs:LocalExposure2012="0.25""#, &brush),
+            correction("Subject and sky", r#"crs:LocalTexture="-0.2""#, &format!("{subject}{sky}")),
+            correction("Lit subject", r#"crs:LocalExposure2012="0.125" crs:LocalLuminanceNoise="0.3""#, &subject),
+        );
+        let p = parse_lightroom(&xmp).unwrap();
+        assert_eq!(p.adjust.exposure, 0.3, "ค่าหลักไม่ปนกับค่าของ Mask");
+        assert_eq!(p.masks.len(), 2, "{:?}", p.masks);
+        let m = &p.masks[0];
+        assert!(matches!(m.area, crate::masks::Area::Subject { map: None }));
+        assert_eq!((m.id.as_str(), m.amount, m.invert), ("lr-SYNCMask 1", 90.0, false));
+        assert!((m.adjust.texture + 35.0).abs() < 1e-9 && (m.adjust.clarity + 15.0).abs() < 1e-9);
+        assert!(m.adjust.validate().is_ok());
+        assert!((p.masks[1].adjust.exposure - 0.5).abs() < 1e-9, "ค่าแสงของ Mask เป็นสัดส่วนของ ±4 stop");
+        assert_eq!(
+            p.unsupported,
+            ["Mask “Sky”", "Mask “Brush”", "Mask “Subject and sky”", "Mask “Lit subject”: ลดนอยส์"]
+        );
+    }
+
+    #[test]
+    fn masks_switched_off_in_lightroom_are_skipped() {
+        let subject = area("Mask/Image", r#"crs:MaskSubType="1""#);
+        let off = correction("Off", r#"crs:LocalTexture="-0.5""#, &subject)
+            .replace(r#"crs:CorrectionActive="true""#, r#"crs:CorrectionActive="false""#);
+        let p = parse_lightroom(&format!("<x crs:Exposure2012=\"0\"><crs:MaskGroupBasedCorrections><rdf:Seq>{off}</rdf:Seq></crs:MaskGroupBasedCorrections></x>")).unwrap();
+        assert!(p.masks.is_empty() && p.unsupported.is_empty(), "{:?} {:?}", p.masks, p.unsupported);
     }
 
     #[test]

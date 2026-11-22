@@ -682,7 +682,21 @@ pub(crate) fn run(ctx: &JobCtx) -> Result<Outcome> {
         // revision และการแต่ง อ่านในเธรดนี้ (ฐานข้อมูลอยู่เธรดเดียว) ก่อนแบ่งงานย่อ
         let prepared: Vec<Result<(Revision, Option<Edit>)>> = chunk
             .iter()
-            .map(|item| Ok((load_revision(conn, &item.revision_id)?, Edit::load(conn, &item.photo_id)?)))
+            .map(|item| {
+                let mut edit = Edit::load(conn, &item.photo_id)?;
+                // Mask ตัวคน (DECISIONS ข้อ 40): คิดภาพน้ำหนักก่อน (ทีละรูป) — คิดไม่ได้ = ส่งออกรูปนี้ไม่ได้
+                // ดีกว่าได้ภาพที่ขาดส่วนที่แต่งไว้โดยไม่รู้ตัว
+                if let Some(e) = edit.as_mut().filter(|e| e.settings.has_subject()) {
+                    let map = crate::subject::compute_map(
+                        &ctx.ai().subject,
+                        ctx.cache_dir(),
+                        &item.revision_id,
+                        Path::new(&item.source_path),
+                    )?;
+                    crate::subject::attach(&mut e.settings, &map);
+                }
+                Ok((load_revision(conn, &item.revision_id)?, edit))
+            })
             .collect();
         let results: Vec<Result<(PathBuf, u64)>> = std::thread::scope(|scope| {
             let handles: Vec<_> = chunk

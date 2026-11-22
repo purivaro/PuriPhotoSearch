@@ -127,6 +127,17 @@ fn edited(app: &App, photo_id: &str, stored: &crate::edit::Stored, kind: &str) -
         return Ok(jpeg(bytes));
     }
     let (edge, quality) = if kind == "thumb" { (media::THUMB_EDGE, 82) } else { (crate::edit::VIEW_EDGE, 90) };
+    // Mask ตัวคน (DECISIONS ข้อ 40): ภาพสำหรับตัวดูภาพคิดภาพน้ำหนักเลยถ้ายังไม่มี (ราว 7 วินาที ครั้งเดียวต่อรูป)
+    // ภาพย่อใช้เฉพาะที่คิดไว้แล้ว (ตารางรูปไม่ต้องรอ) — ยังไม่มีภาพน้ำหนัก = ภาพที่ได้ยังไม่มีผลของ Mask นั้น ไม่เก็บลง cache
+    let mut settings = stored.settings.clone();
+    let complete = crate::subject::prepare(app, photo_id, &mut settings, kind != "thumb");
+    let store = |bytes: &[u8]| {
+        if complete {
+            let _ = media::write_cache_file(&cached, bytes);
+        }
+    };
+    let stored = crate::edit::Stored { edit_id: stored.edit_id.clone(), settings };
+    let stored = &stored;
     if stored.settings.from_raw {
         crate::pair::ensure_start(app, photo_id)?;
         let raw = { crate::pair::raw_edit(&app.db(), photo_id)? };
@@ -134,7 +145,7 @@ fn edited(app: &App, photo_id: &str, stored: &crate::edit::Stored, kind: &str) -
             if let Ok(raw_bytes) = media::read_file(&base.raw_path) {
                 let img = crate::pair::render(&raw_bytes, &base, &stored.settings, edge)?;
                 let bytes = media::encode_jpeg(&image::DynamicImage::ImageRgb8(img), quality)?;
-                let _ = media::write_cache_file(&cached, &bytes);
+                store(&bytes);
                 return Ok(jpeg(bytes));
             }
         }
@@ -151,7 +162,7 @@ fn edited(app: &App, photo_id: &str, stored: &crate::edit::Stored, kind: &str) -
             return Ok(jpeg(crate::edit::preview_jpeg(&thumb.bytes, &stored.settings, edge, quality, profile)?));
         }
     };
-    let _ = media::write_cache_file(&cached, &bytes);
+    store(&bytes);
     Ok(jpeg(bytes))
 }
 

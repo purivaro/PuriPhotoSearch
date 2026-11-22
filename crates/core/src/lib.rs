@@ -36,6 +36,7 @@ pub mod retouch;
 pub mod review;
 pub mod setup;
 pub mod shrink;
+pub mod subject;
 pub mod util;
 pub mod watermark;
 
@@ -70,6 +71,8 @@ pub struct Options {
     /// ตัววิเคราะห์ใบหน้าของ build นี้ (None = build/เครื่องนี้ไม่มี พร้อมเหตุผลใน `face_engine_unavailable`)
     pub face_engine: Option<ai::FaceEngineProvider>,
     pub face_engine_unavailable: &'static str,
+    /// ตัวแยกตัวคนของ build นี้ (Mask ตัวคน — DECISIONS ข้อ 40) · None = ไม่มี
+    pub subject_engine: Option<subject::SubjectProvider>,
 }
 
 pub struct App {
@@ -118,8 +121,12 @@ impl App {
         // ย่อไฟล์ต้นฉบับที่ค้างกลางคัน: ทำให้จบก่อน worker เริ่มสแกน
         shrink::recover(&conn)?;
 
-        let ai =
-            Arc::new(ai::AiState::new(opts.face_engine, opts.face_engine_unavailable, &opts.data_dir.join("models")));
+        let ai = Arc::new(ai::AiState::new(
+            opts.face_engine,
+            opts.face_engine_unavailable,
+            opts.subject_engine,
+            &opts.data_dir.join("models"),
+        ));
         let app = Arc::new_cyclic(|me| App {
             db: Mutex::new(conn),
             db_path: db_path.clone(),
