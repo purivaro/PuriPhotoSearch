@@ -255,7 +255,7 @@ impl Fill {
 }
 
 /// ขยายส่วนที่เป็น true ออกไป `r` พิกเซลทุกทิศ (สี่เหลี่ยม · แยกแนวนอน/แนวตั้ง)
-fn grow(on: &[bool], w: usize, h: usize, r: usize) -> Vec<bool> {
+pub(crate) fn grow(on: &[bool], w: usize, h: usize, r: usize) -> Vec<bool> {
     let pass = |src: &[bool], len: usize, lines: usize, at: &dyn Fn(usize, usize) -> usize| {
         let mut out = vec![false; src.len()];
         for line in 0..lines {
@@ -278,17 +278,35 @@ fn grow(on: &[bool], w: usize, h: usize, r: usize) -> Vec<bool> {
 /// ให้ตัวเติม แล้วขยายผลกลับมาวางเฉพาะในช่อง
 pub fn fill(base: &RgbImage, map: &GrayImage, inpainter: &dyn Inpainter) -> Result<Fill> {
     let (w, h) = map.dimensions();
-    let (wu, hu) = (w as usize, h as usize);
-    let hole: Vec<bool> = map.as_raw().iter().map(|&v| v >= HOLE).collect();
+    let base = if base.dimensions() == (w, h) {
+        base.clone()
+    } else {
+        imageops::resize(base, w, h, imageops::FilterType::Triangle)
+    };
+    let person: Vec<bool> = map.as_raw().iter().map(|&v| v >= HOLE).collect();
     let grow_px = ((HOLE_GROW * w.max(h) as f64).round() as usize).max(2);
-    let hole = grow(&hole, wu, hu, grow_px);
+    Ok(fill_holes(&base, &person, grow_px, inpainter)?.map_or_else(Fill::empty, Fill::new))
+}
+
+/// เติมฉากหลังตรงส่วน `person` (ขนาดเท่า `base`) ที่ขยายออก `grow_px` พิกเซล — None = ไม่มีส่วนให้เติม
+/// · ผล: ภาพขนาดเท่า `base` alpha 255 ในช่องที่เติม (นอกนั้นว่าง) · ใช้ทั้งตัวผอมและลบคน/สิ่งของ ([`crate::remove`])
+pub(crate) fn fill_holes(
+    base: &RgbImage,
+    person: &[bool],
+    grow_px: usize,
+    inpainter: &dyn Inpainter,
+) -> Result<Option<RgbaImage>> {
+    let (w, h) = base.dimensions();
+    let (wu, hu) = (w as usize, h as usize);
+    // ขยายช่องออกจากตัวคน: สีของขอบตัวคนที่เหลือไว้จะถูกตัวเติมลากเข้าไปเป็นเงาของคนเดิม (ลองแล้ว)
+    let hole = grow(person, wu, hu, grow_px);
     let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
     for (i, _) in hole.iter().enumerate().filter(|(_, &on)| on) {
         let (x, y) = (i % wu, i / wu);
         (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
     }
     if x1 <= x0 || y1 <= y0 {
-        return Ok(Fill::empty());
+        return Ok(None);
     }
     // กรอบที่ส่งให้ตัวเติม: รอบตัวคน + ฉากรอบ ๆ ทำให้ใกล้จัตุรัส (ตัวเติมรับภาพจัตุรัส ภาพไม่บิดมาก)
     let margin = (CONTEXT * (x1 - x0).max(y1 - y0) as f64) as usize;
@@ -305,13 +323,8 @@ pub fn fill(base: &RgbImage, map: &GrayImage, inpainter: &dyn Inpainter) -> Resu
     widen(&mut x0, &mut x1, wu);
     widen(&mut y0, &mut y1, hu);
     let (cw, ch) = ((x1 - x0) as u32, (y1 - y0) as u32);
-    let base = if base.dimensions() == (w, h) {
-        base.clone()
-    } else {
-        imageops::resize(base, w, h, imageops::FilterType::Triangle)
-    };
     let s = inpainter.side();
-    let crop = imageops::crop_imm(&base, x0 as u32, y0 as u32, cw, ch).to_image();
+    let crop = imageops::crop_imm(base, x0 as u32, y0 as u32, cw, ch).to_image();
     let image = imageops::resize(&crop, s, s, imageops::FilterType::CatmullRom);
     let holes = GrayImage::from_fn(cw, ch, |x, y| {
         image::Luma([if hole[(y0 + y as usize) * wu + x0 + x as usize] { 255 } else { 0 }])
@@ -328,8 +341,7 @@ pub fn fill(base: &RgbImage, map: &GrayImage, inpainter: &dyn Inpainter) -> Resu
     // ที่เห็นฉากจริง (ส่วนที่ขยายออกไป) แล้วเกลี่ยเข้าไปปรับสีของส่วนที่เติมทั้งหมด — ตรงขอบจึงต่อกับฉากจริงพอดี
     // (ไม่วัดตรงที่ชิดตัวคน: พิกเซลจริงตรงนั้นยังมีแสงจากขอบตัวคนซึมอยู่ — วัดแล้วฉากที่เติมสว่างเป็นเส้นตามรูปร่างเดิม ลองแล้ว)
     let (cwu, chu) = (cw as usize, ch as usize);
-    let person: Vec<bool> = map.as_raw().iter().map(|&v| v >= HOLE).collect();
-    let near = grow(&person, wu, hu, (grow_px / 3).max(2));
+    let near = grow(person, wu, hu, (grow_px / 3).max(2));
     let mut residual = vec![[0f32; 3]; cwu * chu];
     let mut known = vec![0f32; cwu * chu];
     for (x, y, p) in filled.enumerate_pixels() {
@@ -352,7 +364,7 @@ pub fn fill(base: &RgbImage, map: &GrayImage, inpainter: &dyn Inpainter) -> Resu
             out.put_pixel(gx, gy, image::Rgba([c(0), c(1), c(2), 255]));
         }
     }
-    Ok(Fill::new(out))
+    Ok(Some(out))
 }
 
 /// เกลี่ยค่าที่รู้ (`known` = น้ำหนัก 0–1) ไปทั่วภาพแบบนุ่ม (pull-push: เฉลี่ยลงภาพย่อทีละครึ่ง แล้วเติมส่วนที่ไม่รู้จากภาพย่อ)
@@ -411,7 +423,7 @@ pub enum Space {
 }
 
 impl Space {
-    fn convert<const N: usize>(self, rgb: [f64; 3], alpha: f64) -> [f64; N] {
+    pub(crate) fn convert<const N: usize>(self, rgb: [f64; 3], alpha: f64) -> [f64; N] {
         std::array::from_fn(|c| match (c, self) {
             (3, _) => alpha,
             (_, Space::Bytes) => rgb[c.min(2)],
@@ -592,32 +604,32 @@ impl std::fmt::Debug for Attached {
     }
 }
 
-/// ตัวผอมบนภาพเดิม (ก่อนตัด/หมุน) — ภาพ 8 บิต หรือแสงเชิงเส้นของ RAW (ทศนิยม) · `point` = จุดบนภาพเดิมที่แต่ละพิกเซลนำสีมา
-/// ก่อนตัวผอม (หน้าเรียว/หน้าผอม — ทำรอบเดียวกัน)
+/// ลบคน/สิ่งของ (ข้อ 42) แล้วตัวผอมบนภาพเดิม (ก่อนตัด/หมุน) รอบเดียว — ภาพ 8 บิต หรือแสงเชิงเส้นของ RAW (ทศนิยม) ·
+/// `body` = (ระดับ, แผน) ของตัวผอม · `point` = จุดบนภาพเดิมที่แต่ละพิกเซลนำสีมาก่อนตัวผอม (หน้าเรียว/หน้าผอม — ทำรอบเดียวกัน)
 pub fn apply(
     img: DynamicImage,
-    amount: f64,
-    plan: &BodyPlan,
+    body: Option<(f64, &BodyPlan)>,
+    removals: &[crate::remove::Removal],
     point: impl Fn(f64, f64) -> (f64, f64) + Sync,
 ) -> DynamicImage {
     match img {
         DynamicImage::ImageRgb8(src) => {
-            DynamicImage::ImageRgb8(warp::<_, 3>(&src, amount, plan, Space::Bytes, 255.0, &point))
+            DynamicImage::ImageRgb8(warp::<_, 3>(&src, body, removals, Space::Bytes, 255.0, &point))
         }
         DynamicImage::ImageRgba8(src) => {
-            DynamicImage::ImageRgba8(warp::<_, 4>(&src, amount, plan, Space::Bytes, 255.0, &point))
+            DynamicImage::ImageRgba8(warp::<_, 4>(&src, body, removals, Space::Bytes, 255.0, &point))
         }
         DynamicImage::ImageRgb32F(src) => {
-            DynamicImage::ImageRgb32F(warp::<_, 3>(&src, amount, plan, Space::RawLinear, 1.0, &point))
+            DynamicImage::ImageRgb32F(warp::<_, 3>(&src, body, removals, Space::RawLinear, 1.0, &point))
         }
-        other => DynamicImage::ImageRgba8(warp::<_, 4>(&other.to_rgba8(), amount, plan, Space::Bytes, 255.0, &point)),
+        other => DynamicImage::ImageRgba8(warp::<_, 4>(&other.to_rgba8(), body, removals, Space::Bytes, 255.0, &point)),
     }
 }
 
 fn warp<P, const N: usize>(
     src: &ImageBuffer<P, Vec<P::Subpixel>>,
-    amount: f64,
-    plan: &BodyPlan,
+    body: Option<(f64, &BodyPlan)>,
+    removals: &[crate::remove::Removal],
     space: Space,
     alpha_max: f64,
     point: &(impl Fn(f64, f64) -> (f64, f64) + Sync),
@@ -629,7 +641,7 @@ where
     use crate::edit::Channel;
     let (w, h) = (src.width() as usize, src.height() as usize);
     let raw = src.as_raw();
-    let fetch = |u: f64, v: f64| -> [f64; N] {
+    let original = |u: f64, v: f64| -> [f64; N] {
         let fx = (u * w as f64 - 0.5).clamp(0.0, (w - 1) as f64);
         let fy = (v * h as f64 - 0.5).clamp(0.0, (h - 1) as f64);
         let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
@@ -642,12 +654,17 @@ where
             top * (1.0 - ty) + bottom * ty
         })
     };
+    // ภาพเดิมหลังลบคน/สิ่งของ — ตัวผอมนำสีจากภาพนี้
+    let fetch = |u: f64, v: f64| crate::remove::apply(removals, u, v, original(u, v), space, alpha_max);
     let mut out = raw.clone();
     out.par_chunks_mut(w * N).enumerate().for_each(|(y, line)| {
         let v = (y as f64 + 0.5) / h as f64;
         for x in 0..w {
             let (u, v) = point((x as f64 + 0.5) / w as f64, v);
-            let value = plan.sample::<N>(amount, u, v, space, alpha_max, &fetch);
+            let value = match body {
+                Some((amount, plan)) => plan.sample::<N>(amount, u, v, space, alpha_max, &fetch),
+                None => fetch(u, v),
+            };
             for c in 0..N {
                 line[x * N + c] = Channel::put(value[c]);
             }
@@ -750,7 +767,7 @@ mod tests {
     #[test]
     fn the_torso_narrows_the_head_and_the_background_stay() {
         let (plan, img) = plan(&[]);
-        let out = apply(DynamicImage::ImageRgb8(img.clone()), 100.0, &plan, |u, v| (u, v)).into_rgb8();
+        let out = apply(DynamicImage::ImageRgb8(img.clone()), Some((100.0, &plan)), &[], |u, v| (u, v)).into_rgb8();
         // ลำตัวแคบลงราว 12% ทั้งสองข้าง (เส้นกลางเดิม)
         let (l, r) = red_span(&out, 250);
         assert!((r - l) <= 54 && (r - l) >= 50, "ลำตัว 60 → {}", r - l);
@@ -772,7 +789,7 @@ mod tests {
         // แขนที่ยื่นออกไปไกล: ปลายแขนไม่ขยับ
         assert_eq!(red_span(&out, 154).1, 185);
         // ไม่ใส่ = ภาพเดิม
-        let same = apply(DynamicImage::ImageRgb8(img.clone()), 0.0, &plan, |u, v| (u, v)).into_rgb8();
+        let same = apply(DynamicImage::ImageRgb8(img.clone()), Some((0.0, &plan)), &[], |u, v| (u, v)).into_rgb8();
         assert_eq!(same, img);
     }
 
@@ -799,7 +816,9 @@ mod tests {
             [52.0 / 200.0, 22.0 / 300.0, 36.0 / 200.0, 36.0 / 300.0],
             [112.0 / 200.0, 22.0 / 300.0, 36.0 / 200.0, 36.0 / 300.0],
         ];
-        let run = |plan: &BodyPlan| apply(DynamicImage::ImageRgb8(img.clone()), 100.0, plan, |u, v| (u, v)).into_rgb8();
+        let run = |plan: &BodyPlan| {
+            apply(DynamicImage::ImageRgb8(img.clone()), Some((100.0, plan)), &[], |u, v| (u, v)).into_rgb8()
+        };
         let together = run(&BodyPlan::new(SubjectMap::new(map.clone()), filled.clone(), &faces));
         let (l, r) = red_span(&together, 250);
         assert!(l >= 43 && r <= 157, "ขอบนอกหดทั้งสองข้างราว 12% ของครึ่งลำตัวของคนข้างนั้น (30) {l}..{r}");
@@ -819,8 +838,9 @@ mod tests {
             let p = img.get_pixel(x, y);
             image::Rgb(p.0.map(|c| crate::adjust::decode_for(crate::adjust::Profile::Raw, c as f64 / 255.0) as f32))
         });
-        let as_bytes = apply(DynamicImage::ImageRgb8(img.clone()), 100.0, &plan, |u, v| (u, v)).into_rgb8();
-        let as_linear = apply(DynamicImage::ImageRgb32F(lin), 100.0, &plan, |u, v| (u, v)).into_rgb32f();
+        let as_bytes =
+            apply(DynamicImage::ImageRgb8(img.clone()), Some((100.0, &plan)), &[], |u, v| (u, v)).into_rgb8();
+        let as_linear = apply(DynamicImage::ImageRgb32F(lin), Some((100.0, &plan)), &[], |u, v| (u, v)).into_rgb32f();
         let (l, _) = red_span(&as_bytes, 250);
         let (b, f) = (as_bytes.get_pixel(l - 2, 250), as_linear.get_pixel(l - 2, 250));
         for c in 0..3 {
@@ -836,7 +856,7 @@ mod tests {
         let (with_face, img) = plan(&[face]);
         let (plain, _) = plan(&[]);
         let width = |p: &BodyPlan, y: u32| {
-            let out = apply(DynamicImage::ImageRgb8(img.clone()), 100.0, p, |u, v| (u, v)).into_rgb8();
+            let out = apply(DynamicImage::ImageRgb8(img.clone()), Some((100.0, p)), &[], |u, v| (u, v)).into_rgb8();
             let (l, r) = red_span(&out, y);
             r - l
         };

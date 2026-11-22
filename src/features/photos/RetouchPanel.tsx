@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Download, PersonStanding, Smile } from 'lucide-react';
-import { Button } from '@/components/ui/Button';
-import { Spinner } from '@/components/ui/Feedback';
+import { PersonStanding, Smile } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { formatCount } from '@/lib/format';
 import type { FaceBox, Retouch } from '@/lib/ipc/types';
 import { SliderRow } from './AdjustControls';
 import { NO_RETOUCH, RETOUCH_ITEMS, RETOUCH_LEVELS, bodyAmount, faceBoxes, retouchIsActive, type RetouchKey } from './retouch';
-import { bodyInstalling, bodyReady, missingForBody, type SubjectMapState } from './useSubjectMap';
+import { FillModelsInstall } from './FillModelsInstall';
+import { bodyReady, type SubjectMapState } from './useSubjectMap';
 
 interface RetouchPanelProps {
   retouch: Retouch | null;
@@ -154,38 +153,13 @@ function BodySection({ value, onChange, subject }: { value: number; onChange: (v
 
 /** ถามดาวน์โหลดสิ่งที่ตัวผอมใช้ (เฉพาะตัวที่ยังไม่มี) */
 function BodyInstall({ subject, onCancel }: { subject: SubjectMapState; onCancel: () => void }) {
-  const status = subject.status;
-  if (!status) return null;
-  const missing = missingForBody(status);
-  const size = missing.reduce((sum, m) => sum + m.downloadSizeMb, 0);
-  if (bodyInstalling(status)) {
-    return (
-      <div className="flex items-start gap-2 rounded-xl border border-line bg-sunken/60 p-3 text-[13px] text-ink" data-testid="body-installing">
-        <Spinner className="mt-0.5 size-4 shrink-0" />
-        <span>กำลังดาวน์โหลด ({formatCount(size)} MB) — แต่งส่วนอื่นได้ระหว่างรอ เสร็จแล้วแอปตั้งตัวผอมตามที่เลือกไว้ให้เอง</span>
-      </div>
-    );
-  }
   return (
-    <div className="space-y-2 rounded-xl border border-line bg-sunken/60 p-3" data-testid="body-install">
-      <p className="text-sm font-semibold text-ink">ตัวผอมต้องดาวน์โหลดก่อน (ครั้งเดียว)</p>
-      <ul className="space-y-1.5 text-[12.5px] text-muted">
-        {missing.map((m) => (
-          <li key={m.modelName}>
-            <span className="font-semibold text-ink">{m === status ? 'ตัวแยกตัวคน' : 'ตัวเติมฉากหลัง'}</span> · {m.modelName} {formatCount(m.downloadSizeMb)} MB ·{' '}
-            {m.licenseNote}
-          </li>
-        ))}
-      </ul>
-      <p className="text-[12px] text-muted">ทำงานบนเครื่องนี้ทั้งหมด ไม่ส่งรูปออกไปไหน · ครั้งแรกของแต่ละรูปใช้เวลาราว 10 วินาที</p>
-      <div className="flex gap-1.5">
-        <Button size="sm" variant="primary" icon={<Download className="size-4" aria-hidden />} onClick={subject.installBody} data-testid="body-install-start">
-          ดาวน์โหลด ({formatCount(size)} MB)
-        </Button>
-        <Button size="sm" onClick={onCancel}>
-          ไว้ทีหลัง
-        </Button>
-      </div>
-    </div>
+    <FillModelsInstall
+      subject={subject}
+      onCancel={onCancel}
+      title="ตัวผอมต้องดาวน์โหลดก่อน (ครั้งเดียว)"
+      after="เสร็จแล้วแอปตั้งตัวผอมตามที่เลือกไว้ให้เอง"
+      testId="body"
+    />
   );
 }

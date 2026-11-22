@@ -154,6 +154,7 @@ domain_commands!(
     get_subject_status,
     install_subject_model,
     prepare_subject,
+    prepare_removals,
 );
 
 /// เปิด native file picker สำหรับไฟล์รูป (ลายน้ำ); คืน path ที่ผู้ใช้เลือกเอง (หรือ None เมื่อยกเลิก)

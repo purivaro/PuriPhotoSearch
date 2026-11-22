@@ -374,6 +374,14 @@ enum Command {
         #[serde(default)]
         from_raw: bool,
     },
+    /// คิดภาพที่เติมของกรอบที่จะลบ (ลบคน/สิ่งของ — DECISIONS ข้อ 42)
+    #[serde(rename_all = "camelCase")]
+    PrepareRemovals {
+        photo_id: String,
+        #[serde(default)]
+        from_raw: bool,
+        removals: Vec<crate::remove::Removal>,
+    },
 }
 
 /// ชื่อคำสั่งทั้งหมด — ต้องตรงกับ `Commands` ใน `src/lib/ipc/types.ts` (มีเทสต์ตรวจ)
@@ -475,6 +483,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "get_subject_status",
     "install_subject_model",
     "prepare_subject",
+    "prepare_removals",
 ];
 
 #[derive(Serialize)]
@@ -702,6 +711,9 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         InstallSubjectModel { fill } => ok(crate::subject::install(app, fill)?),
         PrepareSubject { photo_id, fill, from_raw } => {
             ok(crate::subject::prepare_photo(app, &photo_id, fill, from_raw)?)
+        }
+        PrepareRemovals { photo_id, from_raw, removals } => {
+            ok(crate::subject::prepare_removals(app, &photo_id, from_raw, &removals)?)
         }
     }
 }

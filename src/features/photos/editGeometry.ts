@@ -15,7 +15,13 @@ export const MAX_STRAIGHTEN = 45;
 export const MIN_CROP = 0.02;
 
 export function isIdentity(s: EditSettings): boolean {
-  return isGeometryIdentity(s) && isNeutral(s.adjust) && !(s.masks ?? []).some(maskIsActive) && !retouchIsActive(s.retouch);
+  return (
+    isGeometryIdentity(s) &&
+    isNeutral(s.adjust) &&
+    !(s.masks ?? []).some(maskIsActive) &&
+    !retouchIsActive(s.retouch) &&
+    !(s.removals ?? []).length
+  );
 }
 
 /** ไม่ได้ตัด หมุน หรือปรับเอียง */

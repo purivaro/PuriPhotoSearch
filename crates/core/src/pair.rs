@@ -747,17 +747,26 @@ fn develop_framed(raw_bytes: &[u8], base: &RawBase, s: &EditSettings, max_edge: 
         lens.as_ref().map_or((x, y), |l| l.source_point(x, y, true))
     };
     // ตัวผอม (DECISIONS ข้อ 41): บนกรอบของ JPEG เหมือนหน้าเรียว — ฉากหลังที่เติมมาจากภาพจาก RAW โทนตั้งต้น แปลงกลับเป็นแสงเชิงเส้น
+    // ลบคน/สิ่งของ (ข้อ 42) ก็เช่นกัน ทำบนกรอบของ JPEG ก่อนตัวผอม
     let body = s.retouch.as_ref().and_then(|r| r.plan.0.as_ref().filter(|_| r.body > 0.0).map(|p| (r.body, p)));
-    let framed: Linear = match body {
-        None => sample(&lin, sw, sh, |a, b| {
+    let framed: Linear = if body.is_none() && !crate::remove::active(&s.removals) {
+        sample(&lin, sw, sh, |a, b| {
             let (u, v) = point(a, b);
             to_raw(u, v)
-        }),
-        Some((amount, plan)) => Linear::from_fn(sw, sh, |i, j| {
+        })
+    } else {
+        let space = crate::body::Space::RawLinear;
+        let fetch = |u: f64, v: f64| {
+            crate::remove::apply(&s.removals, u, v, bilinear(&lin, to_raw(u, v)).map(f64::from), space, 1.0)
+        };
+        Linear::from_fn(sw, sh, |i, j| {
             let (u, v) = point((i as f64 + 0.5) / sw as f64, (j as f64 + 0.5) / sh as f64);
-            let fetch = |u: f64, v: f64| bilinear(&lin, to_raw(u, v)).map(f64::from);
-            Rgb(plan.sample(amount, u, v, crate::body::Space::RawLinear, 1.0, fetch).map(|c| c as f32))
-        }),
+            let value = match body {
+                Some((amount, plan)) => plan.sample(amount, u, v, space, 1.0, fetch),
+                None => fetch(u, v),
+            };
+            Rgb(value.map(|c| c as f32))
+        })
     };
     Ok(if (sw, sh) == (tw, th) {
         framed

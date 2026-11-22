@@ -518,6 +518,8 @@ export interface EditSettings {
   masks?: EditMask[];
   /** รีทัชใบหน้า (DECISIONS ข้อ 31) */
   retouch?: Retouch | null;
+  /** ลบคน/สิ่งของ (DECISIONS ข้อ 42) — ทำก่อนทุกอย่างบนภาพเดิม */
+  removals?: Removal[];
   /** แต่งจากไฟล์ RAW คู่ — แอปตั้งเองตอนบันทึก */
   fromRaw?: boolean;
 }
@@ -606,6 +608,14 @@ export interface PreviewPointArgs {
   settings: EditSettings;
   x?: number;
   y?: number;
+}
+
+/** ส่วนหนึ่งที่จะลบ: กรอบ [x, y, w, h] บนภาพเดิม (สัดส่วน ก่อนตัด/หมุน) — แอปหาคน/สิ่งที่เด่นในกรอบแล้วเติมฉากหลังแทน */
+export interface Removal {
+  id: string;
+  rect: [number, number, number, number];
+  /** จุดยึด (กลางใบหน้า — เลือกจากใบหน้าที่พบ): ลบเฉพาะสิ่งที่ติดกับจุดนี้ ของอื่นในกรอบไม่ถูกลบ */
+  anchor?: [number, number];
 }
 
 /** รีทัชใบหน้า (DECISIONS ข้อ 31): ทุกใบหน้าที่มีกรอบ · ค่า 0–100 */
@@ -1318,6 +1328,11 @@ export interface Commands {
    * (`fromRaw` = ภาพจาก RAW คู่) — ยังไม่ติดตั้ง = MODEL_NOT_READY
    */
   prepare_subject: [{ photoId: Id; fill?: boolean; fromRaw?: boolean }, { found: boolean }];
+  /**
+   * ลบคน/สิ่งของ: คิดภาพที่เติมของแต่ละกรอบไว้ก่อน (ราว 3–8 วินาทีต่อกรอบครั้งแรก) — `found` ต่อกรอบ: พบคน/สิ่งที่เด่น
+   * (ไม่พบ = ลบทั้งกรอบ) · ยังไม่ติดตั้งตัวแยกตัวคน/ตัวเติมฉากหลัง = MODEL_NOT_READY
+   */
+  prepare_removals: [{ photoId: Id; fromRaw?: boolean; removals: Removal[] }, { found: boolean[] }];
   /** ย้อน "ไม่ใช่บุคคลนี้": ใบหน้ากลับไปให้ AI จัดได้ตามเดิม */
   restore_suggestions: [{ faceIds: Id[]; personId: Id }, { dataRevision: number }];
 }

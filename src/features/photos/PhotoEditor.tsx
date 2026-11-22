@@ -7,7 +7,7 @@ import { ConfirmDialog } from '@/components/ui/Dialog';
 import { InlineNotice, Spinner } from '@/components/ui/Feedback';
 import { Tabs } from '@/components/ui/Form';
 import { cn } from '@/lib/cn';
-import { errorMessage, formatCount } from '@/lib/format';
+import { errorMessage, formatCount, newRequestId } from '@/lib/format';
 import { call, renderPreview } from '@/lib/ipc/client';
 import type { CropSuggestion, EditSettings, PhotoDetails, PreviewRequest, PreviewSource, RawPairInfo, UnitRect } from '@/lib/ipc/types';
 import { NEUTRAL, histogram, isNeutral, type Adjust, type Histogram } from './adjust';
@@ -15,9 +15,12 @@ import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, SharpenPanel, 
 import { EditPresets } from './EditPresets';
 import { MaskPanel, SubjectProgress } from './MaskPanel';
 import { addMasks, isSubjectMask } from './masks';
+import { RemovePanel } from './RemovePanel';
+import { MIN_DRAG_PX, sourceToView, viewToSource } from './removals';
 import { RetouchPanel } from './RetouchPanel';
 import { bodyAmount, retouchIsActive } from './retouch';
 import { COLOR, LIGHT, PRESENCE, SliderGroup } from './SliderGroup';
+import { useRemovals } from './useRemovals';
 import { useSubjectMap } from './useSubjectMap';
 import {
   FULL,
@@ -54,7 +57,12 @@ const HANDLES: Handle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 
 // ไม่มี Mask กับรายการ Mask ว่าง (ค่าจาก Rust ไม่ส่งช่องที่ว่าง) ถือว่าเหมือนกัน
 const comparable = (s: EditSettings) =>
-  JSON.stringify({ ...s, masks: s.masks?.length ? s.masks : undefined, retouch: retouchIsActive(s.retouch) ? s.retouch : undefined });
+  JSON.stringify({
+    ...s,
+    masks: s.masks?.length ? s.masks : undefined,
+    retouch: retouchIsActive(s.retouch) ? s.retouch : undefined,
+    removals: s.removals?.length ? s.removals : undefined,
+  });
 const sameSettings = (a: EditSettings, b: EditSettings) => comparable(a) === comparable(b);
 
 /** ส่วนของ Lightroom ที่ทำตามไม่ได้ แบบย่อ: Mask หลายอันนับรวมเป็นหนึ่งรายการ */
@@ -136,6 +144,11 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
   const [showArea, setShowArea] = useState<string | null>(null);
   // Mask ตัวคน (DECISIONS ข้อ 40): Rust หาตัวคนของรูปนี้ครั้งแรกที่ต้องใช้ แล้วตัวอย่างสดวาดใหม่
   // ตัวผอม (ข้อ 41) ใช้ภาพน้ำหนักเดียวกัน + ฉากหลังที่เติมจากภาพต้นทางของตัวอย่างสด
+  // ลบคน/สิ่งของ (ข้อ 42): ลากกรอบบนภาพ · ชี้ที่รายการแล้วแสดงกรอบนั้น
+  const [drawing, setDrawing] = useState(false);
+  const [hoverRemoval, setHoverRemoval] = useState<string | null>(null);
+  const removals = useMemo(() => settings.removals ?? [], [settings.removals]);
+  const removing = useRemovals(details.id, removals, fromRaw);
   const subject = useSubjectMap(details.id, {
     mask: (settings.masks ?? []).some(isSubjectMask),
     body: bodyAmount(settings.retouch) > 0,
@@ -188,13 +201,14 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
         // Esc ระหว่างใช้หลอดดูดสี/ลากเส้นให้ตรง = เลิกโหมดนั้น ไม่ใช่ปิดหน้าแต่งภาพ
         if (picking) setPicking(false);
         else if (leveling) setLeveling(false);
+        else if (drawing) setDrawing(false);
         else if (dirty) setConfirmDiscard('close');
         else onClose();
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [dirty, confirmDiscard, onClose, picking, leveling]);
+  }, [dirty, confirmDiscard, onClose, picking, leveling, drawing]);
 
   const chooseAspect = (a: Aspect, upright = portrait) => {
     setAspect(a);
@@ -272,6 +286,21 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
     return { face, box, cut: cutOut(box, settings.crop) };
   });
   const cutCount = faces.filter((f) => f.cut).length;
+  // ส่วนที่เห็นในแท็บอื่นนอกจากตัดและหมุน = กรอบตัด (กรอบที่ลากบนภาพเป็นสัดส่วนของส่วนนี้)
+  const shownView = tab === 'crop' ? FULL : (settings.crop ?? FULL);
+  const removalBoxes = removals.map((r, i) => ({
+    id: r.id,
+    n: i + 1,
+    box: sourceToView(W, H, settings, shownView, r.rect),
+    busy: removing.phase === 'preparing',
+    highlight: hoverRemoval === r.id,
+  }));
+  const addRemoval = (box: UnitRect) => {
+    setDrawing(false);
+    const rect = viewToSource(W, H, settings, shownView, box);
+    if (rect[2] < 0.005 || rect[3] < 0.005) return;
+    setSettings((s) => ({ ...s, removals: [...(s.removals ?? []), { id: newRequestId(), rect }] }));
+  };
 
   return (
     <div role="dialog" aria-modal="true" aria-label="แต่งภาพ" data-state="open" data-testid="photo-editor" className="anim-fade absolute inset-0 z-40 flex flex-col bg-canvas">
@@ -334,7 +363,10 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
           onCrop={(next) => setSettings((s) => ({ ...s, crop: next }))}
           onHistogram={setHist}
           overlay={tab === 'masks' ? showArea : null}
-          subjectToken={subject.token}
+          subjectToken={subject.token + removing.token}
+          drawing={drawing && tab === 'masks'}
+          onDrawBox={addRemoval}
+          removalBoxes={tab === 'masks' && !before ? removalBoxes : []}
           picking={picking}
           onPick={async (fx, fy) => {
             setPicking(false);
@@ -587,7 +619,21 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
                   onChange={(retouch) => setSettings((s) => ({ ...s, retouch }))}
                   subject={subject}
                 />
-                <BeforeButton disabled={!retouchIsActive(settings.retouch) && !(settings.masks ?? []).length} onHold={setBefore} label="กดค้างเพื่อดูภาพก่อนรีทัชและปรับ" />
+                <RemovePanel
+                  removals={removals}
+                  onChange={(next) => setSettings((s) => ({ ...s, removals: next }))}
+                  faces={details.faces}
+                  subject={subject}
+                  state={removing}
+                  drawing={drawing}
+                  onDrawing={setDrawing}
+                  onHover={setHoverRemoval}
+                />
+                <BeforeButton
+                  disabled={!retouchIsActive(settings.retouch) && !(settings.masks ?? []).length && !removals.length}
+                  onHold={setBefore}
+                  label="กดค้างเพื่อดูภาพก่อนรีทัชและปรับ"
+                />
                 <div className="border-t border-line pt-4">
                   <MaskPanel
                     masks={settings.masks ?? []}
@@ -686,8 +732,13 @@ interface EditCanvasProps {
   onPick: (fx: number, fy: number) => void;
   /** แสดงบริเวณของ Mask นี้เป็นสีแดงทับ */
   overlay: string | null;
-  /** เปลี่ยนเมื่อภาพน้ำหนักตัวคนพร้อม (วาดใหม่ให้เห็นผลของ Mask ตัวคน) */
+  /** เปลี่ยนเมื่อภาพน้ำหนักตัวคน/ภาพที่ลบพร้อม (วาดใหม่ให้เห็นผล) */
   subjectToken: number;
+  /** ลบคน/สิ่งของ: โหมดลากกรอบบนภาพ → กรอบเป็นสัดส่วนของภาพที่แสดง */
+  drawing: boolean;
+  onDrawBox: (box: UnitRect) => void;
+  /** กรอบของส่วนที่ลบบนภาพที่แสดง — วาดเมื่อกำลังลบ (busy) หรือชี้ที่รายการ (highlight) */
+  removalBoxes: { id: string; n: number; box: UnitRect; busy: boolean; highlight: boolean }[];
 }
 
 /** ตัวอย่างภาพที่แต่ง: แท็บตัดและหมุนแสดงทั้งกรอบพร้อมกรอบตัดที่ลากได้ · แท็บแสงและสีแสดงเฉพาะส่วนที่ตัดพร้อมแสงสี */
@@ -711,8 +762,13 @@ function EditCanvas({
   onPick,
   overlay,
   subjectToken,
+  drawing,
+  onDrawBox,
+  removalBoxes,
 }: EditCanvasProps) {
   const area = useRef<HTMLDivElement>(null);
+  // กรอบที่กำลังลาก (พิกเซลในกรอบภาพ) — ลบคน/สิ่งของ
+  const [draft, setDraft] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   // เส้นที่กำลังลาก (พิกเซลในกรอบภาพ)
   const [line, setLine] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -838,6 +894,65 @@ function EditCanvas({
               data-testid="editor-wb-target"
             />
           )}
+          {mode !== 'crop' &&
+            removalBoxes
+              .filter((r) => r.busy || r.highlight || drawing)
+              .map((r) => (
+                <div
+                  key={r.id}
+                  aria-hidden
+                  className={cn('pointer-events-none absolute rounded-md border-2 border-dashed', r.highlight ? 'border-danger bg-danger/15' : 'border-white/85')}
+                  style={{ left: pct(r.box.x), top: pct(r.box.y), width: pct(r.box.w), height: pct(r.box.h) }}
+                  data-testid="remove-box"
+                >
+                  <span className="absolute top-1 left-1 flex items-center gap-1 rounded-full bg-black/70 px-1.5 py-0.5 text-[11.5px] font-semibold whitespace-nowrap text-white">
+                    {r.busy && <Spinner className="size-3" />}
+                    {r.busy ? 'กำลังลบ…' : r.n}
+                  </span>
+                </div>
+              ))}
+          {drawing && mode !== 'crop' && (
+            <div
+              className="absolute inset-0 z-20 cursor-crosshair touch-none"
+              data-testid="remove-surface"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                const r = e.currentTarget.getBoundingClientRect();
+                const [x, y] = [e.clientX - r.left, e.clientY - r.top];
+                setDraft({ x0: x, y0: y, x1: x, y1: y });
+              }}
+              onPointerMove={(e) => {
+                if (!draft) return;
+                const r = e.currentTarget.getBoundingClientRect();
+                setDraft({ ...draft, x1: Math.min(Math.max(e.clientX - r.left, 0), r.width), y1: Math.min(Math.max(e.clientY - r.top, 0), r.height) });
+              }}
+              onPointerUp={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                if (draft && Math.abs(draft.x1 - draft.x0) >= MIN_DRAG_PX && Math.abs(draft.y1 - draft.y0) >= MIN_DRAG_PX) {
+                  const [x0, x1] = [Math.min(draft.x0, draft.x1), Math.max(draft.x0, draft.x1)];
+                  const [y0, y1] = [Math.min(draft.y0, draft.y1), Math.max(draft.y0, draft.y1)];
+                  onDrawBox({ x: x0 / r.width, y: y0 / r.height, w: (x1 - x0) / r.width, h: (y1 - y0) / r.height });
+                }
+                setDraft(null);
+              }}
+              onPointerCancel={() => setDraft(null)}
+            >
+              {draft && (
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute rounded-sm border-2 border-dashed border-white bg-white/10 shadow-[0_0_0_1px_rgba(0,0,0,0.55)]"
+                  style={{
+                    left: Math.min(draft.x0, draft.x1),
+                    top: Math.min(draft.y0, draft.y1),
+                    width: Math.abs(draft.x1 - draft.x0),
+                    height: Math.abs(draft.y1 - draft.y0),
+                  }}
+                />
+              )}
+            </div>
+          )}
           {mode === 'crop' && (
             <>
               {straightening && (
@@ -939,6 +1054,11 @@ function EditCanvas({
       {picking && mode !== 'crop' && (
         <p className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 rounded-full bg-black/75 px-3 py-1 text-[13px] font-semibold text-white">
           คลิกจุดที่ควรเป็นสีขาวหรือสีเทา · Esc เพื่อยกเลิก
+        </p>
+      )}
+      {drawing && mode !== 'crop' && state === 'ready' && (
+        <p className="pointer-events-none absolute top-3 left-1/2 z-30 -translate-x-1/2 rounded-full bg-black/75 px-3 py-1 text-[13px] font-semibold text-white">
+          ลากกรอบรอบคนหรือสิ่งของที่จะลบ · Esc ยกเลิก
         </p>
       )}
     </div>

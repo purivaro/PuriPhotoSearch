@@ -347,6 +347,9 @@
     // ตัวผอม (ข้อ 41): ไม่มีตัวแยกตัวคน → ปุ่มระดับกดไม่ได้ พร้อมเหตุผล
     await see('body-unsupported', 'เหตุที่ใช้ตัวผอมไม่ได้');
     expect([...document.querySelectorAll('[data-testid="retouch-body-level"]')].every((b) => b.disabled), 'ปุ่มระดับตัวผอมกดไม่ได้');
+    // ลบคน/สิ่งของ (ข้อ 42): ไม่มีตัวแยกตัวคน → บอกเหตุ ไม่มีปุ่มลากกรอบ
+    await see('remove-unsupported', 'เหตุที่ลบคน/สิ่งของไม่ได้');
+    expect(!tid('remove-draw'), 'ไม่มีปุ่มลากกรอบเมื่อลบไม่ได้');
     const addFaces = await see('mask-add-faces');
     expect(text(addFaces).includes('2 คน'), `ปุ่มบอกจำนวนใบหน้า (ได้ "${text(addFaces)}")`);
     // แก้มของใบหน้าซ้าย (ใต้ตา) และฉากหลังมุมซ้ายบน

@@ -684,25 +684,21 @@ pub(crate) fn run(ctx: &JobCtx) -> Result<Outcome> {
             .iter()
             .map(|item| {
                 let mut edit = Edit::load(conn, &item.photo_id)?;
-                // Mask ตัวคน (DECISIONS ข้อ 40) และตัวผอม (ข้อ 41): คิดภาพน้ำหนัก (และเติมฉากหลัง) ก่อน ทีละรูป
+                // Mask ตัวคน (DECISIONS ข้อ 40) ตัวผอม (ข้อ 41) และลบคน/สิ่งของ (ข้อ 42): คิดภาพน้ำหนักและฉากที่เติมก่อน ทีละรูป
                 // — คิดไม่ได้ = ส่งออกรูปนี้ไม่ได้ ดีกว่าได้ภาพที่ขาดส่วนที่แต่งไว้โดยไม่รู้ตัว
-                if let Some(e) = edit.as_mut().filter(|e| e.settings.has_subject() || e.settings.has_body()) {
-                    let (state, cache, source) = (&ctx.ai().subject, ctx.cache_dir(), Path::new(&item.source_path));
-                    let map = crate::subject::compute_map(state, cache, &item.revision_id, source)?;
-                    crate::subject::attach(&mut e.settings, &map);
-                    if e.settings.has_body() {
-                        let from_raw = e.settings.from_raw;
-                        let fill =
-                            crate::subject::compute_fill(state, cache, &item.revision_id, from_raw, &map, || {
-                                if from_raw {
-                                    let (base, rev) = crate::assets::raw_frame_base(conn, &item.photo_id)?;
-                                    crate::subject::base_image(cache, source, Some((&base, &rev)))
-                                } else {
-                                    crate::subject::base_image(cache, source, None)
-                                }
-                            })?;
-                        crate::subject::attach_body(&mut e.settings, &map, &fill);
-                    }
+                if let Some(e) = edit.as_mut() {
+                    let (cache, source, from_raw) =
+                        (ctx.cache_dir(), Path::new(&item.source_path), e.settings.from_raw);
+                    let base = |edge: u32| {
+                        if from_raw {
+                            let (base, rev) = crate::assets::raw_frame_base(conn, &item.photo_id)?;
+                            crate::subject::base_image(cache, source, Some((&base, &rev)), edge)
+                        } else {
+                            crate::subject::base_image(cache, source, None, edge)
+                        }
+                    };
+                    let state = &ctx.ai().subject;
+                    crate::subject::attach_all(state, cache, &item.revision_id, source, &base, &mut e.settings, true)?;
                 }
                 Ok((load_revision(conn, &item.revision_id)?, edit))
             })
