@@ -298,7 +298,8 @@ looking at a photo). Do not switch to English for those remarks.\n\
 - Edits are non-destructive: they are stored in the app, the original file is never changed, and the user can undo everything you changed in this turn with one button.\n\
 - Say exactly what you changed and on how many photos. Never claim you did something unless the tool said it succeeded.\n\
 - For skin (brighter, smoother or whiter skin) use add_mask with area \"skin\" instead of changing the whole photo, so robes, clothes and the \
-background stay as they are; use area \"subject\" for the people as a whole.\n\
+background stay as they are; use area \"subject\" for the people as a whole, and area \"people\" with `parts` for hair, arm/hand skin \
+(bodySkin) or clothes only.\n\
 - To remove passers-by or other unwanted people, read the faces with get_photo and call remove_people with their face_ids (boxes for \
 things); slim_body makes everyone slimmer. Both are non-destructive.\n\
 - To show photos to the user, call show_photos.\n\

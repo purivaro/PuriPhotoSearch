@@ -322,3 +322,53 @@ fn a_hair_mask_brightens_only_the_hair_in_views_previews_and_exports() {
         lib.call("get_photo_details", json!({ "photoId": id }))["edit"]["settings"]["masks"][0]["area"].clone();
     assert_eq!(stored, json!({ "kind": "people", "parts": ["hair"] }), "ภาพน้ำหนักไม่ถูกเก็บ");
 }
+
+#[test]
+fn the_assistant_adds_and_removes_people_part_masks() {
+    let lib = Lib::with_subject(true);
+    grey_event(&lib, &["grey.jpg"]);
+    let id = lib.photo_id("grey.jpg");
+    let (tools, _) = puri_core::assistant::test_tools(&lib.app).unwrap();
+    let text = |out: &puri_core::assistant::mcp::ToolOutput| {
+        out.content.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")
+    };
+    let masks = |id: &str| lib.call("get_photo_details", json!({ "photoId": id }))["edit"]["settings"]["masks"].clone();
+    let hair = json!({ "photo_ids": [id], "area": "people", "parts": ["hair"], "adjust": { "exposure": 1.0 } });
+
+    // ต้องบอกส่วน · ยังไม่มีตัวแยกส่วน: บอก AI ให้บอกผู้ใช้ดาวน์โหลดจากปุ่มในแอป
+    let out = tools.call("add_mask", json!({ "photo_ids": [id], "area": "people", "adjust": { "exposure": 1.0 } }));
+    assert!(out.is_error && text(&out).contains("parts"), "{}", text(&out));
+    let out = tools.call("add_mask", hair.clone());
+    assert!(out.is_error && text(&out).contains("ส่วนของคน (AI)"), "{}", text(&out));
+
+    let job = lib.call("install_subject_model", json!({ "parts": true }));
+    lib.run_jobs();
+    assert_eq!(lib.call("get_job", json!({ "jobId": job["id"] }))["state"], "completed");
+
+    // Mask ผม: ผมสว่าง เสื้อผ้าและฉากหลังเท่าเดิม (view_photo คิดส่วนของคนให้เอง)
+    let out = tools.call("add_mask", hair);
+    assert!(!out.is_error, "{}", text(&out));
+    assert!(!tools.call("view_photo", json!({ "photo_id": id, "size": 256 })).is_error);
+    let img = image::load_from_memory(&puri_core::api::asset(&lib.app, &format!("photo/{id}")).unwrap().bytes).unwrap();
+    let (top, bottom, left) = quadrants(&img.to_rgb8());
+    assert!(top > 120 && bottom.abs_diff(90) <= 3 && left.abs_diff(90) <= 3, "ผม {top} เสื้อผ้า {bottom} ฉากหลัง {left}");
+
+    // ชุดส่วนอื่น = Mask อีกอัน (เรียงตามแอป ไม่ซ้ำ) · ชุดเดิม = แทนของเดิม
+    for parts in [json!(["clothes", "hair", "clothes"]), json!(["hair", "clothes"])] {
+        let out = tools.call(
+            "add_mask",
+            json!({ "photo_ids": [id], "area": "people", "parts": parts, "adjust": { "saturation": -20 } }),
+        );
+        assert!(!out.is_error, "{}", text(&out));
+    }
+    let m = masks(&id);
+    assert_eq!(m.as_array().unwrap().len(), 2, "{m}");
+    assert_eq!(m[1]["area"], json!({ "kind": "people", "parts": ["hair", "clothes"] }));
+    assert_eq!(m[1]["id"], "ai-people-hair-clothes");
+
+    assert_eq!(
+        text(&tools.call("remove_masks", json!({ "photo_ids": [id], "area": "people" }))),
+        "Removed masks from 1 photos."
+    );
+    assert!(masks(&id).as_array().is_none_or(|m| m.is_empty()), "{}", masks(&id));
+}

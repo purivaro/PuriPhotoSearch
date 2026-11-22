@@ -180,7 +180,13 @@ impl PhotoTools {
                 input_schema: schema(
                     json!({
                         "photo_ids": { "type": "array", "items": { "type": "string" }, "maxItems": MAX_EDIT_PHOTOS },
-                        "area": { "type": "string", "enum": ["skin", "faces", "subject"] },
+                        "area": { "type": "string", "enum": ["skin", "faces", "subject", "people"] },
+                        "parts": {
+                            "type": "array",
+                            "items": { "type": "string", "enum": ["hair", "faceSkin", "bodySkin", "clothes"] },
+                            "minItems": 1,
+                            "maxItems": 4,
+                        },
                         "adjust": { "type": "object" },
                         "amount": { "type": "number", "minimum": 0, "maximum": 100 },
                         "invert": { "type": "boolean" },
@@ -191,11 +197,12 @@ impl PhotoTools {
             },
             ToolSpec {
                 name: "remove_masks",
-                description: "Remove local adjustments (masks) from photos: `area` \"skin\" or \"faces\" (face masks), \"subject\" (people masks) or \"all\".",
+                description: "Remove local adjustments (masks) from photos: `area` \"skin\" or \"faces\" (face masks), \"subject\" (people masks), \
+                    \"people\" (hair/skin/clothes masks) or \"all\".",
                 input_schema: schema(
                     json!({
                         "photo_ids": { "type": "array", "items": { "type": "string" }, "maxItems": MAX_EDIT_PHOTOS },
-                        "area": { "type": "string", "enum": ["skin", "faces", "subject", "all"] },
+                        "area": { "type": "string", "enum": ["skin", "faces", "subject", "people", "all"] },
                     }),
                     &["photo_ids", "area"],
                 ),
@@ -320,10 +327,12 @@ impl PhotoTools {
 const ADD_MASK_HELP: &str = "Adjust only part of photos (non-destructive; the user can undo). `area`: \"skin\" = only the skin of the faces the app \
 found (brighter, smoother or whiter skin while robes, clothes, hair and background stay the same); \"faces\" = the whole face areas; \"subject\" = \
 the people (main subject) separated from the background by AI, like Lightroom's Select Subject (softer skin texture on the people, or with \
-`invert` true to change only the background). `adjust` uses the fields of edit_photos; meaningful here: exposure, contrast, highlights, shadows, \
+`invert` true to change only the background); \"people\" = parts of the people, like Lightroom's Select People: give `parts`, one or more of \
+\"hair\", \"faceSkin\", \"bodySkin\" (arms, hands, neck), \"clothes\" (clothes and robes) — e.g. darker hair, brighter clothes, or the same skin \
+look on faces and arms. `adjust` uses the fields of edit_photos; meaningful here: exposure, contrast, highlights, shadows, \
 whites, blacks, temperature, tint, saturation, texture, clarity, dehaze. `amount` 0..100 (default 100). Calling it again with the same area \
 replaces your earlier mask of that area on those photos. Photos without faces are skipped for skin/faces. The first look at a photo with a \
-subject mask takes about 10 seconds while the app finds the people.";
+subject or people mask takes about 10 seconds while the app finds the people.";
 
 /// edit_photos ใช้คำอธิบายฟิลด์ทั้งหมด (ยาว) ในที่เดียว
 const ADJUST_HELP_EDIT_PHOTOS: &str = concat!(
@@ -368,6 +377,7 @@ fn summarize(name: &str, args: &Value) -> String {
                 "skin" => "ผิวหน้า",
                 "faces" => "ใบหน้า",
                 "subject" => "ตัวคน",
+                "people" => "ส่วนของคน",
                 _ => "ทุกบริเวณ",
             };
             format!("{area} · {} รูป", ids("photo_ids"))
@@ -705,8 +715,20 @@ impl PhotoTools {
         use crate::masks::{Area, Mask};
         let ids = ids_arg(args, "photo_ids")?;
         let area = str_arg(args, "area").ok_or("area is required")?;
-        if !matches!(area, "skin" | "faces" | "subject") {
-            return Err("area must be skin, faces or subject".into());
+        if !matches!(area, "skin" | "faces" | "subject" | "people") {
+            return Err("area must be skin, faces, subject or people".into());
+        }
+        let parts: Vec<crate::parts::Part> = match (area, args.get("parts")) {
+            ("people", Some(v)) => serde_json::from_value(v.clone()).map_err(|e| format!("Invalid parts: {e}"))?,
+            ("people", None) => {
+                return Err("parts is required for area people (hair, faceSkin, bodySkin, clothes)".into())
+            }
+            _ => vec![],
+        };
+        // ตามลำดับในแอป ไม่ซ้ำ
+        let parts: Vec<_> = crate::parts::Part::ALL.into_iter().filter(|p| parts.contains(p)).collect();
+        if area == "people" && parts.is_empty() {
+            return Err("parts must name at least one of hair, faceSkin, bodySkin, clothes".into());
         }
         let adjust: crate::adjust::Adjust =
             serde_json::from_value(args.get("adjust").cloned().unwrap_or_else(|| json!({})))
@@ -722,12 +744,25 @@ impl PhotoTools {
                 press แต่งภาพ, tab เฉพาะส่วน, button ตัวคน (AI). Skin and face masks work without it."
                 .into());
         }
-        // Mask ของ AI หนึ่งอันต่อบริเวณ (เรียกซ้ำ = แทนของเดิม)
-        let id = format!("ai-{area}{}", if invert { "-inverted" } else { "" });
+        if area == "people"
+            && (self.app.ai.subject.segmenter().is_none() || self.app.ai.subject.part_segmenter().is_none())
+        {
+            return Err("The people parts model is not installed on this computer. Ask the user to download it once: open a photo, \
+                press แต่งภาพ, tab เฉพาะส่วน, one of the buttons under ส่วนของคน (AI) (ผม, ผิวหน้า, ผิวตัว, เสื้อผ้า). Skin and face masks work without it."
+                .into());
+        }
+        // Mask ของ AI หนึ่งอันต่อบริเวณ (เรียกซ้ำ = แทนของเดิม) · ส่วนของคน: หนึ่งอันต่อชุดของส่วน
+        let mut which = area.to_string();
+        for part in &parts {
+            which.push('-');
+            which.push_str(part.key());
+        }
+        let id = format!("ai-{which}{}", if invert { "-inverted" } else { "" });
         let (mut done, mut no_faces, mut failed) = (vec![], 0, vec![]);
         for photo in &ids {
             let area_value = match area {
                 "subject" => Area::Subject { map: None },
+                "people" => Area::People { parts: parts.clone(), map: None },
                 _ => {
                     let boxes = self.faces_of(photo)?;
                     if boxes.is_empty() {
@@ -738,6 +773,7 @@ impl PhotoTools {
                 }
             };
             let mask = Mask { id: id.clone(), area: area_value, adjust: adjust.clone(), amount, invert };
+            mask.validate().map_err(|e| e.message)?;
             let current = edit::state(&self.app, photo).map_err(|e| e.message)?.current;
             let masks = crate::masks::add(&current.masks, &[mask]);
             let patch = json!({ "masks": serde_json::to_value(&masks).map_err(|e| e.to_string())? });
@@ -861,7 +897,10 @@ impl PhotoTools {
                 .filter(|m| {
                     !matches!(
                         (area, &m.area),
-                        ("all", _) | ("subject", Area::Subject { .. }) | ("skin" | "faces", Area::Faces { .. })
+                        ("all", _)
+                            | ("subject", Area::Subject { .. })
+                            | ("people", Area::People { .. })
+                            | ("skin" | "faces", Area::Faces { .. })
                     )
                 })
                 .cloned()

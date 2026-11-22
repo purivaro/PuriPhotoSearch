@@ -24,6 +24,19 @@ pub enum Part {
 }
 
 impl Part {
+    /// ทุกส่วน ตามลำดับที่แสดงในแอป
+    pub const ALL: [Part; 4] = [Part::Hair, Part::FaceSkin, Part::BodySkin, Part::Clothes];
+
+    /// ชื่อในค่าที่แต่ง (เหมือนที่ serde เขียน)
+    pub fn key(self) -> &'static str {
+        match self {
+            Part::Hair => "hair",
+            Part::FaceSkin => "faceSkin",
+            Part::BodySkin => "bodySkin",
+            Part::Clothes => "clothes",
+        }
+    }
+
     fn channel(self) -> usize {
         match self {
             Part::Hair => 0,
