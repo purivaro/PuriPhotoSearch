@@ -235,7 +235,11 @@ fn retouch(rng: &mut Rng, masks: &[Mask]) -> Option<Retouch> {
         .iter()
         .flat_map(|m| match &m.area {
             Area::Faces { boxes, .. } => boxes.clone(),
-            Area::Subject { .. } | Area::People { .. } | Area::Sky { .. } => vec![],
+            Area::Subject { .. }
+            | Area::People { .. }
+            | Area::Sky { .. }
+            | Area::Linear { .. }
+            | Area::Radial { .. } => vec![],
         })
         .collect();
     if faces.is_empty() || rng.chance(0.3) {
@@ -306,6 +310,32 @@ fn sky_mask(rng: &mut Rng, s: &mut EditSettings) {
     s.masks.push(Mask {
         id: "sky".into(),
         area: Area::Sky { map: Some(puri_core::sky::SkyMap::new(image)) },
+        adjust: mask_adjust(rng),
+        amount: if rng.chance(0.6) { 100.0 } else { rng.int(0, 100) as f64 },
+        invert: rng.chance(0.25),
+    });
+}
+
+/// ไล่ระดับ / วงกลม (DECISIONS ข้อ 45): ตำแหน่ง ขนาด มุม ขอบนุ่มสุ่ม (บางทีเลยขอบภาพ)
+fn gradient_mask(rng: &mut Rng, s: &mut EditSettings) {
+    if !rng.chance(0.3) || s.masks.len() >= puri_core::masks::MAX_MASKS {
+        return;
+    }
+    let area = if rng.chance(0.5) {
+        let full = [rng.range(-0.2, 1.2), rng.range(-0.2, 1.2)];
+        let zero = [full[0] + rng.range(-0.8, 0.8), full[1] + rng.range(-0.8, 0.8)];
+        Area::Linear { full, zero }
+    } else {
+        Area::Radial {
+            center: [rng.range(-0.1, 1.1), rng.range(-0.1, 1.1)],
+            radius: [rng.range(0.05, 0.7), rng.range(0.05, 0.7)],
+            angle: rng.range(-180.0, 180.0),
+            feather: if rng.chance(0.2) { 0.0 } else { rng.range(0.0, 100.0) },
+        }
+    };
+    s.masks.push(Mask {
+        id: "gradient".into(),
+        area,
         adjust: mask_adjust(rng),
         amount: if rng.chance(0.6) { 100.0 } else { rng.int(0, 100) as f64 },
         invert: rng.chance(0.25),
@@ -515,6 +545,8 @@ fn live_preview_matches_the_saved_image_pixel_for_pixel() {
         people_mask(&mut rp, &mut s);
         let mut rs = Rng(SEED ^ 0x5C1E_5C1E_u64.wrapping_add(id.wrapping_mul(49_979_687)));
         sky_mask(&mut rs, &mut s);
+        let mut rg = Rng(SEED ^ 0x6EAD_1E27_u64.wrapping_add(id.wrapping_mul(86_028_121)));
+        gradient_mask(&mut rg, &mut s);
         let profile = if rng.chance(0.2) { Profile::Raw } else { Profile::Display };
         let (w, h) = (rng.int(16, 64), rng.int(16, 48));
         // ใบหน้าบนภาพต้นทาง (พิกเซล) ตรงกับกรอบของ Mask
@@ -523,7 +555,11 @@ fn live_preview_matches_the_saved_image_pixel_for_pixel() {
             .iter()
             .flat_map(|m| match &m.area {
                 Area::Faces { boxes, .. } => boxes.clone(),
-                Area::Subject { .. } | Area::People { .. } | Area::Sky { .. } => vec![],
+                Area::Subject { .. }
+                | Area::People { .. }
+                | Area::Sky { .. }
+                | Area::Linear { .. }
+                | Area::Radial { .. } => vec![],
             })
             .map(|b| {
                 (

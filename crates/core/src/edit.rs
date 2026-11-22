@@ -206,6 +206,15 @@ impl Geometry {
 
     /// ด้านยาวของกรอบก่อนตัด เป็นพิกเซลของภาพที่แต่งขนาด `width`×`height` — รัศมีของ Texture/Clarity/Dehaze และขอบเผื่อของ
     /// Mask คิดจากค่านี้ ตัดภาพแล้วผลไม่เปลี่ยน (ตัวอย่างสดคิดแบบเดียวกัน: [`crate::preview`])
+    /// ขนาดภาพเดิมก่อนหมุนทีละ 90° ของการแต่ง (พิกเซลของภาพที่วาด) — สัดส่วนกว้าง:สูงของภาพเดิม
+    pub fn source_size(&self) -> (f64, f64) {
+        if self.quarter % 180 == 90 {
+            (self.h, self.w)
+        } else {
+            (self.w, self.h)
+        }
+    }
+
     pub fn frame_long(&self, width: u32, height: u32) -> f64 {
         (width as f64 / self.crop.w).max(height as f64 / self.crop.h)
     }

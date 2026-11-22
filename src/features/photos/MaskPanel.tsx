@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { CloudSun, Download, Eye, Palette, PersonStanding, RotateCcw, ScanFace, Shirt, Sparkle, Sun, Trash2, TriangleAlert } from 'lucide-react';
+import { Blend, CircleDashed, CloudSun, Download, Eye, Palette, PersonStanding, RotateCcw, ScanFace, Shirt, Sparkle, Sun, Trash2, TriangleAlert } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { InlineNotice, Spinner } from '@/components/ui/Feedback';
 import { Switch } from '@/components/ui/Form';
@@ -12,6 +12,8 @@ import { PART_LABELS, maskName } from './editSummary';
 import { MAX_MASKS } from './masks';
 import { COLOR, LIGHT, PRESENCE, SliderGroup } from './SliderGroup';
 import { FillModelsInstall } from './FillModelsInstall';
+import type { GradientTool } from './GradientOverlay';
+import { RADIAL_FEATHER } from './gradients';
 import { missingFor, partsReady, skyReady, type SubjectMapState } from './useSubjectMap';
 
 // แถบของการปรับเฉพาะส่วน: เฉพาะค่าที่มีความหมายกับบริเวณเล็ก ๆ (จุดขาว/ดำ ความสด เส้นโค้ง ฯลฯ ปรับที่ทั้งภาพ)
@@ -38,10 +40,13 @@ interface MaskPanelProps {
   onShowArea: (id: string | null) => void;
   /** ตัวแยกตัวคนและภาพน้ำหนักของรูปนี้ (Mask ตัวคน — DECISIONS ข้อ 40) */
   subject: SubjectMapState;
+  /** กำลังวาด Mask ไล่ระดับ/วงกลมอันใหม่บนภาพ (DECISIONS ข้อ 45) */
+  gradientTool: GradientTool | null;
+  onGradientTool: (tool: GradientTool | null) => void;
 }
 
 /** ปรับเฉพาะส่วน (DECISIONS ข้อ 28): เพิ่ม/เลือก/ลบบริเวณ และค่าแสงสีของบริเวณที่เลือก */
-export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowArea, subject }: MaskPanelProps) {
+export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowArea, subject, gradientTool, onGradientTool }: MaskPanelProps) {
   const current = masks.find((m) => m.id === selected) ?? null;
   const flash = useRef(0);
   useEffect(() => () => window.clearTimeout(flash.current), []);
@@ -159,6 +164,37 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
         {faces.length === 0 && (
           <p className="text-[12.5px] text-muted">ยังไม่มีใบหน้าในรูปนี้ — ให้แอปวิเคราะห์ใบหน้า หรือเพิ่มกรอบใบหน้าเองในตัวดูภาพก่อน</p>
         )}
+        <div className="grid grid-cols-2 gap-1.5">
+          <Button
+            size="sm"
+            variant={gradientTool === 'linear' ? 'primary' : undefined}
+            icon={<Blend className="size-4" aria-hidden />}
+            onClick={() => onGradientTool(gradientTool === 'linear' ? null : 'linear')}
+            disabled={masks.length >= MAX_MASKS}
+            aria-pressed={gradientTool === 'linear'}
+            data-testid="mask-add-linear"
+          >
+            ไล่ระดับ
+          </Button>
+          <Button
+            size="sm"
+            variant={gradientTool === 'radial' ? 'primary' : undefined}
+            icon={<CircleDashed className="size-4" aria-hidden />}
+            onClick={() => onGradientTool(gradientTool === 'radial' ? null : 'radial')}
+            disabled={masks.length >= MAX_MASKS}
+            aria-pressed={gradientTool === 'radial'}
+            data-testid="mask-add-radial"
+          >
+            วงกลม
+          </Button>
+        </div>
+        <p className="text-[12.5px] text-muted" data-testid="gradient-hint">
+          {gradientTool === 'linear'
+            ? 'ลากบนภาพจากตรงที่ปรับเต็มที่ไปตรงที่ไม่ปรับ เช่น จากขอบบนลงมาถึงเส้นขอบฟ้า · กดปุ่มอีกครั้งหรือ Esc เพื่อเลิก'
+            : gradientTool === 'radial'
+              ? 'ลากบนภาพจากกลางวงออกไป (กดเฉย ๆ ได้วงขนาดกลาง) · ข้างในวงปรับเต็มที่ ขอบค่อย ๆ จาง · กดปุ่มอีกครั้งหรือ Esc เพื่อเลิก'
+              : 'ไล่ระดับแบบ Graduated Filter และวงกลมแบบ Radial Filter ของ Lightroom — วาดบนภาพแล้วลากจุดปรับได้'}
+        </p>
         <Button
           size="sm"
           icon={<PersonStanding className="size-4" aria-hidden />}
@@ -325,6 +361,29 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
                 })}
               </div>
               <p className="text-[12px] text-muted">ทุกคนในรูป · ตา ปาก ฟัน คิ้ว ยังแยกไม่ได้ในรุ่นนี้</p>
+            </div>
+          )}
+          {current.area.kind === 'linear' && (
+            <p className="text-[12px] text-muted" data-testid="gradient-edit-hint">
+              ลากจุดบนภาพ: จุดที่เส้นหนา = ปรับเต็มที่ · จุดอีกข้าง = จางหมด · จุดกลาง = ย้ายทั้งแถบ
+            </p>
+          )}
+          {current.area.kind === 'radial' && (
+            <div className="space-y-1.5">
+              <SliderRow
+                id="mask-feather"
+                label="ขอบนุ่ม"
+                value={current.area.feather}
+                min={0}
+                max={100}
+                step={1}
+                defaultValue={RADIAL_FEATHER}
+                format={(v) => formatCount(v)}
+                onChange={(feather) => current.area.kind === 'radial' && update(current.id, { area: { ...current.area, feather } })}
+              />
+              <p className="text-[12px] text-muted" data-testid="gradient-edit-hint">
+                ลากจุดบนภาพ: กลางวง = ย้าย · ขอบวง = ปรับขนาดและหมุน · ปรับนอกวงแทนในวงใช้ “กลับด้าน”
+              </p>
             </div>
           )}
           {current.area.kind === 'faces' && (

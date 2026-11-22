@@ -376,6 +376,42 @@
     expect(back1.every((v, k) => Math.abs(v - back0[k]) <= 1), `ฉากหลังเท่าเดิม ${back0} → ${back1}`);
     await stage('editor-masks', { skin: [skin0, skin1].map((s) => s.map(Math.round)) });
 
+    // ไล่ระดับ (DECISIONS ข้อ 45): ลากจากขอบบนลงมาครึ่งภาพ → ค่าแสงของบริเวณ −1 ด้านบนมืดลง ด้านล่างเท่าเดิม แล้วลบ Mask นี้
+    // (ขั้นถัดไปอ่านพิกเซลรอบใบหน้า)
+    const low0 = canvasAt(0.5, 0.95);
+    await click(tid('mask-add-linear'), 'เครื่องมือไล่ระดับ');
+    const gsurface = await see('gradient-surface', 'พื้นวาดไล่ระดับ');
+    const gr = gsurface.getBoundingClientRect();
+    const gp = (kind, fx, fy) =>
+      gsurface.dispatchEvent(
+        new PointerEvent(kind, { bubbles: true, cancelable: true, clientX: gr.left + gr.width * fx, clientY: gr.top + gr.height * fy, pointerId: 8, button: 0, pointerType: 'mouse' }),
+      );
+    gp('pointerdown', 0.5, 0.01);
+    await sleep(60);
+    gp('pointermove', 0.5, 0.3);
+    await sleep(60);
+    gp('pointermove', 0.5, 0.5);
+    await sleep(60);
+    gp('pointerup', 0.5, 0.5);
+    await waitFor(() => tids('mask-item').some((b) => text(b).includes('ไล่ระดับ')), 'Mask ไล่ระดับในรายการ');
+    await see('gradient-handle-full', 'จุดจับของไล่ระดับบนภาพ');
+    await sleep(1600); // ให้สีแดงที่แสดงบริเวณชั่วครู่หายไปก่อน
+    await type(await see('mask-exposure'), '-1');
+    let top = back1;
+    await waitFor(
+      () => {
+        top = canvasAt(0.06, 0.08);
+        return top[1] < back1[1] - 15 ? top : null;
+      },
+      { toString: () => `ด้านบนมืดลงตามไล่ระดับ (ก่อน ${back1.map(Math.round)} · ล่าสุด ${top.map(Math.round)})` },
+    );
+    const low1 = canvasAt(0.5, 0.95);
+    expect(low1.every((v, k) => Math.abs(v - low0[k]) <= 1), `ด้านล่างเท่าเดิม ${low0} → ${low1}`);
+    const gi = tids('mask-item').findIndex((b) => text(b).includes('ไล่ระดับ'));
+    await click(tids('mask-delete')[gi], 'ลบ Mask ไล่ระดับ');
+    await waitFor(() => !tids('mask-item').some((b) => text(b).includes('ไล่ระดับ')), 'Mask ไล่ระดับหายจากรายการ');
+    await stage('editor-gradient', { top: [back1, top].map((s) => s.map(Math.round)) });
+
     // รีทัชใบหน้า (DECISIONS ข้อ 31): หน้าผอม "มาก" ดัดเฉพาะขอบหน้า — ภาพรอบขอบหน้าเปลี่ยน กลางหน้าเท่าเดิม
     const snap = () => {
       const c = tid('editor-preview');

@@ -68,10 +68,10 @@ fn insert(
     unsupported: &[String],
 ) -> Result<Preset> {
     adjust.validate()?;
-    // preset เก็บเฉพาะ Mask ตัวคน ส่วนของคน และท้องฟ้า: Mask ใบหน้าผูกกับใบหน้าของรูปนั้น
+    // preset เก็บทุก Mask ยกเว้น Mask ใบหน้า (ผูกกับใบหน้าของรูปนั้น)
     let masks: Vec<Mask> = masks
         .iter()
-        .filter(|m| matches!(m.area, Area::Subject { .. } | Area::People { .. } | Area::Sky { .. }) && m.is_active())
+        .filter(|m| !matches!(m.area, Area::Faces { .. }) && m.is_active())
         .map(|m| m.on_faces(&[]))
         .collect();
     crate::masks::validate(&masks)?;
@@ -435,10 +435,51 @@ pub(crate) fn lightroom_masks(text: &str) -> (Vec<crate::masks::Mask>, Vec<Strin
 /// บริเวณของ Mask หนึ่งอันของ Lightroom ที่แอปทำได้ (บริเวณ, กลับด้าน) — None = ทำไม่ได้
 /// · Select Subject (`Mask/Image` ชนิดย่อย 1) · Select Background (ชนิดย่อย 0 หมวด 22 = ตัวคนกลับด้าน) ·
 /// Select People เฉพาะผม ผิวหน้า ผิวตัว เสื้อผ้า (ชนิดย่อย 3 หมวด 5 2 4 11 — หลายส่วนในอันเดียว = รวมกัน · ทุกคนในรูป) ·
-/// ส่วนที่ปิดไว้ ไม่เต็มแรง หรือหักลบกัน = ทำไม่ได้
+/// · Linear Gradient (`Mask/Gradient` จุด Full/Zero) · Radial Gradient (`Mask/CircularGradient` กรอบ Top/Left/Bottom/Right
+/// มุม ขอบนุ่ม — DECISIONS ข้อ 45) · ส่วนที่ปิดไว้ ไม่เต็มแรง หรือหักลบกัน = ทำไม่ได้
 fn lightroom_area(areas: &[&str]) -> Option<(crate::masks::Area, bool)> {
     use crate::masks::Area;
     use crate::parts::Part;
+    let on = |a: &str| {
+        attr(a, "MaskActive") != Some("false")
+            && num(a, "MaskValue").is_none_or(|v| v == 1.0)
+            && num(a, "MaskBlendMode").is_none_or(|v| v == 0.0)
+    };
+    if let [a] = areas {
+        let flip = attr(a, "MaskInverted") == Some("true");
+        match attr(a, "What") {
+            Some("Mask/Gradient") if on(a) => {
+                let point = |x: &str, y: &str| Some([num(a, x)?, num(a, y)?]);
+                let (full, zero) = (point("FullX", "FullY")?, point("ZeroX", "ZeroY")?);
+                let apart = (full[0] - zero[0]).abs() + (full[1] - zero[1]).abs() > 1e-4;
+                return apart.then_some((Area::Linear { full, zero }, flip));
+            }
+            Some("Mask/CircularGradient") if on(a) => {
+                // รูปร่างแบบสี่เหลี่ยมมน (Roundness) และจุดกึ่งกลางของขอบนุ่ม (Midpoint) ที่ไม่ใช่ค่าตั้งต้น ยังทำไม่ได้
+                if num(a, "Roundness").unwrap_or(0.0) != 0.0 || num(a, "Midpoint").unwrap_or(50.0) != 50.0 {
+                    return None;
+                }
+                let (top, left, bottom, right) = (num(a, "Top")?, num(a, "Left")?, num(a, "Bottom")?, num(a, "Right")?);
+                let radius = [((right - left) / 2.0).abs(), ((bottom - top) / 2.0).abs()];
+                if radius.iter().any(|r| !(1e-4..=4.0).contains(r)) {
+                    return None;
+                }
+                // Version 2 (ที่ Lightroom เขียนให้วงกลมปกติ): Flipped = ปรับข้างใน · ไม่มี Version = ข้างในเสมอ และขอบนุ่มครึ่งเดียว
+                let versioned = attr(a, "Version").is_some();
+                let inside = !versioned || attr(a, "Flipped") == Some("true");
+                let feather = num(a, "Feather").unwrap_or(50.0) * if versioned { 1.0 } else { 0.5 };
+                let area = Area::Radial {
+                    center: [(left + right) / 2.0, (top + bottom) / 2.0],
+                    radius,
+                    // มุมของ Lightroom หมุนทางตรงข้าม
+                    angle: (-num(a, "Angle").unwrap_or(0.0)).clamp(-360.0, 360.0),
+                    feather: feather.clamp(0.0, 100.0),
+                };
+                return Some((area, flip == inside));
+            }
+            _ => {}
+        }
+    }
     let plain = |a: &&str| {
         attr(a, "What") == Some("Mask/Image")
             && attr(a, "MaskActive") != Some("false")
@@ -678,6 +719,48 @@ mod tests {
         assert!(matches!(&p.masks[1].area, Area::People { parts, .. } if parts == &[Part::FaceSkin, Part::BodySkin]));
         assert!(matches!(p.masks[2].area, Area::Subject { .. }) && p.masks[2].invert, "ฉากหลัง = ตัวคนกลับด้าน");
         assert_eq!(p.unsupported, ["Mask “Eyes”"], "ตาแยกไม่ได้");
+    }
+
+    #[test]
+    fn linear_and_radial_gradients_are_imported() {
+        use crate::masks::Area;
+        let linear = area("Mask/Gradient", r#"crs:ZeroX="0.5" crs:ZeroY="0.6" crs:FullX="0.5" crs:FullY="0.1""#);
+        // วงกลมแบบที่ Lightroom เขียน (Version 2): Flipped = ปรับข้างใน
+        let radial = area(
+            "Mask/CircularGradient",
+            r#"crs:Top="0.2" crs:Left="0.3" crs:Bottom="0.8" crs:Right="0.7" crs:Angle="30" crs:Midpoint="50" crs:Roundness="0" crs:Feather="40" crs:Flipped="true" crs:Version="2""#,
+        );
+        let outside = area(
+            "Mask/CircularGradient",
+            r#"crs:Top="0.2" crs:Left="0.3" crs:Bottom="0.8" crs:Right="0.7" crs:Angle="0" crs:Feather="60" crs:Flipped="false" crs:Version="2""#,
+        );
+        // แบบเก่า (ไม่มี Version): ข้างในเสมอ ขอบนุ่มครึ่งเดียว
+        let old = area(
+            "Mask/CircularGradient",
+            r#"crs:Top="0.1" crs:Left="0.1" crs:Bottom="0.5" crs:Right="0.5" crs:Feather="80""#,
+        );
+        let square = area(
+            "Mask/CircularGradient",
+            r#"crs:Top="0.2" crs:Left="0.3" crs:Bottom="0.8" crs:Right="0.7" crs:Roundness="-60" crs:Version="2""#,
+        );
+        let xmp = format!(
+            r#"<x crs:Exposure2012="0"><crs:MaskGroupBasedCorrections><rdf:Seq>{}{}{}{}{}</rdf:Seq></crs:MaskGroupBasedCorrections></x>"#,
+            correction("Sky gradient", r#"crs:LocalExposure2012="-0.25""#, &linear),
+            correction("Spot", r#"crs:LocalExposure2012="0.125""#, &radial),
+            correction("Vignette", r#"crs:LocalExposure2012="-0.25""#, &outside),
+            correction("Old", r#"crs:LocalExposure2012="0.125""#, &old),
+            correction("Square", r#"crs:LocalExposure2012="0.125""#, &square),
+        );
+        let p = parse_lightroom(&xmp).unwrap();
+        assert_eq!(p.masks.len(), 4, "{:?}", p.masks);
+        assert!(matches!(p.masks[0].area, Area::Linear { full: [0.5, 0.1], zero: [0.5, 0.6] }) && !p.masks[0].invert);
+        let Area::Radial { center, radius, angle, feather } = p.masks[1].area else { panic!("{:?}", p.masks[1]) };
+        assert!((center[0] - 0.5).abs() < 1e-9 && (center[1] - 0.5).abs() < 1e-9);
+        assert!((radius[0] - 0.2).abs() < 1e-9 && (radius[1] - 0.3).abs() < 1e-9);
+        assert_eq!((angle, feather, p.masks[1].invert), (-30.0, 40.0, false), "มุมกลับทาง · ปรับข้างใน");
+        assert!(p.masks[2].invert, "Flipped=false = ปรับข้างนอก");
+        assert!(matches!(p.masks[3].area, Area::Radial { feather, .. } if feather == 40.0) && !p.masks[3].invert);
+        assert_eq!(p.unsupported, ["Mask “Square”"], "วงกลมสี่เหลี่ยมมนยังทำไม่ได้");
     }
 
     #[test]

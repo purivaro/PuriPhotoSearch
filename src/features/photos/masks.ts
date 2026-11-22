@@ -21,8 +21,8 @@ export const isPeopleMask = (m: EditMask) => m.area.kind === 'people';
 /** Mask ท้องฟ้า (AI) */
 export const isSkyMask = (m: EditMask) => m.area.kind === 'sky';
 
-/** Mask ที่ใช้ได้กับทุกรูป (ไม่ผูกกับใบหน้าของรูปนั้น) — preset เก็บได้ */
-export const isPortableMask = (m: EditMask) => isSubjectMask(m) || isPeopleMask(m) || isSkyMask(m);
+/** Mask ที่ใช้ได้กับทุกรูป (ทุกแบบยกเว้นใบหน้า ซึ่งผูกกับใบหน้าของรูปนั้น) — preset เก็บได้ */
+export const isPortableMask = (m: EditMask) => m.area.kind !== 'faces';
 
 /**
  * เพิ่ม Mask ของ preset ให้รูป: แทนอันที่รหัสเดียวกัน (ใช้ preset ซ้ำไม่ซ้อน) Mask อื่นของรูปอยู่ครบ

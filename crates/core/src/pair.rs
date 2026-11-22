@@ -416,7 +416,8 @@ pub struct Pair {
 /// · 5 = ค่าเริ่มต้นรวม Mask ตัวคนของ Lightroom (DECISIONS ข้อ 40)
 /// · 6 = รวม Mask ส่วนของคน (ผม ผิวหน้า ผิวตัว เสื้อผ้า) และ Select Background ของ Lightroom (DECISIONS ข้อ 43)
 /// · 7 = รวม Mask ท้องฟ้า (Select Sky) ของ Lightroom (DECISIONS ข้อ 44)
-const START_VERSION: u32 = 7;
+/// · 8 = รวม Linear/Radial Gradient ของ Lightroom (DECISIONS ข้อ 45)
+const START_VERSION: u32 = 8;
 
 /// ค่าเริ่มต้นเมื่อแต่งจาก RAW (คิดจากไฟล์ RAW ครั้งแรกที่ต้องใช้ แล้วเก็บไว้)
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -538,7 +538,11 @@ export type MaskArea =
   /** ส่วนของคน (AI — DECISIONS ข้อ 43): หลายส่วน = รวมกัน · แอปหาเองจากรูป */
   | { kind: 'people'; parts: PersonPart[] }
   /** ท้องฟ้า (AI — DECISIONS ข้อ 44): แอปหาเองจากรูป ค่าที่แต่งเก็บแค่ชนิด */
-  | { kind: 'sky' };
+  | { kind: 'sky' }
+  /** ไล่ระดับ (ข้อ 45): เต็มที่ที่ `full` จางหมดที่ `zero` (สัดส่วนบนภาพเดิม) */
+  | { kind: 'linear'; full: [number, number]; zero: [number, number] }
+  /** วงกลม (ข้อ 45): รัศมีเป็นสัดส่วนของความกว้าง/สูงของภาพเดิม · `angle` องศาตามเข็มนาฬิกา · `feather` ขอบนุ่ม 0–100 */
+  | { kind: 'radial'; center: [number, number]; radius: [number, number]; angle: number; feather: number };
 
 /** ส่วนของคน แบบ Select People ของ Lightroom */
 export type PersonPart = 'hair' | 'faceSkin' | 'bodySkin' | 'clothes';

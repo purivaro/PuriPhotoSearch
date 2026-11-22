@@ -13,6 +13,8 @@ import type { CropSuggestion, EditSettings, PhotoDetails, PreviewRequest, Previe
 import { NEUTRAL, histogram, isNeutral, type Adjust, type Histogram } from './adjust';
 import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, SharpenPanel, ToneCurvePanel, VignettePanel } from './AdjustControls';
 import { EditPresets } from './EditPresets';
+import { GradientOverlay, type GradientTool } from './GradientOverlay';
+import { isGradient, mapper, type GradientArea } from './gradients';
 import { MaskPanel, SubjectProgress } from './MaskPanel';
 import { addMasks, isPeopleMask, isSkyMask, isSubjectMask } from './masks';
 import { RemovePanel, type RemoveTool } from './RemovePanel';
@@ -142,6 +144,8 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
   // ปรับเฉพาะส่วน: บริเวณที่เลือก และบริเวณที่แสดงเป็นสีแดงทับ (กดค้าง / เพิ่งเพิ่ม)
   const [activeMask, setActiveMask] = useState<string | null>(null);
   const [showArea, setShowArea] = useState<string | null>(null);
+  // วาด Mask ไล่ระดับ/วงกลมอันใหม่บนภาพ (DECISIONS ข้อ 45)
+  const [gradientTool, setGradientTool] = useState<GradientTool | null>(null);
   // Mask ตัวคน (DECISIONS ข้อ 40): Rust หาตัวคนของรูปนี้ครั้งแรกที่ต้องใช้ แล้วตัวอย่างสดวาดใหม่
   // ตัวผอม (ข้อ 41) ใช้ภาพน้ำหนักเดียวกัน + ฉากหลังที่เติมจากภาพต้นทางของตัวอย่างสด
   // ลบคน/สิ่งของ (ข้อ 42): ลากกรอบบนภาพ · ชี้ที่รายการแล้วแสดงกรอบนั้น
@@ -209,13 +213,14 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
         if (picking) setPicking(false);
         else if (leveling) setLeveling(false);
         else if (drawing) setDrawing(null);
+        else if (gradientTool) setGradientTool(null);
         else if (dirty) setConfirmDiscard('close');
         else onClose();
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [dirty, confirmDiscard, onClose, picking, leveling, drawing]);
+  }, [dirty, confirmDiscard, onClose, picking, leveling, drawing, gradientTool]);
 
   const chooseAspect = (a: Aspect, upright = portrait) => {
     setAspect(a);
@@ -306,6 +311,28 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
     const part = brushToSource(W, H, settings, shownView, points, radius);
     if (part) setSettings((s) => ({ ...s, removals: [...(s.removals ?? []), { id: newRequestId(), ...part }] }));
   };
+  // Mask ไล่ระดับ/วงกลมที่เลือกอยู่: แสดงเส้นและจุดจับบนภาพ ลากแล้วแก้ Mask นั้น
+  const selectedMask = (settings.masks ?? []).find((m) => m.id === activeMask);
+  const gradientArea = tab === 'masks' && !before && selectedMask && isGradient(selectedMask.area) ? selectedMask.area : null;
+  const changeGradient = (area: GradientArea) =>
+    setSettings((s) => ({ ...s, masks: (s.masks ?? []).map((m) => (m.id === activeMask ? { ...m, area } : m)) }));
+  const createGradient = (area: GradientArea) => {
+    const id = newRequestId();
+    setSettings((s) => ({ ...s, masks: [...(s.masks ?? []), { id, area, adjust: NEUTRAL, amount: 100, invert: false }] }));
+    setActiveMask(id);
+    setGradientTool(null);
+    // ให้เห็นบริเวณที่ได้ชั่วครู่
+    setShowArea(id);
+    window.setTimeout(() => setShowArea((cur) => (cur === id ? null : cur)), 1400);
+  };
+  const chooseRemoveTool = (t: RemoveTool | null) => {
+    setDrawing(t);
+    if (t) setGradientTool(null);
+  };
+  const chooseGradientTool = (t: GradientTool | null) => {
+    setGradientTool(t);
+    if (t) setDrawing(null);
+  };
   const addRemoval = (box: UnitRect) => {
     setDrawing(null);
     const rect = viewToSource(W, H, settings, shownView, box);
@@ -380,6 +407,11 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
           onDrawBox={addRemoval}
           onBrush={addBrush}
           removalBoxes={tab === 'masks' && !before ? removalBoxes : []}
+          sourceSize={{ w: W, h: H }}
+          gradientTool={tab === 'masks' ? gradientTool : null}
+          gradient={gradientArea}
+          onGradient={changeGradient}
+          onCreateGradient={createGradient}
           picking={picking}
           onPick={async (fx, fy) => {
             setPicking(false);
@@ -639,7 +671,7 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
                   subject={subject}
                   state={removing}
                   tool={drawing}
-                  onTool={setDrawing}
+                  onTool={chooseRemoveTool}
                   brushSize={brushSize}
                   onBrushSize={setBrushSize}
                   onHover={setHoverRemoval}
@@ -657,6 +689,8 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
                     onSelect={setActiveMask}
                     onChange={(masks) => setSettings((s) => ({ ...s, masks }))}
                     onShowArea={setShowArea}
+                    gradientTool={gradientTool}
+                    onGradientTool={chooseGradientTool}
                     subject={subject}
                   />
                 </div>
@@ -756,6 +790,14 @@ interface EditCanvasProps {
   onBrush: (points: { x: number; y: number }[], radius: number) => void;
   /** กรอบของส่วนที่ลบบนภาพที่แสดง — วาดเมื่อกำลังลบ (busy) หรือชี้ที่รายการ (highlight) */
   removalBoxes: { id: string; n: number; box: UnitRect; busy: boolean; highlight: boolean }[];
+  /** ขนาดภาพเดิม (พิกเซล) — แปลงจุดของ Mask ไล่ระดับ/วงกลม */
+  sourceSize: { w: number; h: number };
+  /** วาด Mask ไล่ระดับ/วงกลมอันใหม่ */
+  gradientTool: GradientTool | null;
+  /** Mask ไล่ระดับ/วงกลมที่เลือกอยู่ */
+  gradient: GradientArea | null;
+  onGradient: (area: GradientArea) => void;
+  onCreateGradient: (area: GradientArea) => void;
 }
 
 /** ตัวอย่างภาพที่แต่ง: แท็บตัดและหมุนแสดงทั้งกรอบพร้อมกรอบตัดที่ลากได้ · แท็บแสงและสีแสดงเฉพาะส่วนที่ตัดพร้อมแสงสี */
@@ -784,6 +826,11 @@ function EditCanvas({
   onDrawBox,
   onBrush,
   removalBoxes,
+  sourceSize,
+  gradientTool,
+  gradient,
+  onGradient,
+  onCreateGradient,
 }: EditCanvasProps) {
   const drawing = tool !== null;
   // เส้นที่กำลังระบาย และตำแหน่งแปรง (พิกเซลในกรอบภาพ)
@@ -934,6 +981,17 @@ function EditCanvas({
                   </span>
                 </div>
               ))}
+          {mode !== 'crop' && !picking && !drawing && (gradientTool || gradient) && (
+            <GradientOverlay
+              mapper={mapper(sourceSize.w, sourceSize.h, settings, view, boxW, boxH)}
+              boxW={boxW}
+              boxH={boxH}
+              area={gradient}
+              onChange={onGradient}
+              tool={gradientTool}
+              onCreate={onCreateGradient}
+            />
+          )}
           {tool === 'brush' && mode !== 'crop' && (
             <div
               className="absolute inset-0 z-20 cursor-none touch-none"
