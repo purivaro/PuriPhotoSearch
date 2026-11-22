@@ -124,6 +124,16 @@ impl Mask {
     }
 }
 
+/// เพิ่ม `added` ให้ Mask ของรูป: แทนอันที่รหัสเดียวกัน (ใช้ซ้ำไม่ซ้อน) Mask อื่นอยู่ครบ · เกินจำนวนที่รับได้ = ตัดของเดิมที่เก่าที่สุด
+/// (ใช้ preset ที่มี Mask ตัวคน · ผู้ช่วย AI เพิ่ม Mask — เหมือน `addMasks` ฝั่ง UI)
+pub fn add(existing: &[Mask], added: &[Mask]) -> Vec<Mask> {
+    let mut out: Vec<Mask> = existing.iter().filter(|m| added.iter().all(|a| a.id != m.id)).cloned().collect();
+    out.extend(added.iter().cloned());
+    let extra = out.len().saturating_sub(MAX_MASKS);
+    out.drain(..extra);
+    out
+}
+
 pub fn validate(masks: &[Mask]) -> Result<()> {
     if masks.len() > MAX_MASKS {
         return Err(AppError::invalid(format!("ปรับเฉพาะส่วนได้ไม่เกิน {MAX_MASKS} บริเวณต่อรูป")));
