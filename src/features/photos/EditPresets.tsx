@@ -13,7 +13,7 @@ import { errorMessage } from '@/lib/format';
 import { call } from '@/lib/ipc/client';
 import type { EditMask, EditPreset } from '@/lib/ipc/types';
 import { isNeutral, sameAdjust, type Adjust } from './adjust';
-import { describeEdit } from './editSummary';
+import { describeEdit, maskName } from './editSummary';
 import { IDENTITY } from './editGeometry';
 import { isPortableMask, maskIsActive } from './masks';
 
@@ -29,10 +29,10 @@ export function usePresets() {
   });
 }
 
-/** สรุปค่าใน preset (แสง · สี · Mask ตัวคน) */
+/** สรุปค่าใน preset (แสง · สี · Mask ของ AI) */
 export function presetSummary(adjust: Adjust, masks: EditMask[] = []): string {
   const d = describeEdit({ ...IDENTITY, adjust });
-  const subject = masks.length > 0 ? `Mask ตัวคน/ส่วนของคน${masks.length > 1 ? ` ${masks.length} อัน` : ''}` : null;
+  const subject = masks.length > 0 ? `Mask ${masks.map(maskName).join(', ')}` : null;
   return [d.light, d.color, subject].filter(Boolean).join(' · ');
 }
 

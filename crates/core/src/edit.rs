@@ -113,6 +113,11 @@ impl EditSettings {
         self.masks.iter().any(|m| matches!(m.area, crate::masks::Area::People { .. }))
     }
 
+    /// มี Mask ท้องฟ้า (AI — DECISIONS ข้อ 44)
+    pub fn has_sky(&self) -> bool {
+        self.masks.iter().any(|m| matches!(m.area, crate::masks::Area::Sky { .. }))
+    }
+
     /// มี Mask ตัวคน (AI) — ต้องแนบภาพน้ำหนักของรูปก่อนสร้างภาพ ([`crate::subject::prepare`])
     pub fn has_subject(&self) -> bool {
         self.masks.iter().any(|m| matches!(m.area, crate::masks::Area::Subject { .. }))

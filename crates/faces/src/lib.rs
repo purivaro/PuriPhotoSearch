@@ -552,7 +552,24 @@ pub mod subject {
         }
     }
 
-    /// ตัวแยกตัวคน (+ ตัวเติมฉากหลัง + ตัวแยกส่วนของคน) ของ build นี้; None บนแพลตฟอร์มที่ไม่มี ONNX Runtime สำเร็จรูป
+    /// ตัวแยกท้องฟ้า (Mask ท้องฟ้า — DECISIONS ข้อ 44): U²-Net ที่ฝึกกับท้องฟ้าของ xiongzhu666 (MIT) — ไฟล์ .onnx ไฟล์เดียวจาก
+    /// Hugging Face (ตรึงรุ่นด้วย commit ของ repo · SHA-256 ตรงกับไฟล์ต้นทางที่ chili-raw อ้าง)
+    pub fn sky_model() -> SubjectModel {
+        SubjectModel {
+            id: "skyseg",
+            display_name: "Sky Segmentation (U²-Net)",
+            file: "skyseg.onnx",
+            sha256: "ab9c34c64c3d821220a2886a4a06da4642ffa14d5b30e8d5339056a089aa1d39",
+            download_url: std::env::var("PURI_SKY_MODEL_URL").unwrap_or_else(|_| {
+                "https://huggingface.co/JianyuanWang/skyseg/resolve/3ba8c6df1d9ba9ff26f637c7ba9568ac11a9aa7f/skyseg.onnx".into()
+            }),
+            download_bytes: 175_997_079,
+            download_source: "huggingface.co/JianyuanWang/skyseg (จาก github.com/xiongzhu666/Sky-Segmentation-and-Post-processing)",
+            license_note: "ตัวแยกท้องฟ้าเผยแพร่ด้วยสัญญาอนุญาต MIT ใช้ได้ทั้งงานทั่วไปและเชิงพาณิชย์",
+        }
+    }
+
+    /// ตัวแยกตัวคน (+ ตัวเติมฉากหลัง + ตัวแยกส่วนของคน + ตัวแยกท้องฟ้า) ของ build นี้; None บนแพลตฟอร์มที่ไม่มี ONNX Runtime สำเร็จรูป
     pub fn provider() -> Option<SubjectProvider> {
         #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
         {
@@ -563,6 +580,10 @@ pub mod subject {
                 parts: Some(puri_core::parts::PartsProvider {
                     model: parts_model(),
                     factory: std::sync::Arc::new(super::part_segmenter::load),
+                }),
+                sky: Some(puri_core::sky::SkyProvider {
+                    model: sky_model(),
+                    factory: std::sync::Arc::new(super::sky_segmenter::load),
                 }),
             })
         }
@@ -723,6 +744,80 @@ mod part_segmenter {
                 }
             }
             Ok(maps.map(|m| imageops::resize(&m, w, h, imageops::FilterType::Triangle)))
+        }
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+mod sky_segmenter {
+    use image::{imageops, GrayImage, RgbImage};
+    use ort::{environment::Environment, session::Session, value::Tensor};
+    use puri_core::sky::SkySegmenter;
+    use puri_core::AppError;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    /// ขนาดภาพที่โมเดลรับ (ตายตัว)
+    const SIDE: u32 = 320;
+    /// ค่าปรับสีแบบ ImageNet ที่โมเดลฝึกมา
+    const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+    const STD: [f32; 3] = [0.229, 0.224, 0.225];
+
+    struct SkySeg {
+        session: Mutex<Session>,
+        _env: Environment,
+    }
+
+    fn failed(e: impl std::fmt::Display) -> AppError {
+        AppError::new("DECODE_FAILED", format!("หาท้องฟ้าในรูปนี้ไม่สำเร็จ ({e})"))
+    }
+
+    pub fn load(model_dir: &Path) -> Result<Arc<dyn SkySegmenter>, AppError> {
+        let path = model_dir.join(super::subject::sky_model().file);
+        if !path.is_file() {
+            return Err(AppError::new("MODEL_NOT_READY", "ไม่พบไฟล์ตัวแยกท้องฟ้า"));
+        }
+        let env = crate::environment().map_err(failed)?;
+        // CPU เท่านั้น (ไม่ใช้ CoreML กับโมเดลใหญ่ — ข้อ 40)
+        let threads = std::thread::available_parallelism().map(|n| n.get().saturating_sub(2)).unwrap_or(2).max(1);
+        let mut builder = Session::builder(&env)
+            .map_err(failed)?
+            .with_intra_threads(threads)
+            .map_err(failed)?
+            .with_auto_device(ort::session::builder::AutoDevicePolicy::PreferCPU)
+            .map_err(failed)?;
+        let session = builder
+            .commit_from_file(&path)
+            .map_err(|e| AppError::new("MODEL_NOT_READY", format!("โหลดตัวแยกท้องฟ้าไม่ได้ ({e})")))?;
+        Ok(Arc::new(SkySeg { session: Mutex::new(session), _env: env }))
+    }
+
+    impl SkySegmenter for SkySeg {
+        fn segment(&self, image: &RgbImage) -> Result<GrayImage, AppError> {
+            if image.width() == 0 || image.height() == 0 {
+                return Err(failed("ภาพว่าง"));
+            }
+            // ยืดเป็น 320×320 (ไม่เติมขอบ) แบบ NCHW ปรับสีแบบ ImageNet
+            let small = imageops::resize(image, SIDE, SIDE, imageops::FilterType::Triangle);
+            let plane = (SIDE * SIDE) as usize;
+            let mut input = vec![0f32; 3 * plane];
+            for (x, y, p) in small.enumerate_pixels() {
+                let i = (y * SIDE + x) as usize;
+                for c in 0..3 {
+                    input[c * plane + i] = (f32::from(p[c]) / 255.0 - MEAN[c]) / STD[c];
+                }
+            }
+            let tensor = Tensor::from_array(([1usize, 3, SIDE as usize, SIDE as usize], input)).map_err(failed)?;
+            let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
+            let outputs = session.run(ort::inputs![tensor]).map_err(failed)?;
+            // ผลหลักของ U²-Net (ผ่าน sigmoid แล้ว 0–1) ขนาด 1×1×320×320 — ไม่ยืดค่าต่ำสุด–สูงสุด (รูปที่ไม่มีฟ้าต้องได้ว่าง)
+            let (_, data) = outputs[0].try_extract_tensor::<f32>().map_err(failed)?;
+            if data.len() != plane {
+                return Err(failed(format!("โมเดลคืนผล {} ค่า ไม่ใช่ {plane}", data.len())));
+            }
+            Ok(GrayImage::from_fn(SIDE, SIDE, |x, y| {
+                image::Luma([(data[(y * SIDE + x) as usize].clamp(0.0, 1.0) * 255.0).round() as u8])
+            }))
         }
     }
 }

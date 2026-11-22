@@ -415,7 +415,8 @@ pub struct Pair {
 /// · 4 = แก้เลนส์ตามข้อมูลของกล้อง กรอบภาพจาก RAW จึงตรงกับ JPEG + หน้าตาพื้นฐานแบบ Adobe Portrait (DECISIONS ข้อ 34–35)
 /// · 5 = ค่าเริ่มต้นรวม Mask ตัวคนของ Lightroom (DECISIONS ข้อ 40)
 /// · 6 = รวม Mask ส่วนของคน (ผม ผิวหน้า ผิวตัว เสื้อผ้า) และ Select Background ของ Lightroom (DECISIONS ข้อ 43)
-const START_VERSION: u32 = 6;
+/// · 7 = รวม Mask ท้องฟ้า (Select Sky) ของ Lightroom (DECISIONS ข้อ 44)
+const START_VERSION: u32 = 7;
 
 /// ค่าเริ่มต้นเมื่อแต่งจาก RAW (คิดจากไฟล์ RAW ครั้งแรกที่ต้องใช้ แล้วเก็บไว้)
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -235,7 +235,7 @@ fn retouch(rng: &mut Rng, masks: &[Mask]) -> Option<Retouch> {
         .iter()
         .flat_map(|m| match &m.area {
             Area::Faces { boxes, .. } => boxes.clone(),
-            Area::Subject { .. } | Area::People { .. } => vec![],
+            Area::Subject { .. } | Area::People { .. } | Area::Sky { .. } => vec![],
         })
         .collect();
     if faces.is_empty() || rng.chance(0.3) {
@@ -285,6 +285,27 @@ fn people_mask(rng: &mut Rng, s: &mut EditSettings) {
     s.masks.push(Mask {
         id: "people".into(),
         area: Area::People { parts, map: Some(puri_core::parts::PartsMap::new(image)) },
+        adjust: mask_adjust(rng),
+        amount: if rng.chance(0.6) { 100.0 } else { rng.int(0, 100) as f64 },
+        invert: rng.chance(0.25),
+    });
+}
+
+/// ท้องฟ้า (DECISIONS ข้อ 44): ภาพน้ำหนักสุ่ม (ไล่จากบนลงล่างพร้อมขอบหยัก) ขนาดไม่เท่าภาพ (แนบไว้แล้ว)
+fn sky_mask(rng: &mut Rng, s: &mut EditSettings) {
+    if !rng.chance(0.25) || s.masks.len() >= puri_core::masks::MAX_MASKS {
+        return;
+    }
+    let (mw, mh) = (rng.int(8, 40), rng.int(8, 40));
+    let (line, wave) = (rng.range(0.2, 0.8), rng.range(0.0, 0.15));
+    let image = image::GrayImage::from_fn(mw, mh, |x, y| {
+        let (u, v) = ((x as f64 + 0.5) / mw as f64, (y as f64 + 0.5) / mh as f64);
+        let edge = line + wave * (u * 17.0).sin();
+        image::Luma([(((edge - v) * 6.0 + 0.5).clamp(0.0, 1.0) * 255.0) as u8])
+    });
+    s.masks.push(Mask {
+        id: "sky".into(),
+        area: Area::Sky { map: Some(puri_core::sky::SkyMap::new(image)) },
         adjust: mask_adjust(rng),
         amount: if rng.chance(0.6) { 100.0 } else { rng.int(0, 100) as f64 },
         invert: rng.chance(0.25),
@@ -492,6 +513,8 @@ fn live_preview_matches_the_saved_image_pixel_for_pixel() {
         removals(&mut rm, &mut s);
         let mut rp = Rng(SEED ^ 0x9A27_5EED_u64.wrapping_add(id.wrapping_mul(32_452_843)));
         people_mask(&mut rp, &mut s);
+        let mut rs = Rng(SEED ^ 0x5C1E_5C1E_u64.wrapping_add(id.wrapping_mul(49_979_687)));
+        sky_mask(&mut rs, &mut s);
         let profile = if rng.chance(0.2) { Profile::Raw } else { Profile::Display };
         let (w, h) = (rng.int(16, 64), rng.int(16, 48));
         // ใบหน้าบนภาพต้นทาง (พิกเซล) ตรงกับกรอบของ Mask
@@ -500,7 +523,7 @@ fn live_preview_matches_the_saved_image_pixel_for_pixel() {
             .iter()
             .flat_map(|m| match &m.area {
                 Area::Faces { boxes, .. } => boxes.clone(),
-                Area::Subject { .. } | Area::People { .. } => vec![],
+                Area::Subject { .. } | Area::People { .. } | Area::Sky { .. } => vec![],
             })
             .map(|b| {
                 (

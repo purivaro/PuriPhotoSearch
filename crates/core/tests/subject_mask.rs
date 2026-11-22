@@ -370,5 +370,85 @@ fn the_assistant_adds_and_removes_people_part_masks() {
         text(&tools.call("remove_masks", json!({ "photo_ids": [id], "area": "people" }))),
         "Removed masks from 1 photos."
     );
+
+    // ท้องฟ้า: ยังไม่มีโมเดล = บอกให้ผู้ใช้กดปุ่มในแอป · ติดตั้งแล้วใส่และเอาออกได้
+    let sky = json!({ "photo_ids": [id], "area": "sky", "adjust": { "highlights": -40 } });
+    let out = tools.call("add_mask", sky.clone());
+    assert!(out.is_error && text(&out).contains("ท้องฟ้า (AI)"), "{}", text(&out));
+    lib.call("install_subject_model", json!({ "sky": true }));
+    lib.run_jobs();
+    let out = tools.call("add_mask", sky);
+    assert!(!out.is_error, "{}", text(&out));
+    assert_eq!(masks(&id)[0]["area"], json!({ "kind": "sky" }));
+    assert_eq!(masks(&id)[0]["id"], "ai-sky");
+    assert_eq!(
+        text(&tools.call("remove_masks", json!({ "photo_ids": [id], "area": "sky" }))),
+        "Removed masks from 1 photos."
+    );
     assert!(masks(&id).as_array().is_none_or(|m| m.is_empty()), "{}", masks(&id));
+}
+
+/// ค่าสีเขียวที่มุมบนซ้าย (ฟ้า) มุมบนขวา (ตัวคนที่ยืนบังฟ้า) และมุมล่างซ้าย (พื้น) — ตัวแยกท้องฟ้าจำลอง: ครึ่งบน = ฟ้า
+fn sky_points(img: &image::RgbImage) -> (u8, u8, u8) {
+    let (w, h) = img.dimensions();
+    (img.get_pixel(w / 4, h / 4)[1], img.get_pixel(w * 3 / 4, h / 4)[1], img.get_pixel(w / 4, h * 3 / 4)[1])
+}
+
+#[test]
+fn a_sky_mask_darkens_only_the_sky_not_the_people_in_views_previews_and_exports() {
+    let lib = Lib::with_subject(true);
+    let root = grey_event(&lib, &["grey.jpg"]);
+    let before = tree_state(&root);
+    let id = lib.photo_id("grey.jpg");
+    let sky = json!({ "masks": [{ "id": "sky", "area": { "kind": "sky" }, "adjust": { "exposure": -1.0 }, "amount": 100, "invert": false }] });
+
+    // ยังไม่ติดตั้ง: บอกให้ดาวน์โหลด · ภาพยังไม่มีผล
+    assert_eq!(lib.call("get_subject_status", json!({}))["sky"]["state"], "not_installed");
+    lib.call("save_photo_edit", json!({ "photoId": id, "settings": sky }));
+    let (s, p, g) = sky_points(
+        &image::load_from_memory(&puri_core::api::asset(&lib.app, &format!("photo/{id}")).unwrap().bytes)
+            .unwrap()
+            .to_rgb8(),
+    );
+    assert!(s.abs_diff(90) <= 3 && p.abs_diff(90) <= 3 && g.abs_diff(90) <= 3, "ยังไม่มีผล {s} {p} {g}");
+
+    // ติดตั้ง (ตัวแยกตัวคนมาด้วย) แล้วคิด
+    let job = lib.call("install_subject_model", json!({ "sky": true }));
+    lib.run_jobs();
+    assert_eq!(lib.call("get_job", json!({ "jobId": job["id"] }))["state"], "completed");
+    let status = lib.call("get_subject_status", json!({}));
+    assert_eq!((status["state"].as_str(), status["sky"]["state"].as_str()), (Some("ready"), Some("ready")), "{status}");
+    let prepared = lib.call("prepare_subject", json!({ "photoId": id, "sky": true }));
+    assert_eq!(prepared["skyFound"], true, "{prepared}");
+
+    let check = |img: &image::RgbImage, what: &str| {
+        let (s, p, g) = sky_points(img);
+        // −1 EV: 90 → ราว 64 บน sRGB
+        assert!(s.abs_diff(64) <= 4 && p.abs_diff(90) <= 3 && g.abs_diff(90) <= 3, "{what}: ฟ้า {s} ตัวคน {p} พื้น {g}");
+    };
+    check(
+        &image::load_from_memory(&puri_core::api::asset(&lib.app, &format!("photo/{id}")).unwrap().bytes)
+            .unwrap()
+            .to_rgb8(),
+        "ตัวดูภาพ",
+    );
+    let (w, h) = (60u32, 40u32);
+    let rgba = puri_core::api::render_preview(
+        &lib.app,
+        json!({ "photoId": id, "source": "original", "settings": sky, "width": w, "height": h,
+                "view": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0 }, "whole": true }),
+    )
+    .unwrap();
+    check(&image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(w, h, rgba).unwrap()).to_rgb8(), "ตัวอย่างสด");
+    let dest = lib.tmp.path().join("ส่งออกฟ้า");
+    std::fs::create_dir_all(&dest).unwrap();
+    let plan = lib
+        .call("preview_export", json!({ "selection": { "kind": "explicit", "photoIds": [id] }, "destination": dest }));
+    lib.call("start_export", json!({ "planId": plan["planId"], "requestId": new_id() }));
+    lib.run_jobs();
+    check(&image::load_from_memory(&std::fs::read(dest.join("grey.jpg")).unwrap()).unwrap().to_rgb8(), "ส่งออก");
+    assert_eq!(tree_state(&root), before);
+    let stored =
+        lib.call("get_photo_details", json!({ "photoId": id }))["edit"]["settings"]["masks"][0]["area"].clone();
+    assert_eq!(stored, json!({ "kind": "sky" }), "ภาพน้ำหนักไม่ถูกเก็บ");
 }

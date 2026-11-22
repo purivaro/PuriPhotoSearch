@@ -536,7 +536,9 @@ export type MaskArea =
   /** ตัวคนในรูป (AI — DECISIONS ข้อ 40): แอปหาเองจากรูป ค่าที่แต่งเก็บแค่ชนิด */
   | { kind: 'subject' }
   /** ส่วนของคน (AI — DECISIONS ข้อ 43): หลายส่วน = รวมกัน · แอปหาเองจากรูป */
-  | { kind: 'people'; parts: PersonPart[] };
+  | { kind: 'people'; parts: PersonPart[] }
+  /** ท้องฟ้า (AI — DECISIONS ข้อ 44): แอปหาเองจากรูป ค่าที่แต่งเก็บแค่ชนิด */
+  | { kind: 'sky' };
 
 /** ส่วนของคน แบบ Select People ของ Lightroom */
 export type PersonPart = 'hair' | 'faceSkin' | 'bodySkin' | 'clothes';
@@ -557,6 +559,8 @@ export interface ModelStatus {
 export interface SubjectStatus extends ModelStatus {
   fill: ModelStatus;
   parts: ModelStatus;
+  /** ตัวแยกท้องฟ้า (ข้อ 44) */
+  sky: ModelStatus;
 }
 
 export interface EditMask {
@@ -1330,12 +1334,15 @@ export interface Commands {
   /** Mask ตัวคน (DECISIONS ข้อ 40): สถานะของตัวแยกตัวคน */
   get_subject_status: [Record<string, never>, SubjectStatus];
   /** `fill` = ตัวเติมฉากหลังของตัวผอมด้วย (ดาวน์โหลดตัวแยกตัวคนด้วยถ้ายังไม่มี) */
-  install_subject_model: [{ fill?: boolean; parts?: boolean }, JobSnapshot];
+  install_subject_model: [{ fill?: boolean; parts?: boolean; sky?: boolean }, JobSnapshot];
   /**
    * คิดภาพน้ำหนักตัวคนของรูปไว้ก่อน (ราว 7 วินาทีครั้งแรก) · `fill` = เติมฉากหลังของตัวผอมด้วย จากภาพตั้งต้นของการแต่ง
    * (`fromRaw` = ภาพจาก RAW คู่) — ยังไม่ติดตั้ง = MODEL_NOT_READY
    */
-  prepare_subject: [{ photoId: Id; fill?: boolean; fromRaw?: boolean; parts?: boolean }, { found: boolean }];
+  prepare_subject: [
+    { photoId: Id; fill?: boolean; fromRaw?: boolean; parts?: boolean; sky?: boolean },
+    { found: boolean; skyFound?: boolean },
+  ];
   /**
    * ลบคน/สิ่งของ: คิดภาพที่เติมของแต่ละกรอบไว้ก่อน (ราว 3–8 วินาทีต่อกรอบครั้งแรก) — `found` ต่อกรอบ: พบคน/สิ่งที่เด่น
    * (ไม่พบ = ลบทั้งกรอบ) · ยังไม่ติดตั้งตัวแยกตัวคน/ตัวเติมฉากหลัง = MODEL_NOT_READY

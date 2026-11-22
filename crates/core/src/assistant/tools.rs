@@ -180,7 +180,7 @@ impl PhotoTools {
                 input_schema: schema(
                     json!({
                         "photo_ids": { "type": "array", "items": { "type": "string" }, "maxItems": MAX_EDIT_PHOTOS },
-                        "area": { "type": "string", "enum": ["skin", "faces", "subject", "people"] },
+                        "area": { "type": "string", "enum": ["skin", "faces", "subject", "people", "sky"] },
                         "parts": {
                             "type": "array",
                             "items": { "type": "string", "enum": ["hair", "faceSkin", "bodySkin", "clothes"] },
@@ -198,11 +198,11 @@ impl PhotoTools {
             ToolSpec {
                 name: "remove_masks",
                 description: "Remove local adjustments (masks) from photos: `area` \"skin\" or \"faces\" (face masks), \"subject\" (people masks), \
-                    \"people\" (hair/skin/clothes masks) or \"all\".",
+                    \"people\" (hair/skin/clothes masks), \"sky\" or \"all\".",
                 input_schema: schema(
                     json!({
                         "photo_ids": { "type": "array", "items": { "type": "string" }, "maxItems": MAX_EDIT_PHOTOS },
-                        "area": { "type": "string", "enum": ["skin", "faces", "subject", "people", "all"] },
+                        "area": { "type": "string", "enum": ["skin", "faces", "subject", "people", "sky", "all"] },
                     }),
                     &["photo_ids", "area"],
                 ),
@@ -329,10 +329,11 @@ found (brighter, smoother or whiter skin while robes, clothes, hair and backgrou
 the people (main subject) separated from the background by AI, like Lightroom's Select Subject (softer skin texture on the people, or with \
 `invert` true to change only the background); \"people\" = parts of the people, like Lightroom's Select People: give `parts`, one or more of \
 \"hair\", \"faceSkin\", \"bodySkin\" (arms, hands, neck), \"clothes\" (clothes and robes) — e.g. darker hair, brighter clothes, or the same skin \
-look on faces and arms. `adjust` uses the fields of edit_photos; meaningful here: exposure, contrast, highlights, shadows, \
+look on faces and arms; \"sky\" = the sky, like Lightroom's Select Sky (e.g. bring back a bright sky with lower exposure or highlights, \
+bluer with temperature; people standing against the sky are not part of it). `adjust` uses the fields of edit_photos; meaningful here: exposure, contrast, highlights, shadows, \
 whites, blacks, temperature, tint, saturation, texture, clarity, dehaze. `amount` 0..100 (default 100). Calling it again with the same area \
 replaces your earlier mask of that area on those photos. Photos without faces are skipped for skin/faces. The first look at a photo with a \
-subject or people mask takes about 10 seconds while the app finds the people.";
+subject, people or sky mask takes about 10 seconds while the app finds the people.";
 
 /// edit_photos ใช้คำอธิบายฟิลด์ทั้งหมด (ยาว) ในที่เดียว
 const ADJUST_HELP_EDIT_PHOTOS: &str = concat!(
@@ -378,6 +379,7 @@ fn summarize(name: &str, args: &Value) -> String {
                 "faces" => "ใบหน้า",
                 "subject" => "ตัวคน",
                 "people" => "ส่วนของคน",
+                "sky" => "ท้องฟ้า",
                 _ => "ทุกบริเวณ",
             };
             format!("{area} · {} รูป", ids("photo_ids"))
@@ -715,8 +717,8 @@ impl PhotoTools {
         use crate::masks::{Area, Mask};
         let ids = ids_arg(args, "photo_ids")?;
         let area = str_arg(args, "area").ok_or("area is required")?;
-        if !matches!(area, "skin" | "faces" | "subject" | "people") {
-            return Err("area must be skin, faces, subject or people".into());
+        if !matches!(area, "skin" | "faces" | "subject" | "people" | "sky") {
+            return Err("area must be skin, faces, subject, people or sky".into());
         }
         let parts: Vec<crate::parts::Part> = match (area, args.get("parts")) {
             ("people", Some(v)) => serde_json::from_value(v.clone()).map_err(|e| format!("Invalid parts: {e}"))?,
@@ -751,6 +753,14 @@ impl PhotoTools {
                 press แต่งภาพ, tab เฉพาะส่วน, one of the buttons under ส่วนของคน (AI) (ผม, ผิวหน้า, ผิวตัว, เสื้อผ้า). Skin and face masks work without it."
                 .into());
         }
+        if area == "sky" && (self.app.ai.subject.segmenter().is_none() || self.app.ai.subject.sky_segmenter().is_none())
+        {
+            return Err(
+                "The sky model is not installed on this computer. Ask the user to download it once: open a photo, \
+                press แต่งภาพ, tab เฉพาะส่วน, button ท้องฟ้า (AI). Skin and face masks work without it."
+                    .into(),
+            );
+        }
         // Mask ของ AI หนึ่งอันต่อบริเวณ (เรียกซ้ำ = แทนของเดิม) · ส่วนของคน: หนึ่งอันต่อชุดของส่วน
         let mut which = area.to_string();
         for part in &parts {
@@ -763,6 +773,7 @@ impl PhotoTools {
             let area_value = match area {
                 "subject" => Area::Subject { map: None },
                 "people" => Area::People { parts: parts.clone(), map: None },
+                "sky" => Area::Sky { map: None },
                 _ => {
                     let boxes = self.faces_of(photo)?;
                     if boxes.is_empty() {
@@ -900,6 +911,7 @@ impl PhotoTools {
                         ("all", _)
                             | ("subject", Area::Subject { .. })
                             | ("people", Area::People { .. })
+                            | ("sky", Area::Sky { .. })
                             | ("skin" | "faces", Area::Faces { .. })
                     )
                 })

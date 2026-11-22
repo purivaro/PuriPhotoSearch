@@ -141,6 +141,8 @@ pub struct SubjectProvider {
     pub fill: Option<FillProvider>,
     /// ตัวแยกส่วนของคน (ผม ผิว เสื้อผ้า — DECISIONS ข้อ 43) — None = build นี้ไม่มี
     pub parts: Option<crate::parts::PartsProvider>,
+    /// ตัวแยกท้องฟ้า (DECISIONS ข้อ 44) — None = build นี้ไม่มี
+    pub sky: Option<crate::sky::SkyProvider>,
 }
 
 /// ตัวโหลดโมเดลจากโฟลเดอร์ของมัน
@@ -207,6 +209,7 @@ pub struct SubjectState {
     segment: Slot<dyn Segmenter>,
     fill: Slot<dyn Inpainter>,
     parts: Slot<dyn crate::parts::PartSegmenter>,
+    sky: Slot<dyn crate::sky::SkySegmenter>,
     unsupported_reason: String,
     /// คิดทีละรูป (โมเดลใหญ่ทั้งสองตัวใช้ CPU ทุกแกน)
     busy: Mutex<()>,
@@ -217,28 +220,33 @@ pub struct SubjectState {
     patches: Mutex<Vec<(String, crate::remove::Patch, bool)>>,
     /// ภาพน้ำหนักของส่วนของคน ตาม revision
     part_maps: Mutex<Vec<(String, crate::parts::PartsMap)>>,
+    /// ภาพน้ำหนักท้องฟ้า ตาม revision
+    sky_maps: Mutex<Vec<(String, crate::sky::SkyMap)>>,
 }
 
 impl SubjectState {
     pub fn new(provider: Option<SubjectProvider>, unsupported_reason: &str, models_root: &Path) -> SubjectState {
-        let (segment, fill, parts) = match provider {
+        let (segment, fill, parts, sky) = match provider {
             Some(p) => (
                 Some((p.model, p.factory)),
                 p.fill.map(|f| (f.model, f.factory)),
                 p.parts.map(|f| (f.model, f.factory)),
+                p.sky.map(|f| (f.model, f.factory)),
             ),
-            None => (None, None, None),
+            None => (None, None, None, None),
         };
         SubjectState {
             segment: Slot::new(segment, "subject", "ตัวแยกตัวคน", models_root),
             fill: Slot::new(fill, "fill", "ตัวเติมฉากหลัง", models_root),
             parts: Slot::new(parts, "parts", "ตัวแยกส่วนของคน", models_root),
+            sky: Slot::new(sky, "sky", "ตัวแยกท้องฟ้า", models_root),
             unsupported_reason: unsupported_reason.to_string(),
             busy: Mutex::new(()),
             recent: Mutex::new(Vec::new()),
             fills: Mutex::new(Vec::new()),
             patches: Mutex::new(Vec::new()),
             part_maps: Mutex::new(Vec::new()),
+            sky_maps: Mutex::new(Vec::new()),
         }
     }
 
@@ -264,6 +272,11 @@ impl SubjectState {
     /// ตัวแยกส่วนของคนที่พร้อมใช้
     pub fn part_segmenter(&self) -> Option<Arc<dyn crate::parts::PartSegmenter>> {
         self.parts.get()
+    }
+
+    /// ตัวแยกท้องฟ้าที่พร้อมใช้
+    pub fn sky_segmenter(&self) -> Option<Arc<dyn crate::sky::SkySegmenter>> {
+        self.sky.get()
     }
 
     fn remember(&self, revision_id: &str, map: &SubjectMap) {
@@ -302,11 +315,15 @@ pub struct SubjectStatus {
     pub fill: ModelStatus,
     /// ตัวแยกส่วนของคน (Mask ส่วนของคนใช้ร่วมกับตัวแยกตัวคน)
     pub parts: ModelStatus,
+    /// ตัวแยกท้องฟ้า (Mask ท้องฟ้าใช้ร่วมกับตัวแยกตัวคน — ไม่นับตัวคนเป็นฟ้า)
+    pub sky: ModelStatus,
 }
 
 /// งานติดตั้งของตัวแยกตัวคน/ตัวเติมฉากหลัง (คนละงานกับตัววิเคราะห์ใบหน้า — ชนิดงาน `model` เหมือนกัน แยกด้วย dedup_key)
 pub(crate) fn is_install_job(dedup_key: Option<&str>) -> bool {
-    dedup_key.is_some_and(|k| ["model:subject:", "model:fill:", "model:parts:"].iter().any(|p| k.starts_with(p)))
+    dedup_key.is_some_and(|k| {
+        ["model:subject:", "model:fill:", "model:parts:", "model:sky:"].iter().any(|p| k.starts_with(p))
+    })
 }
 
 fn install_job(app: &App, key: &str) -> Result<Option<String>> {
@@ -394,10 +411,12 @@ pub fn status(app: &App) -> Result<SubjectStatus> {
             "พร้อมแยกผม ผิว และเสื้อผ้าบนเครื่องนี้",
             "ใช้กับ Mask ส่วนของคน: ผม ผิวหน้า ผิวตัว เสื้อผ้า",
         )?,
+        sky: slot_status(app, &state.sky, SKY_UNSUPPORTED.to_string(), "พร้อมหาท้องฟ้าบนเครื่องนี้", "ใช้กับ Mask ท้องฟ้า")?,
     })
 }
 
 const PARTS_UNSUPPORTED: &str = "build นี้ยังไม่มีตัวแยกส่วนของคน Mask ส่วนของคนจึงยังใช้ไม่ได้";
+const SKY_UNSUPPORTED: &str = "build นี้ยังไม่มีตัวแยกท้องฟ้า Mask ท้องฟ้าจึงยังใช้ไม่ได้";
 
 /// เริ่มงานดาวน์โหลดของโมเดลหนึ่งตัว (หรือคืนงานเดิมที่ยังทำอยู่)
 fn start_install<T: ?Sized>(app: &App, slot: &Slot<T>, unsupported: &str) -> Result<String> {
@@ -436,9 +455,17 @@ fn start_install<T: ?Sized>(app: &App, slot: &Slot<T>, unsupported: &str) -> Res
 
 /// เริ่มงานดาวน์โหลดตัวแยกตัวคน (หรือคืนงานเดิมที่ยังทำอยู่) · `fill` = ตัวเติมฉากหลังของตัวผอมด้วย
 /// (เริ่มดาวน์โหลดตัวแยกตัวคนถ้ายังไม่มี แล้วคืนงานของตัวเติมฉากหลัง)
-pub fn install(app: &App, fill: bool, parts: bool) -> Result<JobSnapshot> {
+pub fn install(app: &App, fill: bool, parts: bool, sky: bool) -> Result<JobSnapshot> {
     let state = &app.ai.subject;
-    let id = if parts {
+    let id = if sky {
+        if state.sky.model.is_none() {
+            return Err(AppError::new("MODEL_NOT_READY", SKY_UNSUPPORTED));
+        }
+        if !state.segment.installed() {
+            start_install(app, &state.segment, &state.unsupported_reason)?;
+        }
+        start_install(app, &state.sky, SKY_UNSUPPORTED)?
+    } else if parts {
         if state.parts.model.is_none() {
             return Err(AppError::new("MODEL_NOT_READY", PARTS_UNSUPPORTED));
         }
@@ -470,6 +497,8 @@ pub(crate) fn run_install(ctx: &JobCtx, dedup_key: Option<&str>) -> Result<Outco
         install_slot(ctx, &state.fill, "install_subject_model", "build นี้ยังไม่มีตัวเติมฉากหลัง")
     } else if dedup_key.is_some_and(|k| k.starts_with("model:parts:")) {
         install_slot(ctx, &state.parts, "install_subject_model", PARTS_UNSUPPORTED)
+    } else if dedup_key.is_some_and(|k| k.starts_with("model:sky:")) {
+        install_slot(ctx, &state.sky, "install_subject_model", SKY_UNSUPPORTED)
     } else {
         install_slot(ctx, &state.segment, "install_subject_model", &state.unsupported_reason)
     }
@@ -742,6 +771,76 @@ pub(crate) fn compute_parts(
     Ok(parts)
 }
 
+// ───────────────────────── ท้องฟ้า (DECISIONS ข้อ 44) ─────────────────────────
+
+/// ที่เก็บภาพน้ำหนักท้องฟ้าของ revision
+pub fn sky_path(cache_dir: &Path, revision_id: &str) -> PathBuf {
+    map_path(cache_dir, revision_id).with_file_name(format!("{revision_id}-sky.png"))
+}
+
+pub(crate) fn cached_sky(state: &SubjectState, cache_dir: &Path, revision_id: &str) -> Option<crate::sky::SkyMap> {
+    if let Some((_, m)) = lock(&state.sky_maps).iter().find(|(r, _)| r == revision_id) {
+        return Some(m.clone());
+    }
+    let bytes = std::fs::read(sky_path(cache_dir, revision_id)).ok()?;
+    let sky = crate::sky::SkyMap::new(image::load_from_memory(&bytes).ok()?.into_luma8());
+    remember_sky(state, revision_id, &sky);
+    Some(sky)
+}
+
+fn remember_sky(state: &SubjectState, revision_id: &str, sky: &crate::sky::SkyMap) {
+    let mut maps = lock(&state.sky_maps);
+    maps.retain(|(r, _)| r != revision_id);
+    maps.insert(0, (revision_id.to_string(), sky.clone()));
+    maps.truncate(RECENT);
+}
+
+/// ภาพน้ำหนักท้องฟ้า: ที่คิดไว้แล้ว หรือคิดตอนนี้ · ต้องมีภาพน้ำหนักตัวคนก่อน (ตัวคนไม่นับเป็นฟ้า)
+pub(crate) fn compute_sky(
+    state: &SubjectState,
+    cache_dir: &Path,
+    revision_id: &str,
+    source: &Path,
+    people: &SubjectMap,
+) -> Result<crate::sky::SkyMap> {
+    if let Some(sky) = cached_sky(state, cache_dir, revision_id) {
+        return Ok(sky);
+    }
+    let segmenter = state.sky_segmenter().ok_or_else(|| {
+        let message = if state.sky.model.is_none() {
+            SKY_UNSUPPORTED.to_string()
+        } else {
+            "รูปนี้มี Mask ท้องฟ้า ต้องติดตั้งตัวแยกท้องฟ้าก่อน".to_string()
+        };
+        AppError::new("MODEL_NOT_READY", message).next("install_subject_model")
+    })?;
+    let _turn = lock(&state.busy);
+    if let Some(sky) = cached_sky(state, cache_dir, revision_id) {
+        return Ok(sky);
+    }
+    let edge = crate::sky::SKY_EDGE;
+    let bytes = media::read_file(source).map_err(|_| AppError::source_unavailable())?;
+    let img = media::decode_upright(&bytes, edge)?;
+    let img = if img.width().max(img.height()) > edge { img.thumbnail(edge, edge) } else { img };
+    let sky = crate::sky::compute(&img.into_rgb8(), people, segmenter.as_ref())?;
+    let mut png = Vec::new();
+    image::DynamicImage::ImageLuma8(sky.image().clone())
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(AppError::internal)?;
+    let _ = media::write_cache_file(&sky_path(cache_dir, revision_id), &png);
+    remember_sky(state, revision_id, &sky);
+    Ok(sky)
+}
+
+/// แนบภาพน้ำหนักท้องฟ้าให้ Mask ท้องฟ้าทุกอันในค่าที่แต่ง
+pub fn attach_sky(settings: &mut EditSettings, sky: &crate::sky::SkyMap) {
+    for mask in &mut settings.masks {
+        if let Area::Sky { map: slot } = &mut mask.area {
+            *slot = Some(sky.clone());
+        }
+    }
+}
+
 // ───────────────────────── ลบคน/สิ่งของ (DECISIONS ข้อ 42) ─────────────────────────
 
 fn removal_name(revision_id: &str, from_raw: bool, r: &crate::remove::Removal) -> String {
@@ -949,7 +1048,8 @@ pub(crate) fn attach_all(
     }
     let body = settings.has_body();
     let people = settings.has_people();
-    if settings.has_subject() || body || people {
+    let sky = settings.has_sky();
+    if settings.has_subject() || body || people || sky {
         let map = if compute {
             Some(compute_map(state, cache_dir, revision_id, source)?)
         } else {
@@ -974,6 +1074,20 @@ pub(crate) fn attach_all(
                 None => complete = false,
             }
         }
+        if sky {
+            let found = if compute {
+                Some(compute_sky(state, cache_dir, revision_id, source, &map)?)
+            } else {
+                cached_sky(state, cache_dir, revision_id)
+            };
+            match found {
+                Some(found) => {
+                    let found = if removed { crate::remove::clear_sky(&found, &settings.removals) } else { found };
+                    attach_sky(settings, &found);
+                }
+                None => complete = false,
+            }
+        }
         if body {
             let fill = if compute {
                 Some(compute_fill(state, cache_dir, revision_id, from_raw, &map, || base(MAP_EDGE))?)
@@ -992,7 +1106,12 @@ pub(crate) fn attach_all(
 /// เตรียมค่าที่แต่งของรูปให้พร้อมสร้างภาพ ([`attach_all`]) · `compute` = คิดใหม่ได้ถ้ายังไม่เคยคิด ·
 /// คืน false เมื่อยังขาดบางส่วน (ภาพที่ได้ยังไม่มีผลของส่วนนั้น — อย่าเก็บลง cache)
 pub(crate) fn prepare(app: &App, photo_id: &str, settings: &mut EditSettings, compute: bool) -> bool {
-    if !settings.has_subject() && !settings.has_body() && !settings.has_people() && settings.removals.is_empty() {
+    if !settings.has_subject()
+        && !settings.has_body()
+        && !settings.has_people()
+        && !settings.has_sky()
+        && settings.removals.is_empty()
+    {
         return true;
     }
     let Ok((revision_id, source)) = revision_of(app, photo_id) else { return false };
@@ -1005,17 +1124,33 @@ pub(crate) fn prepare(app: &App, photo_id: &str, settings: &mut EditSettings, co
 pub struct Prepared {
     /// พบตัวคนในรูป
     pub found: bool,
+    /// พบท้องฟ้าในรูป (เมื่อขอให้หาท้องฟ้าด้วย)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sky_found: Option<bool>,
 }
 
 /// คิดภาพน้ำหนักของรูปไว้ก่อน (หน้าแต่งภาพเรียกตอนเพิ่ม Mask ตัวคน หรือเปิดรูปที่มี Mask นี้) · `fill` = เติมฉากหลังของตัวผอมด้วย
 /// จากภาพตั้งต้นของการแต่ง (`from_raw` = ภาพจาก RAW คู่)
-pub fn prepare_photo(app: &App, photo_id: &str, fill: bool, from_raw: bool, parts: bool) -> Result<Prepared> {
+pub fn prepare_photo(
+    app: &App,
+    photo_id: &str,
+    fill: bool,
+    from_raw: bool,
+    parts: bool,
+    sky: bool,
+) -> Result<Prepared> {
     let map = if fill { ensure_fill(app, photo_id, from_raw)?.0 } else { ensure(app, photo_id)? };
     if parts {
         let (revision_id, source) = revision_of(app, photo_id)?;
         compute_parts(&app.ai.subject, &app.cache_dir, &revision_id, &source, &map)?;
     }
-    Ok(Prepared { found: map.bounds().is_some() })
+    let sky_found = if sky {
+        let (revision_id, source) = revision_of(app, photo_id)?;
+        Some(compute_sky(&app.ai.subject, &app.cache_dir, &revision_id, &source, &map)?.bounds().is_some())
+    } else {
+        None
+    };
+    Ok(Prepared { found: map.bounds().is_some(), sky_found })
 }
 
 #[cfg(test)]

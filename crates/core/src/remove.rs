@@ -385,6 +385,32 @@ pub fn clear_parts(parts: &crate::parts::PartsMap, removals: &[Removal]) -> crat
     crate::parts::PartsMap::new(cleared)
 }
 
+/// ภาพน้ำหนักท้องฟ้าหลังลบ: ตรงที่ลบ เติมด้วยน้ำหนักของท้องฟ้ารอบ ๆ (ฉากที่เติมแทนคนที่ยืนบังฟ้าเป็นฟ้า ต้องโดนปรับเหมือนฟ้ารอบข้าง)
+pub fn clear_sky(sky: &crate::sky::SkyMap, removals: &[Removal]) -> crate::sky::SkyMap {
+    let img = sky.image();
+    let (w, h) = img.dimensions();
+    let keep: Vec<f32> = (0..w * h)
+        .map(|i| {
+            let (u, v) = (((i % w) as f64 + 0.5) / w as f64, ((i / w) as f64 + 0.5) / h as f64);
+            removals
+                .iter()
+                .filter_map(|r| r.patch.0.as_ref().and_then(|p| p.at(u, v)).map(|(_, a)| 1.0 - a))
+                .product::<f64>() as f32
+        })
+        .collect();
+    if keep.iter().all(|&k| k >= 1.0) {
+        return sky.clone();
+    }
+    let values: Vec<[f32; 3]> = img.as_raw().iter().map(|&v| [f32::from(v); 3]).collect();
+    let filled = crate::body::pull_push(&values, &keep, w as usize, h as usize);
+    let out = image::GrayImage::from_fn(w, h, |x, y| {
+        let i = (y * w + x) as usize;
+        let v = f32::from(img.as_raw()[i]) * keep[i] + filled[i][0] * (1.0 - keep[i]);
+        image::Luma([v.round().clamp(0.0, 255.0) as u8])
+    });
+    crate::sky::SkyMap::new(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -518,6 +544,26 @@ mod tests {
         assert_eq!(cleared.weight(145.0 / 200.0, 0.5), 0.0, "คนที่ลบไม่อยู่ในภาพน้ำหนัก");
         assert_eq!(cleared.weight(55.0 / 200.0, 0.5), 1.0, "คนที่เหลืออยู่ครบ");
         assert_eq!(cleared.people().len(), 1);
+    }
+
+    #[test]
+    fn the_sky_behind_a_removed_person_is_sky_again() {
+        let img = scene();
+        let rect = [125.0 / 200.0, 35.0 / 200.0, 40.0 / 200.0, 150.0 / 200.0];
+        let (patch, _) = compute(&img, &spec(rect, None), &Red, &Flat).unwrap();
+        // ฟ้าทั้งภาพ ยกเว้นตรงที่คนทั้งสองยืนบัง (ตัวคนไม่นับเป็นฟ้า)
+        let people = Red.segment(&img).unwrap();
+        let sky = crate::sky::SkyMap::new(GrayImage::from_fn(200, 200, |x, y| Luma([255 - people.get_pixel(x, y)[0]])));
+        let cleared = clear_sky(&sky, &[removal(rect, patch)]);
+        assert!(
+            cleared.weight(145.0 / 200.0, 0.5) > 0.95,
+            "ตรงที่ลบเป็นฟ้าแบบรอบข้าง {}",
+            cleared.weight(145.0 / 200.0, 0.5)
+        );
+        assert_eq!(cleared.weight(55.0 / 200.0, 0.5), 0.0, "คนที่เหลือยังไม่ใช่ฟ้า");
+        assert_eq!(cleared.weight(0.05, 0.05), 1.0);
+        let same = clear_sky(&sky, &[]);
+        assert_eq!(same.image().as_raw(), sky.image().as_raw(), "ไม่ได้ลบ = เท่าเดิม");
     }
 
     #[test]

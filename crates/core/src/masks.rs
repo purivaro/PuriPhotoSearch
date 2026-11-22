@@ -74,6 +74,11 @@ pub enum Area {
         #[serde(skip)]
         map: Option<crate::parts::PartsMap>,
     },
+    /// ท้องฟ้า (AI — DECISIONS ข้อ 44) แบบ "Select Sky" ของ Lightroom · ภาพน้ำหนักแนบตอนสร้างภาพ
+    Sky {
+        #[serde(skip)]
+        map: Option<crate::sky::SkyMap>,
+    },
 }
 
 /// ภาพน้ำหนักของตัวคนเป็นของรูป ไม่ใช่ของค่าที่แต่ง: แนบแล้วหรือยังไม่แนบก็นับว่าเป็นบริเวณเดียวกัน
@@ -83,6 +88,7 @@ impl PartialEq for Area {
             (Area::Faces { boxes: a, skin: s }, Area::Faces { boxes: b, skin: t }) => a == b && s == t,
             (Area::Subject { .. }, Area::Subject { .. }) => true,
             (Area::People { parts: a, .. }, Area::People { parts: b, .. }) => a == b,
+            (Area::Sky { .. }, Area::Sky { .. }) => true,
             _ => false,
         }
     }
@@ -101,6 +107,7 @@ impl Mask {
             // ตัวคนของรูปนั้นแนบตอนสร้างภาพของรูปนั้นเอง
             Area::Subject { .. } => Area::Subject { map: None },
             Area::People { parts, .. } => Area::People { parts: parts.clone(), map: None },
+            Area::Sky { .. } => Area::Sky { map: None },
         };
         Mask { area, ..self.clone() }
     }
@@ -126,6 +133,7 @@ impl Mask {
             Area::People { parts, .. } => {
                 !parts.is_empty() && parts.len() <= 4 && parts.iter().enumerate().all(|(i, p)| !parts[..i].contains(p))
             }
+            Area::Sky { .. } => true,
         };
         if ok_id && ok_amount && ok_area {
             Ok(())
@@ -226,6 +234,7 @@ pub fn area_weight(area: &Area, tones: &[Option<[f64; 2]>], u: f64, v: f64, rgb:
         }
         Area::Subject { map } => map.as_ref().map_or(0.0, |m| m.weight(u, v)),
         Area::People { parts, map } => map.as_ref().map_or(0.0, |m| m.weight(u, v, parts)),
+        Area::Sky { map } => map.as_ref().map_or(0.0, |m| m.weight(u, v)),
     }
 }
 
@@ -300,6 +309,13 @@ pub(crate) fn bounds(area: &Area, g: &Geometry, w: usize, h: usize, long: f64) -
         }
         Area::People { parts, map } => {
             let [bx0, by0, bx1, by1] = map.as_ref()?.bounds(parts)?;
+            for (u, v) in [(bx0, by0), (bx1, by0), (bx0, by1), (bx1, by1)] {
+                let (a, b) = g.forward(u, v);
+                (x0, y0, x1, y1) = (x0.min(a), y0.min(b), x1.max(a), y1.max(b));
+            }
+        }
+        Area::Sky { map } => {
+            let [bx0, by0, bx1, by1] = map.as_ref()?.bounds()?;
             for (u, v) in [(bx0, by0), (bx1, by0), (bx0, by1), (bx1, by1)] {
                 let (a, b) = g.forward(u, v);
                 (x0, y0, x1, y1) = (x0.min(a), y0.min(b), x1.max(a), y1.max(b));

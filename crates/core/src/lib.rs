@@ -39,6 +39,7 @@ pub mod retouch;
 pub mod review;
 pub mod setup;
 pub mod shrink;
+pub mod sky;
 pub mod subject;
 pub mod util;
 pub mod watermark;
