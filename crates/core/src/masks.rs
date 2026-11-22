@@ -68,6 +68,12 @@ pub enum Area {
         #[serde(skip)]
         map: Option<crate::subject::SubjectMap>,
     },
+    /// ส่วนของคน (AI — DECISIONS ข้อ 43): ผม ผิวหน้า ผิวตัว เสื้อผ้า (เลือกหลายส่วนได้ = รวมกัน) · ภาพน้ำหนักแนบตอนสร้างภาพ
+    People {
+        parts: Vec<crate::parts::Part>,
+        #[serde(skip)]
+        map: Option<crate::parts::PartsMap>,
+    },
 }
 
 /// ภาพน้ำหนักของตัวคนเป็นของรูป ไม่ใช่ของค่าที่แต่ง: แนบแล้วหรือยังไม่แนบก็นับว่าเป็นบริเวณเดียวกัน
@@ -76,6 +82,7 @@ impl PartialEq for Area {
         match (self, other) {
             (Area::Faces { boxes: a, skin: s }, Area::Faces { boxes: b, skin: t }) => a == b && s == t,
             (Area::Subject { .. }, Area::Subject { .. }) => true,
+            (Area::People { parts: a, .. }, Area::People { parts: b, .. }) => a == b,
             _ => false,
         }
     }
@@ -93,6 +100,7 @@ impl Mask {
             Area::Faces { skin, .. } => Area::Faces { boxes: faces.to_vec(), skin: *skin },
             // ตัวคนของรูปนั้นแนบตอนสร้างภาพของรูปนั้นเอง
             Area::Subject { .. } => Area::Subject { map: None },
+            Area::People { parts, .. } => Area::People { parts: parts.clone(), map: None },
         };
         Mask { area, ..self.clone() }
     }
@@ -115,6 +123,9 @@ impl Mask {
                     })
             }
             Area::Subject { .. } => true,
+            Area::People { parts, .. } => {
+                !parts.is_empty() && parts.len() <= 4 && parts.iter().enumerate().all(|(i, p)| !parts[..i].contains(p))
+            }
         };
         if ok_id && ok_amount && ok_area {
             Ok(())
@@ -214,6 +225,7 @@ pub fn area_weight(area: &Area, tones: &[Option<[f64; 2]>], u: f64, v: f64, rgb:
             w
         }
         Area::Subject { map } => map.as_ref().map_or(0.0, |m| m.weight(u, v)),
+        Area::People { parts, map } => map.as_ref().map_or(0.0, |m| m.weight(u, v, parts)),
     }
 }
 
@@ -281,6 +293,13 @@ pub(crate) fn bounds(area: &Area, g: &Geometry, w: usize, h: usize, long: f64) -
         }
         Area::Subject { map } => {
             let [bx0, by0, bx1, by1] = map.as_ref()?.bounds()?;
+            for (u, v) in [(bx0, by0), (bx1, by0), (bx0, by1), (bx1, by1)] {
+                let (a, b) = g.forward(u, v);
+                (x0, y0, x1, y1) = (x0.min(a), y0.min(b), x1.max(a), y1.max(b));
+            }
+        }
+        Area::People { parts, map } => {
+            let [bx0, by0, bx1, by1] = map.as_ref()?.bounds(parts)?;
             for (u, v) in [(bx0, by0), (bx1, by0), (bx0, by1), (bx1, by1)] {
                 let (a, b) = g.forward(u, v);
                 (x0, y0, x1, y1) = (x0.min(a), y0.min(b), x1.max(a), y1.max(b));

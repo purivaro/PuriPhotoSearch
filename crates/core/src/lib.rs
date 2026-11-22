@@ -26,6 +26,7 @@ pub mod local;
 pub mod masks;
 pub mod media;
 pub mod pair;
+pub mod parts;
 pub mod people;
 pub mod picks;
 pub mod platform;

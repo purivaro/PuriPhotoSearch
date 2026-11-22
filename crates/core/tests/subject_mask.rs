@@ -249,3 +249,76 @@ fn the_assistant_adds_skin_and_subject_masks_and_takes_them_off_again() {
     lib.call("ai_undo", json!({ "turnId": turn }));
     assert!(lib.call("get_photo_details", json!({ "photoId": a }))["edit"].is_null());
 }
+
+/// ค่าสีเขียวที่มุมบนขวาและล่างขวา (ตัวคนจำลองคือครึ่งขวา · ส่วนจำลอง: ครึ่งบน = ผม ครึ่งล่าง = เสื้อผ้า) และครึ่งซ้าย
+fn quadrants(img: &image::RgbImage) -> (u8, u8, u8) {
+    let (w, h) = img.dimensions();
+    (img.get_pixel(w * 3 / 4, h / 4)[1], img.get_pixel(w * 3 / 4, h * 3 / 4)[1], img.get_pixel(w / 4, h / 2)[1])
+}
+
+#[test]
+fn a_hair_mask_brightens_only_the_hair_in_views_previews_and_exports() {
+    let lib = Lib::with_subject(true);
+    let root = grey_event(&lib, &["grey.jpg"]);
+    let before = tree_state(&root);
+    let id = lib.photo_id("grey.jpg");
+    let hair = json!({ "masks": [{ "id": "hair", "area": { "kind": "people", "parts": ["hair"] }, "adjust": { "exposure": 1.0 }, "amount": 100, "invert": false }] });
+
+    // ยังไม่ติดตั้งตัวแยกส่วน: บอกให้ดาวน์โหลด · ภาพยังไม่มีผล
+    assert_eq!(lib.call("get_subject_status", json!({}))["parts"]["state"], "not_installed");
+    lib.call("save_photo_edit", json!({ "photoId": id, "settings": hair }));
+    let (top, bottom, left) = quadrants(
+        &image::load_from_memory(&puri_core::api::asset(&lib.app, &format!("photo/{id}")).unwrap().bytes)
+            .unwrap()
+            .to_rgb8(),
+    );
+    assert!(
+        top.abs_diff(90) <= 3 && bottom.abs_diff(90) <= 3 && left.abs_diff(90) <= 3,
+        "ยังไม่มีผล {top} {bottom} {left}"
+    );
+
+    // ติดตั้ง (ตัวแยกตัวคนมาด้วย) แล้วคิด
+    let job = lib.call("install_subject_model", json!({ "parts": true }));
+    lib.run_jobs();
+    assert_eq!(lib.call("get_job", json!({ "jobId": job["id"] }))["state"], "completed");
+    let status = lib.call("get_subject_status", json!({}));
+    assert_eq!(
+        (status["state"].as_str(), status["parts"]["state"].as_str()),
+        (Some("ready"), Some("ready")),
+        "{status}"
+    );
+    lib.call("prepare_subject", json!({ "photoId": id, "parts": true }));
+
+    let check = |img: &image::RgbImage, what: &str| {
+        let (top, bottom, left) = quadrants(img);
+        assert!(
+            top > 120 && bottom.abs_diff(90) <= 3 && left.abs_diff(90) <= 3,
+            "{what}: ผม {top} เสื้อผ้า {bottom} ฉากหลัง {left}"
+        );
+    };
+    check(
+        &image::load_from_memory(&puri_core::api::asset(&lib.app, &format!("photo/{id}")).unwrap().bytes)
+            .unwrap()
+            .to_rgb8(),
+        "ตัวดูภาพ",
+    );
+    let (w, h) = (60u32, 40u32);
+    let rgba = puri_core::api::render_preview(
+        &lib.app,
+        json!({ "photoId": id, "source": "original", "settings": hair, "width": w, "height": h,
+                "view": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0 }, "whole": true }),
+    )
+    .unwrap();
+    check(&image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(w, h, rgba).unwrap()).to_rgb8(), "ตัวอย่างสด");
+    let dest = lib.tmp.path().join("ส่งออกผม");
+    std::fs::create_dir_all(&dest).unwrap();
+    let plan = lib
+        .call("preview_export", json!({ "selection": { "kind": "explicit", "photoIds": [id] }, "destination": dest }));
+    lib.call("start_export", json!({ "planId": plan["planId"], "requestId": new_id() }));
+    lib.run_jobs();
+    check(&image::load_from_memory(&std::fs::read(dest.join("grey.jpg")).unwrap()).unwrap().to_rgb8(), "ส่งออก");
+    assert_eq!(tree_state(&root), before);
+    let stored =
+        lib.call("get_photo_details", json!({ "photoId": id }))["edit"]["settings"]["masks"][0]["area"].clone();
+    assert_eq!(stored, json!({ "kind": "people", "parts": ["hair"] }), "ภาพน้ำหนักไม่ถูกเก็บ");
+}

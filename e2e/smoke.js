@@ -350,6 +350,9 @@
     // ลบคน/สิ่งของ (ข้อ 42): ไม่มีตัวแยกตัวคน → บอกเหตุ ไม่มีปุ่มลากกรอบ
     await see('remove-unsupported', 'เหตุที่ลบคน/สิ่งของไม่ได้');
     expect(!tid('remove-draw'), 'ไม่มีปุ่มลากกรอบเมื่อลบไม่ได้');
+    // Mask ส่วนของคน (ข้อ 43): ไม่มีตัวแยกตัวคน → ปุ่มผม/ผิว/เสื้อผ้ากดไม่ได้ (เหตุขึ้นครั้งเดียวใต้ปุ่มตัวคน)
+    await see('mask-add-part-hair', 'ปุ่ม Mask ผม');
+    expect(['hair', 'faceSkin', 'bodySkin', 'clothes'].every((p) => tid(`mask-add-part-${p}`)?.disabled), 'ปุ่มส่วนของคนกดไม่ได้');
     const addFaces = await see('mask-add-faces');
     expect(text(addFaces).includes('2 คน'), `ปุ่มบอกจำนวนใบหน้า (ได้ "${text(addFaces)}")`);
     // แก้มของใบหน้าซ้าย (ใต้ตา) และฉากหลังมุมซ้ายบน

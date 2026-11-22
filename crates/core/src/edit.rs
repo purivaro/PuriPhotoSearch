@@ -108,6 +108,11 @@ impl EditSettings {
         self.retouch.as_ref().is_some_and(|r| r.body > 0.0)
     }
 
+    /// มี Mask ส่วนของคน (ผม ผิว เสื้อผ้า — AI) — ต้องแนบภาพน้ำหนักของส่วนของคนก่อนสร้างภาพ
+    pub fn has_people(&self) -> bool {
+        self.masks.iter().any(|m| matches!(m.area, crate::masks::Area::People { .. }))
+    }
+
     /// มี Mask ตัวคน (AI) — ต้องแนบภาพน้ำหนักของรูปก่อนสร้างภาพ ([`crate::subject::prepare`])
     pub fn has_subject(&self) -> bool {
         self.masks.iter().any(|m| matches!(m.area, crate::masks::Area::Subject { .. }))

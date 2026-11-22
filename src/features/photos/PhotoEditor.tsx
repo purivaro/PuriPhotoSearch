@@ -14,7 +14,7 @@ import { NEUTRAL, histogram, isNeutral, type Adjust, type Histogram } from './ad
 import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, SharpenPanel, ToneCurvePanel, VignettePanel } from './AdjustControls';
 import { EditPresets } from './EditPresets';
 import { MaskPanel, SubjectProgress } from './MaskPanel';
-import { addMasks, isSubjectMask } from './masks';
+import { addMasks, isPeopleMask, isSubjectMask } from './masks';
 import { RemovePanel, type RemoveTool } from './RemovePanel';
 import { MIN_DRAG_PX, brushToSource, sourceToView, viewToSource } from './removals';
 import { RetouchPanel } from './RetouchPanel';
@@ -155,6 +155,7 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
     mask: (settings.masks ?? []).some(isSubjectMask),
     body: bodyAmount(settings.retouch) > 0,
     fromRaw,
+    parts: (settings.masks ?? []).some(isPeopleMask),
   });
   // ค่าที่วาดบนภาพ: ระหว่างชี้ที่ preset ใช้ค่าของ preset (memo ไว้ ไม่ให้วาดซ้ำทุกครั้งที่ฮิสโตแกรมอัปเดต)
   const shown = useMemo(() => (previewAdjust ? { ...settings, adjust: previewAdjust } : settings), [settings, previewAdjust]);

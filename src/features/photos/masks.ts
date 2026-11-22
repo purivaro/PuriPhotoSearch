@@ -15,6 +15,12 @@ export const maskIsActive = (m: EditMask) => m.amount > 0 && !isNeutral(m.adjust
 /** บริเวณ "ตัวคน (AI)" — แอปหาตัวคนจากรูปเอง (DECISIONS ข้อ 40) */
 export const isSubjectMask = (m: EditMask) => m.area.kind === 'subject';
 
+/** Mask ส่วนของคน (ผม ผิว เสื้อผ้า — AI) */
+export const isPeopleMask = (m: EditMask) => m.area.kind === 'people';
+
+/** Mask ที่ใช้ได้กับทุกรูป (ไม่ผูกกับใบหน้าของรูปนั้น) — preset เก็บได้ */
+export const isPortableMask = (m: EditMask) => isSubjectMask(m) || isPeopleMask(m);
+
 /**
  * เพิ่ม Mask ของ preset ให้รูป: แทนอันที่รหัสเดียวกัน (ใช้ preset ซ้ำไม่ซ้อน) Mask อื่นของรูปอยู่ครบ
  * เกินจำนวนที่รับได้ = ตัดของเดิมที่เก่าที่สุด (เหมือน `EditParts::merge` ใน Rust)

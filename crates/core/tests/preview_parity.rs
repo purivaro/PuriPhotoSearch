@@ -235,7 +235,7 @@ fn retouch(rng: &mut Rng, masks: &[Mask]) -> Option<Retouch> {
         .iter()
         .flat_map(|m| match &m.area {
             Area::Faces { boxes, .. } => boxes.clone(),
-            Area::Subject { .. } => vec![],
+            Area::Subject { .. } | Area::People { .. } => vec![],
         })
         .collect();
     if faces.is_empty() || rng.chance(0.3) {
@@ -258,6 +258,37 @@ fn retouch(rng: &mut Rng, masks: &[Mask]) -> Option<Retouch> {
         thin: amount(rng),
         ..Default::default()
     })
+}
+
+/// ส่วนของคน (DECISIONS ข้อ 43): ภาพน้ำหนักสี่ช่องสุ่ม (แต่ละช่องเป็นวงรีนุ่ม ๆ คนละที่) ขนาดไม่เท่าภาพ + ส่วนที่เลือกสุ่ม (แนบไว้แล้ว)
+fn people_mask(rng: &mut Rng, s: &mut EditSettings) {
+    if !rng.chance(0.25) || s.masks.len() >= puri_core::masks::MAX_MASKS {
+        return;
+    }
+    use puri_core::parts::Part;
+    let (mw, mh) = (rng.int(8, 40), rng.int(8, 40));
+    let centres: Vec<(f64, f64, f64)> =
+        (0..4).map(|_| (rng.range(0.2, 0.8), rng.range(0.2, 0.8), rng.range(0.15, 0.45))).collect();
+    let image = image::RgbaImage::from_fn(mw, mh, |x, y| {
+        let (u, v) = ((x as f64 + 0.5) / mw as f64, (y as f64 + 0.5) / mh as f64);
+        image::Rgba(std::array::from_fn(|c| {
+            let (cx, cy, r) = centres[c];
+            let d = ((u - cx).powi(2) + (v - cy).powi(2)).sqrt() / r;
+            ((1.2 - d).clamp(0.0, 1.0) * 255.0) as u8
+        }))
+    });
+    let all = [Part::Hair, Part::FaceSkin, Part::BodySkin, Part::Clothes];
+    let mut parts: Vec<Part> = all.iter().copied().filter(|_| rng.chance(0.5)).collect();
+    if parts.is_empty() {
+        parts.push(all[rng.int(0, 3) as usize]);
+    }
+    s.masks.push(Mask {
+        id: "people".into(),
+        area: Area::People { parts, map: Some(puri_core::parts::PartsMap::new(image)) },
+        adjust: mask_adjust(rng),
+        amount: if rng.chance(0.6) { 100.0 } else { rng.int(0, 100) as f64 },
+        invert: rng.chance(0.25),
+    });
 }
 
 /// ลบคน/สิ่งของ (DECISIONS ข้อ 42): ภาพที่เติมสุ่มสี + ขอบนุ่ม ครอบส่วนสุ่มของภาพ (แนบไว้แล้ว)
@@ -459,6 +490,8 @@ fn live_preview_matches_the_saved_image_pixel_for_pixel() {
         body(&mut rb, &mut s);
         let mut rm = Rng(SEED ^ 0x0DE1_E7E5_u64.wrapping_add(id.wrapping_mul(15_485_863)));
         removals(&mut rm, &mut s);
+        let mut rp = Rng(SEED ^ 0x9A27_5EED_u64.wrapping_add(id.wrapping_mul(32_452_843)));
+        people_mask(&mut rp, &mut s);
         let profile = if rng.chance(0.2) { Profile::Raw } else { Profile::Display };
         let (w, h) = (rng.int(16, 64), rng.int(16, 48));
         // ใบหน้าบนภาพต้นทาง (พิกเซล) ตรงกับกรอบของ Mask
@@ -467,7 +500,7 @@ fn live_preview_matches_the_saved_image_pixel_for_pixel() {
             .iter()
             .flat_map(|m| match &m.area {
                 Area::Faces { boxes, .. } => boxes.clone(),
-                Area::Subject { .. } => vec![],
+                Area::Subject { .. } | Area::People { .. } => vec![],
             })
             .map(|b| {
                 (

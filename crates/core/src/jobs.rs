@@ -361,7 +361,7 @@ fn edited_for_faces(settings_json: Option<String>) -> Option<crate::edit::EditSe
     }
     let mut light = crate::edit::EditSettings { rotate: 0, straighten: 0.0, crop: None, ..s };
     // Mask ตัวคนต้องใช้โมเดลอีกตัว (ราว 7 วินาทีต่อรูป) แต่แค่ลดรายละเอียดบนตัวคน — ตรวจใบหน้าจากภาพที่ไม่มีส่วนนี้
-    light.masks.retain(|m| !matches!(m.area, crate::masks::Area::Subject { .. }));
+    light.masks.retain(|m| matches!(m.area, crate::masks::Area::Faces { .. }));
     // ตัวผอมและลบคน/สิ่งของก็เช่นกัน (หัวไม่ขยับอยู่แล้ว · คนที่ลบไปเป็นแค่ใบหน้าที่ไม่ต้องตั้งชื่อ)
     if let Some(r) = light.retouch.as_mut() {
         r.body = 0.0;

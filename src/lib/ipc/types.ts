@@ -534,7 +534,12 @@ export type MaskArea =
       skin: boolean;
     }
   /** ตัวคนในรูป (AI — DECISIONS ข้อ 40): แอปหาเองจากรูป ค่าที่แต่งเก็บแค่ชนิด */
-  | { kind: 'subject' };
+  | { kind: 'subject' }
+  /** ส่วนของคน (AI — DECISIONS ข้อ 43): หลายส่วน = รวมกัน · แอปหาเองจากรูป */
+  | { kind: 'people'; parts: PersonPart[] };
+
+/** ส่วนของคน แบบ Select People ของ Lightroom */
+export type PersonPart = 'hair' | 'faceSkin' | 'bodySkin' | 'clothes';
 
 /** สถานะของตัวแยกตัวคน (Mask ตัวคน) */
 /** สถานะของโมเดลหนึ่งตัวที่ดาวน์โหลดในแอป */
@@ -548,9 +553,10 @@ export interface ModelStatus {
   installJobId: Id | null;
 }
 
-/** ตัวแยกตัวคน (Mask ตัวคน และตัวผอม) + ตัวเติมฉากหลังของตัวผอม (DECISIONS ข้อ 41) */
+/** ตัวแยกตัวคน (Mask ตัวคน และตัวผอม) + ตัวเติมฉากหลังของตัวผอม (DECISIONS ข้อ 41) + ตัวแยกส่วนของคน (ข้อ 43) */
 export interface SubjectStatus extends ModelStatus {
   fill: ModelStatus;
+  parts: ModelStatus;
 }
 
 export interface EditMask {
@@ -1324,12 +1330,12 @@ export interface Commands {
   /** Mask ตัวคน (DECISIONS ข้อ 40): สถานะของตัวแยกตัวคน */
   get_subject_status: [Record<string, never>, SubjectStatus];
   /** `fill` = ตัวเติมฉากหลังของตัวผอมด้วย (ดาวน์โหลดตัวแยกตัวคนด้วยถ้ายังไม่มี) */
-  install_subject_model: [{ fill?: boolean }, JobSnapshot];
+  install_subject_model: [{ fill?: boolean; parts?: boolean }, JobSnapshot];
   /**
    * คิดภาพน้ำหนักตัวคนของรูปไว้ก่อน (ราว 7 วินาทีครั้งแรก) · `fill` = เติมฉากหลังของตัวผอมด้วย จากภาพตั้งต้นของการแต่ง
    * (`fromRaw` = ภาพจาก RAW คู่) — ยังไม่ติดตั้ง = MODEL_NOT_READY
    */
-  prepare_subject: [{ photoId: Id; fill?: boolean; fromRaw?: boolean }, { found: boolean }];
+  prepare_subject: [{ photoId: Id; fill?: boolean; fromRaw?: boolean; parts?: boolean }, { found: boolean }];
   /**
    * ลบคน/สิ่งของ: คิดภาพที่เติมของแต่ละกรอบไว้ก่อน (ราว 3–8 วินาทีต่อกรอบครั้งแรก) — `found` ต่อกรอบ: พบคน/สิ่งที่เด่น
    * (ไม่พบ = ลบทั้งกรอบ) · ยังไม่ติดตั้งตัวแยกตัวคน/ตัวเติมฉากหลัง = MODEL_NOT_READY

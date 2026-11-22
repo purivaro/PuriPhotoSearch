@@ -364,6 +364,9 @@ enum Command {
     InstallSubjectModel {
         #[serde(default)]
         fill: bool,
+        /// ตัวแยกส่วนของคนด้วย (Mask ส่วนของคน — DECISIONS ข้อ 43)
+        #[serde(default)]
+        parts: bool,
     },
     #[serde(rename_all = "camelCase")]
     PrepareSubject {
@@ -373,6 +376,9 @@ enum Command {
         fill: bool,
         #[serde(default)]
         from_raw: bool,
+        /// คิดภาพน้ำหนักของส่วนของคนด้วย
+        #[serde(default)]
+        parts: bool,
     },
     /// คิดภาพที่เติมของกรอบที่จะลบ (ลบคน/สิ่งของ — DECISIONS ข้อ 42)
     #[serde(rename_all = "camelCase")]
@@ -708,9 +714,9 @@ pub fn dispatch(app: &App, cmd: &str, args: Value) -> Result<Value> {
         ClearAiPicks { event_id } => ok(serde_json::json!({ "cleared": crate::cull::clear(app, &event_id)? })),
         SuggestComposition(r) => ok(crate::preview::composition(app, &r)?),
         GetSubjectStatus {} => ok(crate::subject::status(app)?),
-        InstallSubjectModel { fill } => ok(crate::subject::install(app, fill)?),
-        PrepareSubject { photo_id, fill, from_raw } => {
-            ok(crate::subject::prepare_photo(app, &photo_id, fill, from_raw)?)
+        InstallSubjectModel { fill, parts } => ok(crate::subject::install(app, fill, parts)?),
+        PrepareSubject { photo_id, fill, from_raw, parts } => {
+            ok(crate::subject::prepare_photo(app, &photo_id, fill, from_raw, parts)?)
         }
         PrepareRemovals { photo_id, from_raw, removals } => {
             ok(crate::subject::prepare_removals(app, &photo_id, from_raw, &removals)?)
