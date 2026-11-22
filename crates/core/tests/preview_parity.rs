@@ -279,6 +279,7 @@ fn removals(rng: &mut Rng, s: &mut EditSettings) {
                 id: format!("r{i}"),
                 rect: [region[0] + 0.02, region[1] + 0.02, region[2] * 0.6, region[3] * 0.6],
                 anchor: None,
+                brush: vec![],
                 patch: puri_core::remove::Attached(Some(puri_core::remove::Patch::new(region, image))),
             }
         })

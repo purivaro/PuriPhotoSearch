@@ -15,8 +15,8 @@ import { ColorGradingPanel, HistogramView, HslPanel, LevelsPanel, SharpenPanel, 
 import { EditPresets } from './EditPresets';
 import { MaskPanel, SubjectProgress } from './MaskPanel';
 import { addMasks, isSubjectMask } from './masks';
-import { RemovePanel } from './RemovePanel';
-import { MIN_DRAG_PX, sourceToView, viewToSource } from './removals';
+import { RemovePanel, type RemoveTool } from './RemovePanel';
+import { MIN_DRAG_PX, brushToSource, sourceToView, viewToSource } from './removals';
 import { RetouchPanel } from './RetouchPanel';
 import { bodyAmount, retouchIsActive } from './retouch';
 import { COLOR, LIGHT, PRESENCE, SliderGroup } from './SliderGroup';
@@ -145,7 +145,9 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
   // Mask ตัวคน (DECISIONS ข้อ 40): Rust หาตัวคนของรูปนี้ครั้งแรกที่ต้องใช้ แล้วตัวอย่างสดวาดใหม่
   // ตัวผอม (ข้อ 41) ใช้ภาพน้ำหนักเดียวกัน + ฉากหลังที่เติมจากภาพต้นทางของตัวอย่างสด
   // ลบคน/สิ่งของ (ข้อ 42): ลากกรอบบนภาพ · ชี้ที่รายการแล้วแสดงกรอบนั้น
-  const [drawing, setDrawing] = useState(false);
+  const [drawing, setDrawing] = useState<RemoveTool | null>(null);
+  // ขนาดแปรงบนจอ (เส้นผ่านศูนย์กลาง พิกเซล)
+  const [brushSize, setBrushSize] = useState(36);
   const [hoverRemoval, setHoverRemoval] = useState<string | null>(null);
   const removals = useMemo(() => settings.removals ?? [], [settings.removals]);
   const removing = useRemovals(details.id, removals, fromRaw);
@@ -193,15 +195,18 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      // กล่องหรือเมนูที่เปิดซ้อนบนหน้าแต่งภาพ (ตั้งชื่อ preset ฯลฯ) ปิดด้วย Esc ของมันเอง
-      const nested = (event.target as Element | null)?.closest?.('[role="dialog"]:not([data-testid="photo-editor"]), [role="menu"]');
+      // กล่องหรือเมนูที่เปิดซ้อนบนหน้าแต่งภาพ (ตั้งชื่อ preset ฯลฯ) ปิดด้วย Esc ของมันเอง — ไม่นับหน้าแต่งภาพเอง และตัวดูภาพที่หน้าแต่งภาพ
+      // อยู่ข้างใน (โฟกัสค้างที่ปุ่มในหน้าแต่งภาพแล้ว Esc เคยไม่ทำอะไร)
+      const holder = (event.target as Element | null)?.closest?.('[role="dialog"], [role="menu"]');
+      const editor = document.querySelector('[data-testid="photo-editor"]');
+      const nested = !!holder && holder !== editor && !(editor && holder.contains(editor));
       if (event.key === 'Escape' && !confirmDiscard && !nested) {
         event.preventDefault();
         event.stopPropagation();
         // Esc ระหว่างใช้หลอดดูดสี/ลากเส้นให้ตรง = เลิกโหมดนั้น ไม่ใช่ปิดหน้าแต่งภาพ
         if (picking) setPicking(false);
         else if (leveling) setLeveling(false);
-        else if (drawing) setDrawing(false);
+        else if (drawing) setDrawing(null);
         else if (dirty) setConfirmDiscard('close');
         else onClose();
       }
@@ -295,8 +300,12 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
     busy: removing.phase === 'preparing',
     highlight: hoverRemoval === r.id,
   }));
+  const addBrush = (points: { x: number; y: number }[], radius: number) => {
+    const part = brushToSource(W, H, settings, shownView, points, radius);
+    if (part) setSettings((s) => ({ ...s, removals: [...(s.removals ?? []), { id: newRequestId(), ...part }] }));
+  };
   const addRemoval = (box: UnitRect) => {
-    setDrawing(false);
+    setDrawing(null);
     const rect = viewToSource(W, H, settings, shownView, box);
     if (rect[2] < 0.005 || rect[3] < 0.005) return;
     setSettings((s) => ({ ...s, removals: [...(s.removals ?? []), { id: newRequestId(), rect }] }));
@@ -364,8 +373,10 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
           onHistogram={setHist}
           overlay={tab === 'masks' ? showArea : null}
           subjectToken={subject.token + removing.token}
-          drawing={drawing && tab === 'masks'}
+          tool={tab === 'masks' ? drawing : null}
+          brushSize={brushSize}
           onDrawBox={addRemoval}
+          onBrush={addBrush}
           removalBoxes={tab === 'masks' && !before ? removalBoxes : []}
           picking={picking}
           onPick={async (fx, fy) => {
@@ -625,8 +636,10 @@ export function PhotoEditor({ details, onClose, onSaved, sequence, initialTab = 
                   faces={details.faces}
                   subject={subject}
                   state={removing}
-                  drawing={drawing}
-                  onDrawing={setDrawing}
+                  tool={drawing}
+                  onTool={setDrawing}
+                  brushSize={brushSize}
+                  onBrushSize={setBrushSize}
                   onHover={setHoverRemoval}
                 />
                 <BeforeButton
@@ -734,9 +747,11 @@ interface EditCanvasProps {
   overlay: string | null;
   /** เปลี่ยนเมื่อภาพน้ำหนักตัวคน/ภาพที่ลบพร้อม (วาดใหม่ให้เห็นผล) */
   subjectToken: number;
-  /** ลบคน/สิ่งของ: โหมดลากกรอบบนภาพ → กรอบเป็นสัดส่วนของภาพที่แสดง */
-  drawing: boolean;
+  /** ลบคน/สิ่งของ: ลากกรอบ (กรอบเป็นสัดส่วนของภาพที่แสดง) หรือระบาย (จุดเป็นสัดส่วน · รัศมีเป็นสัดส่วนของความกว้างที่แสดง) */
+  tool: RemoveTool | null;
+  brushSize: number;
   onDrawBox: (box: UnitRect) => void;
+  onBrush: (points: { x: number; y: number }[], radius: number) => void;
   /** กรอบของส่วนที่ลบบนภาพที่แสดง — วาดเมื่อกำลังลบ (busy) หรือชี้ที่รายการ (highlight) */
   removalBoxes: { id: string; n: number; box: UnitRect; busy: boolean; highlight: boolean }[];
 }
@@ -762,10 +777,16 @@ function EditCanvas({
   onPick,
   overlay,
   subjectToken,
-  drawing,
+  tool,
+  brushSize,
   onDrawBox,
+  onBrush,
   removalBoxes,
 }: EditCanvasProps) {
+  const drawing = tool !== null;
+  // เส้นที่กำลังระบาย และตำแหน่งแปรง (พิกเซลในกรอบภาพ)
+  const [stroke, setStroke] = useState<{ x: number; y: number }[] | null>(null);
+  const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
   const area = useRef<HTMLDivElement>(null);
   // กรอบที่กำลังลาก (พิกเซลในกรอบภาพ) — ลบคน/สิ่งของ
   const [draft, setDraft] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
@@ -896,7 +917,7 @@ function EditCanvas({
           )}
           {mode !== 'crop' &&
             removalBoxes
-              .filter((r) => r.busy || r.highlight || drawing)
+              .filter((r) => r.busy || r.highlight)
               .map((r) => (
                 <div
                   key={r.id}
@@ -911,7 +932,50 @@ function EditCanvas({
                   </span>
                 </div>
               ))}
-          {drawing && mode !== 'crop' && (
+          {tool === 'brush' && mode !== 'crop' && (
+            <div
+              className="absolute inset-0 z-20 cursor-none touch-none"
+              data-testid="remove-brush-surface"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                const r = e.currentTarget.getBoundingClientRect();
+                setStroke([{ x: e.clientX - r.left, y: e.clientY - r.top }]);
+              }}
+              onPointerMove={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                const p = { x: e.clientX - r.left, y: e.clientY - r.top };
+                setHover(p);
+                const last = stroke?.[stroke.length - 1];
+                // เก็บจุดเมื่อขยับเกินราวหนึ่งในหกของแปรง (เส้นเรียบ จุดไม่มากเกิน)
+                if (stroke && last && Math.hypot(p.x - last.x, p.y - last.y) >= Math.max(1.5, brushSize / 6)) setStroke([...stroke, p]);
+              }}
+              onPointerLeave={() => setHover(null)}
+              onPointerUp={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                if (stroke?.length) onBrush(stroke.map((p) => ({ x: p.x / r.width, y: p.y / r.height })), brushSize / 2 / r.width);
+                setStroke(null);
+              }}
+              onPointerCancel={() => setStroke(null)}
+            >
+              <svg aria-hidden className="pointer-events-none absolute inset-0 size-full">
+                {stroke && (
+                  <polyline
+                    points={(stroke.length === 1 ? [stroke[0], stroke[0]] : stroke).map((p) => `${p?.x},${p?.y}`).join(' ')}
+                    fill="none"
+                    stroke="rgb(239 68 68 / 0.5)"
+                    strokeWidth={brushSize}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                )}
+                {hover && <circle cx={hover.x} cy={hover.y} r={brushSize / 2} fill="none" stroke="white" strokeWidth={1.5} strokeOpacity={0.9} />}
+                {hover && <circle cx={hover.x} cy={hover.y} r={brushSize / 2 + 1.5} fill="none" stroke="black" strokeWidth={1} strokeOpacity={0.5} />}
+              </svg>
+            </div>
+          )}
+          {tool === 'box' && mode !== 'crop' && (
             <div
               className="absolute inset-0 z-20 cursor-crosshair touch-none"
               data-testid="remove-surface"
@@ -1058,7 +1122,7 @@ function EditCanvas({
       )}
       {drawing && mode !== 'crop' && state === 'ready' && (
         <p className="pointer-events-none absolute top-3 left-1/2 z-30 -translate-x-1/2 rounded-full bg-black/75 px-3 py-1 text-[13px] font-semibold text-white">
-          ลากกรอบรอบคนหรือสิ่งของที่จะลบ · Esc ยกเลิก
+          {tool === 'brush' ? 'ระบายทับสิ่งที่จะลบแล้วปล่อย · ระบายได้หลายเส้น · Esc เลิกระบาย' : 'ลากกรอบรอบคนหรือสิ่งของที่จะลบ · Esc ยกเลิก'}
         </p>
       )}
     </div>

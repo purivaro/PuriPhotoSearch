@@ -46,5 +46,43 @@ export function faceRemoved(face: UnitRect, removals: Removal[]): boolean {
   return removals.some(({ rect: [x, y, w, h] }) => cx >= x && cx <= x + w && cy >= y && cy <= y + h);
 }
 
+/** จุดของเส้นที่ระบายได้มากสุดต่อส่วน (เท่ากับ remove::MAX_BRUSH_POINTS ใน Rust) */
+export const MAX_BRUSH_POINTS = 2000;
+
+/**
+ * เส้นที่ระบายบนภาพที่แสดง (จุดเป็นสัดส่วนของส่วนที่เห็น · `radius` เป็นสัดส่วนของความกว้างที่แสดง) → จุดบนภาพเดิม
+ * [x, y, รัศมีเป็นสัดส่วนของด้านยาว] + กรอบที่ครอบส่วนที่ระบาย · ไม่มีจุด = null
+ */
+export function brushToSource(
+  width: number,
+  height: number,
+  s: EditSettings,
+  view: UnitRect,
+  points: { x: number; y: number }[],
+  radius: number,
+): Pick<Removal, 'rect' | 'brush'> | null {
+  if (points.length === 0) return null;
+  const long = Math.max(width, height, 1);
+  const toSource = (x: number, y: number) => fromFrame(width, height, s, view.x + x * view.w, view.y + y * view.h);
+  // จุดมากเกิน: เก็บทุก ๆ k จุด (เส้นยาวมาก ๆ) รวมจุดสุดท้าย
+  const step = Math.ceil(points.length / MAX_BRUSH_POINTS);
+  const kept = points.filter((_, i) => i % step === 0 || i === points.length - 1).slice(0, MAX_BRUSH_POINTS);
+  const brush = kept.map((p): [number, number, number] => {
+    const a = toSource(p.x, p.y);
+    const b = toSource(p.x + radius, p.y);
+    const r = Math.hypot((b.x - a.x) * width, (b.y - a.y) * height) / long;
+    return [a.x, a.y, Math.min(Math.max(r, 1e-4), 0.3)];
+  });
+  const xs0 = brush.map(([x, , r]) => x - (r * long) / width);
+  const xs1 = brush.map(([x, , r]) => x + (r * long) / width);
+  const ys0 = brush.map(([, y, r]) => y - (r * long) / height);
+  const ys1 = brush.map(([, y, r]) => y + (r * long) / height);
+  const x0 = clamp01(Math.min(...xs0));
+  const y0 = clamp01(Math.min(...ys0));
+  const x1 = clamp01(Math.max(...xs1));
+  const y1 = clamp01(Math.max(...ys1));
+  return { rect: [x0, y0, Math.max(x1 - x0, 0.005), Math.max(y1 - y0, 0.005)], brush };
+}
+
 /** กรอบที่ลากเล็กเกินไป (พิกเซลบนจอ) ไม่นับ — คลิกพลาด */
 export const MIN_DRAG_PX = 10;

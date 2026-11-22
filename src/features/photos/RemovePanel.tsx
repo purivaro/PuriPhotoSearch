@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Eraser, RotateCcw, SquareDashedMousePointer, TriangleAlert, Undo2 } from 'lucide-react';
+import { Brush, Eraser, RotateCcw, SquareDashedMousePointer, TriangleAlert, Undo2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { InlineNotice, Spinner } from '@/components/ui/Feedback';
 import { cn } from '@/lib/cn';
 import { formatCount, newRequestId } from '@/lib/format';
 import type { FaceBox, Removal } from '@/lib/ipc/types';
 import { FaceAvatar } from '../people/FaceAvatar';
+import { SliderRow } from './AdjustControls';
 import { FillModelsInstall } from './FillModelsInstall';
 import { faceRemoved, personRect } from './removals';
 import type { RemovalsState } from './useRemovals';
@@ -14,6 +15,9 @@ import { bodyReady, type SubjectMapState } from './useSubjectMap';
 /** ลบได้มากสุดต่อรูป (เท่ากับ remove::MAX_REMOVALS ใน Rust) */
 export const MAX_REMOVALS = 20;
 
+/** ลากกรอบ (แอปหาสิ่งที่เด่นในกรอบ) หรือระบาย (ลบตรงที่ระบาย) */
+export type RemoveTool = 'box' | 'brush';
+
 interface RemovePanelProps {
   removals: Removal[];
   onChange: (removals: Removal[]) => void;
@@ -21,8 +25,11 @@ interface RemovePanelProps {
   /** สถานะของตัวแยกตัวคน/ตัวเติมฉากหลัง (ดาวน์โหลด) */
   subject: SubjectMapState;
   state: RemovalsState;
-  drawing: boolean;
-  onDrawing: (drawing: boolean) => void;
+  tool: RemoveTool | null;
+  onTool: (tool: RemoveTool | null) => void;
+  /** ขนาดแปรง (เส้นผ่านศูนย์กลางบนจอ พิกเซล) */
+  brushSize: number;
+  onBrushSize: (size: number) => void;
   /** ชี้ที่รายการ: แสดงกรอบนั้นบนภาพ */
   onHover: (id: string | null) => void;
 }
@@ -31,21 +38,22 @@ interface RemovePanelProps {
  * ลบคนหรือสิ่งของ (DECISIONS ข้อ 42): ลากกรอบบนภาพ หรือเลือกจากใบหน้าที่แอปพบ → แอปหาคน/สิ่งของในกรอบแล้วเติมฉากหลังแทน
  * · เอาคืนได้ทีละส่วน · ไฟล์ต้นฉบับไม่ถูกแตะ
  */
-export function RemovePanel({ removals, onChange, faces, subject, state, drawing, onDrawing, onHover }: RemovePanelProps) {
+export function RemovePanel({ removals, onChange, faces, subject, state, tool, onTool, brushSize, onBrushSize, onHover }: RemovePanelProps) {
   const status = subject.status;
   const ready = bodyReady(status);
   const unsupported = !!status && (status.state === 'unsupported' || status.fill.state === 'unsupported');
   const full = removals.length >= MAX_REMOVALS;
-  // กดลากกรอบระหว่างที่ยังไม่มีโมเดล: ถามดาวน์โหลดก่อน เสร็จแล้วเข้าโหมดลากกรอบให้เอง
-  const [want, setWant] = useState(false);
+  // กดเครื่องมือระหว่างที่ยังไม่มีโมเดล: ถามดาวน์โหลดก่อน เสร็จแล้วเข้าเครื่องมือนั้นให้เอง
+  const [want, setWant] = useState<RemoveTool | null>(null);
   useEffect(() => {
     if (ready && want) {
-      setWant(false);
-      onDrawing(true);
+      onTool(want);
+      setWant(null);
     }
-    // onDrawing เปลี่ยนทุกครั้งที่วาดใหม่ — รอเฉพาะตอนพร้อม
+    // onTool เปลี่ยนทุกครั้งที่วาดใหม่ — รอเฉพาะตอนพร้อม
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, want]);
+  const choose = (t: RemoveTool) => (tool === t ? onTool(null) : ready ? onTool(t) : setWant(t));
   const add = (rect: Removal['rect'], anchor: Removal['anchor']) => onChange([...removals, { id: newRequestId(), rect, anchor }]);
   const pickable = faces.filter((f) => !faceRemoved(f.sourceBbox, removals));
 
@@ -55,31 +63,63 @@ export function RemovePanel({ removals, onChange, faces, subject, state, drawing
         <Eraser className="size-4 text-muted" aria-hidden /> ลบคนหรือสิ่งของ
         {removals.length > 0 && <span className="font-normal text-muted">· {formatCount(removals.length)} ส่วน</span>}
       </h3>
-      <p className="text-[12.5px] text-muted">ลากกรอบรอบคนหรือสิ่งของที่ไม่ต้องการ แอปหาสิ่งนั้นในกรอบแล้วเติมฉากหลังแทน ไฟล์ต้นฉบับไม่ถูกแตะ</p>
+      <p className="text-[12.5px] text-muted">
+        ลากกรอบรอบคนหรือสิ่งของ แอปหาสิ่งนั้นในกรอบให้เอง · ของเล็ก ๆ สายไฟ ขยะบนพื้น ใช้ระบายทับ · แอปเติมฉากหลังแทน ไฟล์ต้นฉบับไม่ถูกแตะ
+      </p>
       {unsupported ? (
         <p className="text-[12.5px] text-muted" data-testid="remove-unsupported">
           {status.state === 'unsupported' ? status.reason : status.fill.reason}
         </p>
       ) : (
         <>
-          <Button
-            size="sm"
-            variant={drawing ? 'primary' : 'outline'}
-            icon={<SquareDashedMousePointer className="size-4" aria-hidden />}
-            disabled={!status || full}
-            aria-pressed={drawing}
-            onClick={() => (drawing ? onDrawing(false) : ready ? onDrawing(true) : setWant(true))}
-            className="w-full"
-            data-testid="remove-draw"
-          >
-            {drawing ? 'ลากกรอบบนภาพ… (กดอีกครั้งหรือ Esc เพื่อยกเลิก)' : full ? `ลบได้ไม่เกิน ${MAX_REMOVALS} ส่วนต่อรูป` : 'ลากกรอบรอบสิ่งที่จะลบ'}
-          </Button>
+          <div className="grid grid-cols-2 gap-1.5">
+            <Button
+              size="sm"
+              variant={tool === 'box' ? 'primary' : 'outline'}
+              icon={<SquareDashedMousePointer className="size-4" aria-hidden />}
+              disabled={!status || full}
+              aria-pressed={tool === 'box'}
+              onClick={() => choose('box')}
+              data-testid="remove-draw"
+            >
+              ลากกรอบ
+            </Button>
+            <Button
+              size="sm"
+              variant={tool === 'brush' ? 'primary' : 'outline'}
+              icon={<Brush className="size-4" aria-hidden />}
+              disabled={!status || full}
+              aria-pressed={tool === 'brush'}
+              onClick={() => choose('brush')}
+              data-testid="remove-brush"
+            >
+              ระบาย
+            </Button>
+          </div>
+          {full && <p className="text-[12.5px] text-muted">ลบได้ไม่เกิน {MAX_REMOVALS} ส่วนต่อรูป — เอาคืนบางส่วนก่อน</p>}
+          {tool === 'box' && <p className="text-[12.5px] text-muted">ลากกรอบรอบสิ่งที่จะลบบนภาพ · กดปุ่มอีกครั้งหรือ Esc เพื่อเลิก</p>}
+          {tool === 'brush' && (
+            <div className="space-y-1.5" data-testid="remove-brush-size">
+              <SliderRow
+                id="remove-brush-size"
+                label="ขนาดแปรง"
+                value={brushSize}
+                min={8}
+                max={160}
+                step={1}
+                defaultValue={36}
+                format={(v) => `${formatCount(v)} px`}
+                onChange={onBrushSize}
+              />
+              <p className="text-[12.5px] text-muted">ระบายทับสิ่งที่จะลบให้มิด แล้วปล่อย · ระบายได้หลายเส้น · กดปุ่มอีกครั้งหรือ Esc เพื่อเลิก</p>
+            </div>
+          )}
           {want && !ready && (
             <FillModelsInstall
               subject={subject}
-              onCancel={() => setWant(false)}
+              onCancel={() => setWant(null)}
               title="ลบคน/สิ่งของต้องดาวน์โหลดก่อน (ครั้งเดียว)"
-              after="เสร็จแล้วลากกรอบบนภาพได้เลย"
+              after="เสร็จแล้วใช้เครื่องมือที่เลือกได้เลย"
               testId="remove"
             />
           )}
@@ -144,7 +184,13 @@ export function RemovePanel({ removals, onChange, faces, subject, state, drawing
               >
                 <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-sunken text-[11.5px] font-bold text-ink tabular-nums">{i + 1}</span>
                 <span className={cn('min-w-0 flex-1 truncate text-[12.5px]', state.found[i] === false ? 'text-warn' : 'text-muted')}>
-                  {state.found[i] === false ? 'ไม่พบคน/สิ่งของที่เด่นในกรอบ — ลบทั้งกรอบ' : 'คน/สิ่งของในกรอบ'}
+                  {r.brush?.length
+                    ? 'ส่วนที่ระบาย'
+                    : state.found[i] === false
+                      ? 'ไม่พบคน/สิ่งของที่เด่นในกรอบ — ลบทั้งกรอบ'
+                      : r.anchor
+                        ? 'คนที่เลือกจากใบหน้า'
+                        : 'คน/สิ่งของในกรอบ'}
                 </span>
                 <Button
                   size="sm"

@@ -35,9 +35,10 @@ fn main() {
             let v: Vec<f64> = a.split(',').map(|x| x.trim().parse().expect("ตัวเลข")).collect();
             [v[0], v[1]]
         });
-        let (patch, found) = remove::compute(&base, *rect, anchor, segmenter.as_ref(), inpainter.as_ref()).expect("ลบ");
+        let spec = remove::Removal { id: i.to_string(), rect: *rect, anchor, brush: vec![], patch: Default::default() };
+        let (patch, found) = remove::compute(&base, &spec, segmenter.as_ref(), inpainter.as_ref()).expect("ลบ");
         println!("กรอบ {i}: {:.1} วิ · พบสิ่งที่เด่น {found}", t.elapsed().as_secs_f64());
-        removals.push(remove::Removal { id: i.to_string(), rect: *rect, anchor, patch: remove::Attached(Some(patch)) });
+        removals.push(remove::Removal { patch: remove::Attached(Some(patch)), ..spec });
     }
     let edge: u32 = std::env::var("EDGE").ok().and_then(|e| e.parse().ok()).unwrap_or(2048);
     let big = media::decode_upright(&bytes, edge).expect("ถอดรหัส");
