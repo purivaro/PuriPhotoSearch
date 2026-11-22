@@ -194,3 +194,58 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     }
     out
 }
+
+#[test]
+fn the_assistant_adds_skin_and_subject_masks_and_takes_them_off_again() {
+    let lib = Lib::with_subject(true);
+    grey_event(&lib, &["a.jpg", "b.jpg"]);
+    let (a, b) = (lib.photo_id("a.jpg"), lib.photo_id("b.jpg"));
+    lib.call(
+        "create_manual_face",
+        json!({ "requestId": new_id(), "photoId": a, "bbox": { "x": 0.6, "y": 0.2, "w": 0.2, "h": 0.3 }, "newPersonName": "คุณเทา" }),
+    );
+    let (tools, turn) = puri_core::assistant::test_tools(&lib.app).unwrap();
+    let text = |out: &puri_core::assistant::mcp::ToolOutput| {
+        out.content.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")
+    };
+    let masks = |id: &str| lib.call("get_photo_details", json!({ "photoId": id }))["edit"]["settings"]["masks"].clone();
+
+    // ยังไม่มีตัวแยกตัวคน: บอก AI ให้บอกผู้ใช้ดาวน์โหลด · Mask ผิวใช้ได้เลย (รูปที่ไม่มีใบหน้าข้าม)
+    let out = tools.call("add_mask", json!({ "photo_ids": [a], "area": "subject", "adjust": { "texture": -35 } }));
+    assert!(out.is_error && text(&out).contains("ตัวคน (AI)"), "{}", text(&out));
+    let out = tools.call("add_mask", json!({ "photo_ids": [a, b], "area": "skin", "adjust": { "exposure": 0.3 } }));
+    assert_eq!(text(&out), "Added the skin mask to 1 photos. Skipped 1 photos without faces.");
+    assert_eq!(masks(&a)[0]["area"]["kind"], "faces");
+    assert_eq!(masks(&a)[0]["area"]["skin"], true);
+
+    // ติดตั้งแล้ว: Mask ตัวคน · เรียกซ้ำ = แทนของเดิม (ไม่ซ้อน)
+    lib.install_subject_model();
+    for texture in [-20, -35] {
+        let out = tools.call(
+            "add_mask",
+            json!({ "photo_ids": [a], "area": "subject", "adjust": { "texture": texture }, "amount": 90 }),
+        );
+        assert!(!out.is_error, "{}", text(&out));
+    }
+    let m = masks(&a);
+    assert_eq!(m.as_array().unwrap().len(), 2, "{m}");
+    assert_eq!(
+        (m[1]["area"]["kind"].as_str(), m[1]["adjust"]["texture"].as_f64(), m[1]["amount"].as_f64()),
+        (Some("subject"), Some(-35.0), Some(90.0))
+    );
+    let seen = tools.call("view_photo", json!({ "photo_id": a, "size": 256 }));
+    assert!(!seen.is_error, "ดูรูปที่มี Mask ตัวคนได้ (คิดภาพน้ำหนักให้เอง)");
+    assert!(
+        tools.call("add_mask", json!({ "photo_ids": [a], "area": "subject", "adjust": {} })).is_error,
+        "ไม่ได้ปรับอะไร"
+    );
+
+    // เอาออกเฉพาะ Mask ตัวคน แล้วย้อนทั้งรอบ = กลับเป็นไม่ได้แต่ง
+    assert_eq!(
+        text(&tools.call("remove_masks", json!({ "photo_ids": [a, b], "area": "subject" }))),
+        "Removed masks from 1 photos."
+    );
+    assert_eq!(masks(&a).as_array().unwrap().len(), 1);
+    lib.call("ai_undo", json!({ "turnId": turn }));
+    assert!(lib.call("get_photo_details", json!({ "photoId": a }))["edit"].is_null());
+}

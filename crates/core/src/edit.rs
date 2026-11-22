@@ -537,11 +537,8 @@ impl EditParts {
         if self.masks {
             base.masks = from.masks.iter().map(|m| m.on_faces(faces)).collect();
         } else if self.add_masks && !from.masks.is_empty() {
-            base.masks.retain(|m| from.masks.iter().all(|f| f.id != m.id));
-            base.masks.extend(from.masks.iter().map(|m| m.on_faces(faces)));
-            // เกินจำนวนที่รับได้: เก็บของ preset ไว้ ตัดของเดิมที่เก่าที่สุด
-            let extra = base.masks.len().saturating_sub(crate::masks::MAX_MASKS);
-            base.masks.drain(..extra);
+            let added: Vec<_> = from.masks.iter().map(|m| m.on_faces(faces)).collect();
+            base.masks = crate::masks::add(&base.masks, &added);
         }
         if self.retouch {
             base.retouch = from.retouch.as_ref().map(|r| r.on_faces(faces));
