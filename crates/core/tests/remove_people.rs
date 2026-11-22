@@ -136,3 +136,52 @@ fn a_people_mask_does_not_bring_back_a_removed_person() {
     let gone = img.get_pixel((0.733 * w as f64) as u32, h / 2);
     assert!(gone[1].abs_diff(background(220)[1]) <= 30 && gone[2] <= 215, "ตรงที่ลบไม่ถูกทำให้สว่าง {gone:?}");
 }
+
+#[test]
+fn the_assistant_reads_the_faces_removes_people_and_slims_bodies() {
+    let lib = Lib::with_subject(true);
+    event(&lib);
+    let id = lib.photo_id("two.jpg");
+    // ใบหน้าของคนขวา (ตั้งชื่อไว้) ให้ AI เห็นใน get_photo
+    lib.call(
+        "create_manual_face",
+        json!({ "requestId": new_id(), "photoId": id, "bbox": { "x": 0.68, "y": 0.21, "w": 0.1, "h": 0.12 }, "newPersonName": "คนเดินผ่าน" }),
+    );
+    let (tools, _turn) = puri_core::assistant::test_tools(&lib.app).unwrap();
+    let text = |out: &puri_core::assistant::mcp::ToolOutput| {
+        out.content.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")
+    };
+    let info = text(&tools.call("get_photo", json!({ "photo_id": id })));
+    let face_id =
+        lib.call("get_photo_details", json!({ "photoId": id }))["faces"][0]["id"].as_str().unwrap().to_string();
+    assert!(info.contains(&format!("- {face_id}: คนเดินผ่าน [0.680, 0.210, 0.100, 0.120]")), "{info}");
+
+    // ยังไม่มีโมเดล: บอก AI ให้บอกผู้ใช้ดาวน์โหลดเอง
+    let out = tools.call("remove_people", json!({ "photo_id": id, "face_ids": [face_id] }));
+    assert!(out.is_error && text(&out).contains("ลบคนหรือสิ่งของ"), "{}", text(&out));
+    assert!(tools.call("slim_body", json!({ "photo_ids": [id], "amount": 50 })).is_error);
+
+    lib.call("install_subject_model", json!({ "fill": true }));
+    lib.run_jobs();
+    // ลบคนขวาจากใบหน้า (จุดยึด) แล้วดูรูป: คนขวาหาย คนซ้ายอยู่
+    let out = tools.call("remove_people", json!({ "photo_id": id, "face_ids": [face_id] }));
+    assert!(!out.is_error, "{}", text(&out));
+    assert!(!tools.call("view_photo", json!({ "photo_id": id, "size": 256 })).is_error);
+    let img = asset(&lib, &format!("photo/{id}"));
+    assert!(red_share(&img, 0.68, 0.79) < 0.02, "คนขวาหายไป");
+    assert!(red_share(&img, 0.21, 0.32) > 0.95, "คนซ้ายอยู่ครบ");
+    let removals = lib.call("get_photo_details", json!({ "photoId": id }))["edit"]["settings"]["removals"].clone();
+    assert_eq!(removals.as_array().unwrap().len(), 1);
+    assert!(removals[0]["anchor"].is_array(), "ลบจากใบหน้ามีจุดยึด {removals}");
+
+    // กรอบบนภาพเดิม + ตัวผอม
+    let out = tools.call("remove_people", json!({ "photo_id": id, "boxes": [[0.18, 0.15, 0.17, 0.83]] }));
+    assert!(!out.is_error && text(&out).contains("2 in total"), "{}", text(&out));
+    assert!(red_share(&asset(&lib, &format!("photo/{id}")), 0.21, 0.32) < 0.02, "คนซ้ายหายด้วย");
+    assert!(tools.call("remove_people", json!({ "photo_id": id, "face_ids": ["ไม่มี"] })).is_error);
+    let out = tools.call("slim_body", json!({ "photo_ids": [id], "amount": 50 }));
+    assert!(!out.is_error, "{}", text(&out));
+    let settings = lib.call("get_photo_details", json!({ "photoId": id }))["edit"]["settings"].clone();
+    assert_eq!(settings["retouch"]["body"], 50.0);
+    assert_eq!(settings["removals"].as_array().unwrap().len(), 2, "ตัวผอมไม่ลบส่วนที่ลบไว้");
+}

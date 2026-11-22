@@ -141,6 +141,15 @@ pub fn validate(removals: &[Removal]) -> Result<()> {
     }
 }
 
+/// กรอบของทั้งตัวคนจากกรอบใบหน้า [x, y, w, h] (บนภาพเดิม): กว้างราวสามเท่าของหน้า ลงไปราวเจ็ดเท่าของความสูงหน้า (ไม่เกินขอบภาพ)
+/// และจุดยึด = กลางใบหน้า — เท่ากับ `personRect` ฝั่ง UI (`src/features/photos/removals.ts`)
+pub fn person_rect(face: [f64; 4]) -> ([f64; 4], [f64; 2]) {
+    let [x, y, w, h] = face;
+    let (x0, x1) = ((x - w).clamp(0.0, 1.0), (x + 2.0 * w).clamp(0.0, 1.0));
+    let (y0, y1) = ((y - 0.35 * h).clamp(0.0, 1.0), (y + 7.0 * h).clamp(0.0, 1.0));
+    ([x0, y0, x1 - x0, y1 - y0], [x + w / 2.0, y + h / 2.0])
+}
+
 /// มีภาพที่เติมแนบไว้อย่างน้อยหนึ่งส่วน (มีผลกับภาพ)
 pub fn active(removals: &[Removal]) -> bool {
     removals.iter().any(|r| r.patch.0.is_some())
