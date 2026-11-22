@@ -77,6 +77,32 @@ fn fake_subject(base: &Path) -> puri_core::subject::SubjectProvider {
             },
             factory: Arc::new(|_| Ok(Arc::new(FakeParts) as Arc<dyn puri_core::parts::PartSegmenter>)),
         }),
+        sky: Some(puri_core::sky::SkyProvider {
+            model: puri_core::subject::SubjectModel {
+                id: "fake-sky",
+                display_name: "ตัวแยกท้องฟ้าทดสอบ",
+                file: "sky.onnx",
+                sha256: sha(FAKE_SKY_MODEL),
+                download_url: file_url(&base.join("model-source/sky.onnx")),
+                download_bytes: 1_000_000,
+                download_source: "โฟลเดอร์ทดสอบ",
+                license_note: "ใช้ในเทสต์เท่านั้น",
+            },
+            factory: Arc::new(|_| Ok(Arc::new(FakeSky) as Arc<dyn puri_core::sky::SkySegmenter>)),
+        }),
+    }
+}
+
+pub const FAKE_SKY_MODEL: &[u8] = b"fake sky weights";
+
+/// ตัวแยกท้องฟ้าจำลอง: ครึ่งบนของภาพ = ท้องฟ้า (มั่นใจเต็มที่)
+pub struct FakeSky;
+
+impl puri_core::sky::SkySegmenter for FakeSky {
+    fn segment(&self, image: &image::RgbImage) -> Result<image::GrayImage, AppError> {
+        let (w, h) = (32, 32);
+        let _ = image;
+        Ok(image::GrayImage::from_fn(w, h, |_, y| image::Luma([if y < h / 2 { 255 } else { 0 }])))
     }
 }
 
@@ -257,6 +283,7 @@ impl Lib {
             std::fs::write(dir.join("subject.onnx"), FAKE_SUBJECT_MODEL).unwrap();
             std::fs::write(dir.join("fill.onnx"), FAKE_FILL_MODEL).unwrap();
             std::fs::write(dir.join("parts.onnx"), FAKE_PARTS_MODEL).unwrap();
+            std::fs::write(dir.join("sky.onnx"), FAKE_SKY_MODEL).unwrap();
         }
         let app = open(tmp.path(), false, true);
         Lib { tmp, app, ai: false, subject: true }

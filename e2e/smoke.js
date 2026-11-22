@@ -353,6 +353,8 @@
     // Mask ส่วนของคน (ข้อ 43): ไม่มีตัวแยกตัวคน → ปุ่มผม/ผิว/เสื้อผ้ากดไม่ได้ (เหตุขึ้นครั้งเดียวใต้ปุ่มตัวคน)
     await see('mask-add-part-hair', 'ปุ่ม Mask ผม');
     expect(['hair', 'faceSkin', 'bodySkin', 'clothes'].every((p) => tid(`mask-add-part-${p}`)?.disabled), 'ปุ่มส่วนของคนกดไม่ได้');
+    // Mask ท้องฟ้า (ข้อ 44): ปุ่มกดไม่ได้เช่นกัน
+    expect((await see('mask-add-sky', 'ปุ่ม Mask ท้องฟ้า')).disabled, 'ปุ่มท้องฟ้ากดไม่ได้เมื่อไม่มีตัวแยกตัวคน');
     const addFaces = await see('mask-add-faces');
     expect(text(addFaces).includes('2 คน'), `ปุ่มบอกจำนวนใบหน้า (ได้ "${text(addFaces)}")`);
     // แก้มของใบหน้าซ้าย (ใต้ตา) และฉากหลังมุมซ้ายบน

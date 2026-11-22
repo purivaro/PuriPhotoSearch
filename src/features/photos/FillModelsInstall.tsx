@@ -2,7 +2,7 @@ import { Download } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Feedback';
 import { formatCount } from '@/lib/format';
-import { bodyInstalling, missingForBody, missingForParts, partsInstalling, type SubjectMapState } from './useSubjectMap';
+import { bodyInstalling, missingForBody, missingForParts, missingForSky, partsInstalling, skyInstalling, type SubjectMapState } from './useSubjectMap';
 
 interface FillModelsInstallProps {
   subject: SubjectMapState;
@@ -13,8 +13,8 @@ interface FillModelsInstallProps {
   after: string;
   /** คำนำหน้า data-testid: `${testId}-install` `${testId}-installing` `${testId}-install-start` */
   testId: string;
-  /** ชุดโมเดล: ตัวแยกตัวคน + ตัวเติมฉากหลัง (ค่าเริ่มต้น) หรือ ตัวแยกตัวคน + ตัวแยกส่วนของคน */
-  kind?: 'fill' | 'parts';
+  /** ชุดโมเดล: ตัวแยกตัวคน + ตัวเติมฉากหลัง (ค่าเริ่มต้น) · + ตัวแยกส่วนของคน · + ตัวแยกท้องฟ้า */
+  kind?: 'fill' | 'parts' | 'sky';
 }
 
 /**
@@ -24,10 +24,12 @@ interface FillModelsInstallProps {
 export function FillModelsInstall({ subject, onCancel, title, after, testId, kind = 'fill' }: FillModelsInstallProps) {
   const status = subject.status;
   if (!status) return null;
-  const missing = kind === 'fill' ? missingForBody(status) : missingForParts(status);
+  const missing = kind === 'fill' ? missingForBody(status) : kind === 'parts' ? missingForParts(status) : missingForSky(status);
   const size = missing.reduce((sum, m) => sum + m.downloadSizeMb, 0);
-  const label = (m: typeof status.fill) => (m === status ? 'ตัวแยกตัวคน' : m === status.fill ? 'ตัวเติมฉากหลัง' : 'ตัวแยกส่วนของคน');
-  if (kind === 'fill' ? bodyInstalling(status) : partsInstalling(status)) {
+  const label = (m: typeof status.fill) =>
+    m === status ? 'ตัวแยกตัวคน' : m === status.fill ? 'ตัวเติมฉากหลัง' : m === status.sky ? 'ตัวแยกท้องฟ้า' : 'ตัวแยกส่วนของคน';
+  const installing = kind === 'fill' ? bodyInstalling(status) : kind === 'parts' ? partsInstalling(status) : skyInstalling(status);
+  if (installing) {
     return (
       <div className="flex items-start gap-2 rounded-xl border border-line bg-sunken/60 p-3 text-[13px] text-ink" data-testid={`${testId}-installing`}>
         <Spinner className="mt-0.5 size-4 shrink-0" />
@@ -54,7 +56,7 @@ export function FillModelsInstall({ subject, onCancel, title, after, testId, kin
           size="sm"
           variant="primary"
           icon={<Download className="size-4" aria-hidden />}
-          onClick={kind === 'fill' ? subject.installBody : subject.installParts}
+          onClick={kind === 'fill' ? subject.installBody : kind === 'parts' ? subject.installParts : subject.installSky}
           data-testid={`${testId}-install-start`}
         >
           ดาวน์โหลด ({formatCount(size)} MB)

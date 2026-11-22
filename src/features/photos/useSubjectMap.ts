@@ -29,15 +29,23 @@ export interface SubjectNeeds {
   fromRaw: boolean;
   /** มี Mask ส่วนของคน (ต้องใช้ตัวแยกส่วนของคนด้วย) */
   parts?: boolean;
+  /** มี Mask ท้องฟ้า (ต้องใช้ตัวแยกท้องฟ้าด้วย) */
+  sky?: boolean;
 }
 
 export interface SubjectMapState {
   status: SubjectStatus | undefined;
   phase: SubjectPhase;
+  /** รูปนี้มี Mask ตัวคน */
+  mask: boolean;
   /** รูปนี้ใช้ตัวผอม (ข้อความและการดาวน์โหลดรวมตัวเติมฉากหลัง) */
   body: boolean;
   /** รูปนี้มี Mask ส่วนของคน (ข้อความและการดาวน์โหลดรวมตัวแยกส่วนของคน) */
   parts: boolean;
+  /** รูปนี้มี Mask ท้องฟ้า */
+  sky: boolean;
+  /** พบท้องฟ้าในรูป (null = ยังไม่รู้หรือไม่ได้หา) */
+  skyFound: boolean | null;
   /** พบตัวคนในรูป (null = ยังไม่รู้) */
   found: boolean | null;
   error: string | null;
@@ -49,6 +57,8 @@ export interface SubjectMapState {
   installBody: () => void;
   /** ดาวน์โหลดตัวแยกตัวคน + ตัวแยกส่วนของคน (ก่อนเพิ่ม Mask ส่วนของคน) */
   installParts: () => void;
+  /** ดาวน์โหลดตัวแยกตัวคน + ตัวแยกท้องฟ้า (ก่อนเพิ่ม Mask ท้องฟ้า) */
+  installSky: () => void;
   installing: boolean;
   retry: () => void;
 }
@@ -60,10 +70,21 @@ export function missingForBody(status: SubjectStatus | undefined): ModelStatus[]
 }
 
 /** โมเดลที่รูปนี้ต้องใช้แต่ยังไม่มี (ตัวแยกตัวคนเสมอ + ตัวเติมฉากหลังถ้ามีตัวผอม + ตัวแยกส่วนของคนถ้ามี Mask ส่วนของคน) */
-export function missingFor(status: SubjectStatus | undefined, needs: { body: boolean; parts: boolean }): ModelStatus[] {
+export function missingFor(status: SubjectStatus | undefined, needs: { body: boolean; parts: boolean; sky?: boolean }): ModelStatus[] {
   if (!status) return [];
-  return [status, ...(needs.body ? [status.fill] : []), ...(needs.parts ? [status.parts] : [])].filter((m) => m.state !== 'ready');
+  return [status, ...(needs.body ? [status.fill] : []), ...(needs.parts ? [status.parts] : []), ...(needs.sky ? [status.sky] : [])].filter(
+    (m) => m.state !== 'ready',
+  );
 }
+
+/** โมเดลที่ Mask ท้องฟ้าต้องใช้แต่ยังไม่มี (ตัวแยกตัวคน ตัวแยกท้องฟ้า) */
+export const missingForSky = (status: SubjectStatus | undefined) => missingFor(status, { body: false, parts: false, sky: true });
+
+/** Mask ท้องฟ้าใช้ได้บนเครื่องนี้ */
+export const skyReady = (status: SubjectStatus | undefined) => status?.state === 'ready' && status.sky.state === 'ready';
+
+/** กำลังดาวน์โหลดตัวใดตัวหนึ่งที่ Mask ท้องฟ้าใช้ */
+export const skyInstalling = (status: SubjectStatus | undefined) => status?.state === 'installing' || status?.sky.state === 'installing';
 
 /** โมเดลที่ Mask ส่วนของคนต้องใช้แต่ยังไม่มี (ตัวแยกตัวคน ตัวแยกส่วนของคน) */
 export function missingForParts(status: SubjectStatus | undefined): ModelStatus[] {
@@ -91,7 +112,12 @@ export function useSubjectStatus() {
     queryFn: () => call('get_subject_status', {}),
     // ระหว่างดาวน์โหลดถามซ้ำจนเสร็จ
     refetchInterval: (q) =>
-      q.state.data?.state === 'installing' || q.state.data?.fill.state === 'installing' || q.state.data?.parts.state === 'installing' ? 1500 : false,
+      q.state.data?.state === 'installing' ||
+      q.state.data?.fill.state === 'installing' ||
+      q.state.data?.parts.state === 'installing' ||
+      q.state.data?.sky.state === 'installing'
+        ? 1500
+        : false,
   });
 }
 
@@ -99,17 +125,19 @@ export function useSubjectMap(photoId: string, needs: SubjectNeeds): SubjectMapS
   const qc = useQueryClient();
   const status = useSubjectStatus();
   const parts = needs.parts ?? false;
-  const needed = needs.mask || needs.body || parts;
-  const ready = (needs.body ? bodyReady(status.data) : status.data?.state === 'ready') && (!parts || partsReady(status.data));
+  const sky = needs.sky ?? false;
+  const needed = needs.mask || needs.body || parts || sky;
+  const ready =
+    (needs.body ? bodyReady(status.data) : status.data?.state === 'ready') && (!parts || partsReady(status.data)) && (!sky || skyReady(status.data));
   const map = useQuery({
-    queryKey: ['subject-map', photoId, needs.body ? (needs.fromRaw ? 'fill-raw' : 'fill') : 'map', parts ? 'parts' : ''],
-    queryFn: () => call('prepare_subject', { photoId, fill: needs.body, fromRaw: needs.fromRaw, parts }),
+    queryKey: ['subject-map', photoId, needs.body ? (needs.fromRaw ? 'fill-raw' : 'fill') : 'map', parts ? 'parts' : '', sky ? 'sky' : ''],
+    queryFn: () => call('prepare_subject', { photoId, fill: needs.body, fromRaw: needs.fromRaw, parts, sky }),
     enabled: needed && ready,
     staleTime: Infinity,
     retry: false,
   });
   const install = useMutation({
-    mutationFn: (what: { fill?: boolean; parts?: boolean }) => call('install_subject_model', what),
+    mutationFn: (what: { fill?: boolean; parts?: boolean; sky?: boolean }) => call('install_subject_model', what),
     onSettled: () => void qc.invalidateQueries({ queryKey: SUBJECT_STATUS_KEY }),
     onError: (e) => toast.error(errorMessage(e)),
   });
@@ -125,19 +153,30 @@ export function useSubjectMap(photoId: string, needs: SubjectNeeds): SubjectMapS
   return {
     status: status.data,
     phase,
+    mask: needs.mask,
     body: needs.body,
     parts,
+    sky,
+    skyFound: map.data?.skyFound ?? null,
     found: map.data?.found ?? null,
     error: map.isError ? errorMessage(map.error) : null,
     token: map.dataUpdatedAt,
-    install: () => install.mutate({ fill: needs.body, parts }),
+    // ตัวแยกแต่ละชนิดเป็นงานดาวน์โหลดแยกกัน: ขอทีละอย่างที่ยังขาด (ตัวแยกตัวคนมาด้วยเสมอ)
+    install: () => {
+      if (sky && !skyReady(status.data)) install.mutate({ sky: true });
+      if (parts && !partsReady(status.data)) install.mutate({ parts: true });
+      if (needs.body && !bodyReady(status.data)) install.mutate({ fill: true });
+      if (!sky && !parts && !needs.body) install.mutate({});
+    },
     installBody: () => install.mutate({ fill: true }),
     installParts: () => install.mutate({ parts: true }),
+    installSky: () => install.mutate({ sky: true }),
     installing:
       install.isPending ||
       status.data?.state === 'installing' ||
       (needs.body && status.data?.fill.state === 'installing') ||
-      (parts && status.data?.parts.state === 'installing'),
+      (parts && status.data?.parts.state === 'installing') ||
+      (sky && status.data?.sky.state === 'installing'),
     retry: () => void map.refetch(),
   };
 }

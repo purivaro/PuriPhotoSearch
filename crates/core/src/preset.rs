@@ -68,10 +68,10 @@ fn insert(
     unsupported: &[String],
 ) -> Result<Preset> {
     adjust.validate()?;
-    // preset เก็บเฉพาะ Mask ตัวคนและส่วนของคน: Mask ใบหน้าผูกกับใบหน้าของรูปนั้น
+    // preset เก็บเฉพาะ Mask ตัวคน ส่วนของคน และท้องฟ้า: Mask ใบหน้าผูกกับใบหน้าของรูปนั้น
     let masks: Vec<Mask> = masks
         .iter()
-        .filter(|m| matches!(m.area, Area::Subject { .. } | Area::People { .. }) && m.is_active())
+        .filter(|m| matches!(m.area, Area::Subject { .. } | Area::People { .. } | Area::Sky { .. }) && m.is_active())
         .map(|m| m.on_faces(&[]))
         .collect();
     crate::masks::validate(&masks)?;
@@ -457,6 +457,8 @@ fn lightroom_area(areas: &[&str]) -> Option<(crate::masks::Area, bool)> {
     }
     match areas {
         [a] if sub(a) == Some("1") => return Some((Area::Subject { map: None }, inverted(a))),
+        // Select Sky (DECISIONS ข้อ 44)
+        [a] if sub(a) == Some("2") => return Some((Area::Sky { map: None }, inverted(a))),
         [a] if sub(a) == Some("0") && cat(a) == Some("22") => return Some((Area::Subject { map: None }, !inverted(a))),
         _ => {}
     }
@@ -632,17 +634,17 @@ mod tests {
         );
         let p = parse_lightroom(&xmp).unwrap();
         assert_eq!(p.adjust.exposure, 0.3, "ค่าหลักไม่ปนกับค่าของ Mask");
-        assert_eq!(p.masks.len(), 2, "{:?}", p.masks);
+        assert_eq!(p.masks.len(), 3, "{:?}", p.masks);
         let m = &p.masks[0];
         assert!(matches!(m.area, crate::masks::Area::Subject { map: None }));
         assert_eq!((m.id.as_str(), m.amount, m.invert), ("lr-SYNCMask 1", 90.0, false));
         assert!((m.adjust.texture + 35.0).abs() < 1e-9 && (m.adjust.clarity + 15.0).abs() < 1e-9);
         assert!(m.adjust.validate().is_ok());
-        assert!((p.masks[1].adjust.exposure - 0.5).abs() < 1e-9, "ค่าแสงของ Mask เป็นสัดส่วนของ ±4 stop");
-        assert_eq!(
-            p.unsupported,
-            ["Mask “Sky”", "Mask “Brush”", "Mask “Subject and sky”", "Mask “Lit subject”: ลดนอยส์"]
-        );
+        // Select Sky (DECISIONS ข้อ 44)
+        assert!(matches!(p.masks[1].area, crate::masks::Area::Sky { map: None }) && !p.masks[1].invert);
+        assert!((p.masks[1].adjust.dehaze - 20.0).abs() < 1e-9);
+        assert!((p.masks[2].adjust.exposure - 0.5).abs() < 1e-9, "ค่าแสงของ Mask เป็นสัดส่วนของ ±4 stop");
+        assert_eq!(p.unsupported, ["Mask “Brush”", "Mask “Subject and sky”", "Mask “Lit subject”: ลดนอยส์"]);
     }
 
     #[test]

@@ -249,6 +249,7 @@ pub fn render(app: &App, req: &Request) -> Result<Vec<u8>> {
     if req.settings.has_subject()
         || req.settings.has_body()
         || req.settings.has_people()
+        || req.settings.has_sky()
         || !req.settings.removals.is_empty()
     {
         // Mask ตัวคน / ตัวผอม / ลบคน: ใช้ภาพน้ำหนักและฉากที่เติมไว้แล้ว (หน้าแต่งภาพสั่งคิดก่อนด้วย prepare_subject / prepare_removals)

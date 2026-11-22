@@ -373,7 +373,7 @@ pub(crate) fn fill_holes(
 }
 
 /// เกลี่ยค่าที่รู้ (`known` = น้ำหนัก 0–1) ไปทั่วภาพแบบนุ่ม (pull-push: เฉลี่ยลงภาพย่อทีละครึ่ง แล้วเติมส่วนที่ไม่รู้จากภาพย่อ)
-fn pull_push(values: &[[f32; 3]], known: &[f32], w: usize, h: usize) -> Vec<[f32; 3]> {
+pub(crate) fn pull_push(values: &[[f32; 3]], known: &[f32], w: usize, h: usize) -> Vec<[f32; 3]> {
     if w <= 1 && h <= 1 {
         return values.to_vec();
     }

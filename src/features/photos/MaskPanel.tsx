@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, Eye, Palette, PersonStanding, RotateCcw, ScanFace, Shirt, Sparkle, Sun, Trash2, TriangleAlert } from 'lucide-react';
+import { CloudSun, Download, Eye, Palette, PersonStanding, RotateCcw, ScanFace, Shirt, Sparkle, Sun, Trash2, TriangleAlert } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { InlineNotice, Spinner } from '@/components/ui/Feedback';
 import { Switch } from '@/components/ui/Form';
@@ -12,7 +12,7 @@ import { PART_LABELS, maskName } from './editSummary';
 import { MAX_MASKS } from './masks';
 import { COLOR, LIGHT, PRESENCE, SliderGroup } from './SliderGroup';
 import { FillModelsInstall } from './FillModelsInstall';
-import { missingFor, partsReady, type SubjectMapState } from './useSubjectMap';
+import { missingFor, partsReady, skyReady, type SubjectMapState } from './useSubjectMap';
 
 // แถบของการปรับเฉพาะส่วน: เฉพาะค่าที่มีความหมายกับบริเวณเล็ก ๆ (จุดขาว/ดำ ความสด เส้นโค้ง ฯลฯ ปรับที่ทั้งภาพ)
 const MASK_LIGHT = LIGHT.filter((s) => ['exposure', 'contrast', 'highlights', 'shadows'].includes(s.key));
@@ -52,7 +52,11 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
   const [wantPart, setWantPart] = useState<PersonPart | null>(null);
   const partsOk = partsReady(subject.status);
   const partsUnsupported = subject.status?.state === 'unsupported' ? subject.status : subject.status?.parts.state === 'unsupported' ? subject.status.parts : null;
-  // Mask ตัวคน/ส่วนของคนที่เพิ่งเพิ่ม: แสดงบริเวณเป็นสีแดงสักครู่หลังหาตัวคนเสร็จ
+  // กด "ท้องฟ้า (AI)" ตอนที่ยังไม่มีตัวแยกท้องฟ้า: ถามดาวน์โหลด แล้วเพิ่ม Mask ให้เองเมื่อพร้อม
+  const [wantSky, setWantSky] = useState(false);
+  const skyOk = skyReady(subject.status);
+  const skyUnsupported = subject.status?.state === 'unsupported' ? subject.status : subject.status?.sky.state === 'unsupported' ? subject.status.sky : null;
+  // Mask ตัวคน/ส่วนของคน/ท้องฟ้าที่เพิ่งเพิ่ม: แสดงบริเวณเป็นสีแดงสักครู่หลังหาตัวคนเสร็จ
   const [flashSubject, setFlashSubject] = useState<string | null>(null);
 
   const update = (id: string, patch: Partial<EditMask>) => onChange(masks.map((m) => (m.id === id ? { ...m, ...patch } : m)));
@@ -87,6 +91,7 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
   };
   const addSubject = () => addAi({ kind: 'subject' });
   const addPart = (part: PersonPart) => addAi({ kind: 'people', parts: [part] });
+  const addSky = () => addAi({ kind: 'sky' });
 
   /** เพิ่ม/เอาส่วนออกจาก Mask ส่วนของคนที่เลือก — ต้องเหลืออย่างน้อยหนึ่งส่วน */
   const togglePart = (m: EditMask, part: PersonPart) => {
@@ -104,6 +109,15 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
     // showBriefly ใช้แค่ ref กับ onShowArea
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flashSubject, subject.phase]);
+
+  useEffect(() => {
+    if (wantSky && skyOk) {
+      setWantSky(false);
+      if (masks.length < MAX_MASKS) addSky();
+    }
+    // เพิ่มครั้งเดียวเมื่อตัวแยกท้องฟ้าพร้อม
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantSky, skyOk]);
 
   useEffect(() => {
     if (wantPart && partsOk) {
@@ -162,6 +176,35 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
         )}
         {wantSubject && subjectState !== 'ready' && subjectState !== 'unsupported' && (
           <SubjectInstall subject={subject} onCancel={() => setWantSubject(false)} />
+        )}
+        <Button
+          size="sm"
+          icon={<CloudSun className="size-4" aria-hidden />}
+          variant={wantSky ? 'primary' : undefined}
+          onClick={() => (skyOk ? addSky() : setWantSky(true))}
+          disabled={masks.length >= MAX_MASKS || !!skyUnsupported || !subject.status}
+          className="w-full"
+          data-testid="mask-add-sky"
+        >
+          ท้องฟ้า (AI)
+        </Button>
+        {skyUnsupported
+          ? // ตัวแยกตัวคนใช้ไม่ได้: เหตุขึ้นใต้ปุ่ม "ตัวคน (AI)" แล้ว ไม่ซ้ำ
+            subjectState !== 'unsupported' && (
+              <p className="text-[12.5px] text-muted" data-testid="sky-unsupported">
+                {skyUnsupported.reason}
+              </p>
+            )
+          : !wantSky && <p className="text-[12.5px] text-muted">แอปเลือกท้องฟ้าให้เอง แบบ Select Sky ของ Lightroom — คนที่ยืนบังฟ้าไม่โดน</p>}
+        {wantSky && !skyOk && !skyUnsupported && (
+          <FillModelsInstall
+            subject={subject}
+            kind="sky"
+            onCancel={() => setWantSky(false)}
+            title="ท้องฟ้าต้องดาวน์โหลดก่อน (ครั้งเดียว)"
+            after="เสร็จแล้วแอปเพิ่ม Mask ท้องฟ้าให้เอง"
+            testId="sky"
+          />
         )}
         <div className="space-y-1.5 pt-1" data-testid="mask-parts">
           <p className="flex items-center gap-1.5 text-[13px] font-semibold text-ink">
@@ -374,13 +417,27 @@ export function SubjectProgress({ subject }: { subject: SubjectMapState }) {
       return (
         <InlineNotice tone="info" icon={<Spinner className="size-4" />}>
           <span data-testid="subject-preparing">
-            {subject.body ? 'กำลังหาตัวคนและเตรียมฉากหลังของรูปนี้…' : subject.parts ? 'กำลังหาตัวคนและแยกส่วนของคนในรูปนี้…' : 'กำลังหาตัวคนในรูปนี้…'}{' '}
+            {subject.body
+              ? 'กำลังหาตัวคนและเตรียมฉากหลังของรูปนี้…'
+              : subject.parts
+                ? 'กำลังหาตัวคนและแยกส่วนของคนในรูปนี้…'
+                : subject.sky
+                  ? 'กำลังหาท้องฟ้าในรูปนี้…'
+                  : 'กำลังหาตัวคนในรูปนี้…'}{' '}
             ครั้งแรกของแต่ละรูปราว 10 วินาที
           </span>
         </InlineNotice>
       );
     case 'ready':
-      return subject.found === false ? (
+      if (subject.sky && subject.skyFound === false) {
+        return (
+          <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />}>
+            <span data-testid="sky-none">ไม่พบท้องฟ้าในรูปนี้ Mask ท้องฟ้าจึงยังไม่มีผล</span>
+          </InlineNotice>
+        );
+      }
+      // ไม่พบตัวคน: บอกเฉพาะเมื่อรูปมีสิ่งที่ต้องใช้ตัวคน (Mask ท้องฟ้าอย่างเดียวไม่ต้องมีคน)
+      return subject.found === false && (subject.mask || subject.body || subject.parts) ? (
         <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />}>
           <span data-testid="subject-none">ไม่พบตัวคนในรูปนี้ {subject.body ? 'ตัวผอม' : subject.parts ? 'Mask ส่วนของคน' : 'Mask ตัวคน'}จึงยังไม่มีผล</span>
         </InlineNotice>
@@ -407,9 +464,16 @@ export function SubjectProgress({ subject }: { subject: SubjectMapState }) {
             ? status.fill
             : subject.parts && status?.parts.state === 'unsupported'
               ? status.parts
-              : null;
+              : subject.sky && status?.sky.state === 'unsupported'
+                ? status.sky
+                : null;
       const size = missingFor(status, subject).reduce((sum, m) => sum + m.downloadSizeMb, 0);
-      const what = ['ตัวแยกตัวคน', ...(subject.body ? ['ตัวเติมฉากหลัง'] : []), ...(subject.parts ? ['ตัวแยกส่วนของคน'] : [])].join('และ');
+      const what = [
+        'ตัวแยกตัวคน',
+        ...(subject.body ? ['ตัวเติมฉากหลัง'] : []),
+        ...(subject.parts ? ['ตัวแยกส่วนของคน'] : []),
+        ...(subject.sky ? ['ตัวแยกท้องฟ้า'] : []),
+      ].join('และ');
       return unsupported ? (
         <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />}>
           {unsupported.reason}
@@ -429,7 +493,8 @@ export function SubjectProgress({ subject }: { subject: SubjectMapState }) {
           }
         >
           <span data-testid="subject-needs-model">
-            {subject.body ? 'รูปนี้ใช้ตัวผอม' : subject.parts ? 'รูปนี้มี Mask ส่วนของคน' : 'รูปนี้มี Mask ตัวคน'} ต้องดาวน์โหลด{what}ก่อนจึงจะเห็นผล (ครั้งเดียว)
+            {subject.body ? 'รูปนี้ใช้ตัวผอม' : subject.parts ? 'รูปนี้มี Mask ส่วนของคน' : subject.sky ? 'รูปนี้มี Mask ท้องฟ้า' : 'รูปนี้มี Mask ตัวคน'}{' '}
+            ต้องดาวน์โหลด{what}ก่อนจึงจะเห็นผล (ครั้งเดียว)
           </span>
         </InlineNotice>
       );
