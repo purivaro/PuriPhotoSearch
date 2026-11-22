@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, Eye, Palette, PersonStanding, RotateCcw, ScanFace, Sparkle, Sun, Trash2, TriangleAlert } from 'lucide-react';
+import { Download, Eye, Palette, PersonStanding, RotateCcw, ScanFace, Shirt, Sparkle, Sun, Trash2, TriangleAlert } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { InlineNotice, Spinner } from '@/components/ui/Feedback';
 import { Switch } from '@/components/ui/Form';
 import { cn } from '@/lib/cn';
 import { formatCount, newRequestId } from '@/lib/format';
-import type { EditMask, FaceBox } from '@/lib/ipc/types';
+import type { EditMask, FaceBox, PersonPart } from '@/lib/ipc/types';
 import { NEUTRAL, isNeutral, type Adjust } from './adjust';
 import { SliderRow } from './AdjustControls';
-import { maskName } from './editSummary';
+import { PART_LABELS, maskName } from './editSummary';
 import { MAX_MASKS } from './masks';
 import { COLOR, LIGHT, PRESENCE, SliderGroup } from './SliderGroup';
-import { missingForBody, type SubjectMapState } from './useSubjectMap';
+import { FillModelsInstall } from './FillModelsInstall';
+import { missingFor, partsReady, type SubjectMapState } from './useSubjectMap';
 
 // แถบของการปรับเฉพาะส่วน: เฉพาะค่าที่มีความหมายกับบริเวณเล็ก ๆ (จุดขาว/ดำ ความสด เส้นโค้ง ฯลฯ ปรับที่ทั้งภาพ)
 const MASK_LIGHT = LIGHT.filter((s) => ['exposure', 'contrast', 'highlights', 'shadows'].includes(s.key));
@@ -23,6 +24,9 @@ const LOOKS: { label: string; adjust: Partial<Adjust> }[] = [
   { label: 'ผิวเนียน', adjust: { texture: -45, clarity: -10 } },
   { label: 'ผิวขาวใส', adjust: { exposure: 0.25, texture: -35, clarity: -10, saturation: -12, temperature: -6, tint: 4 } },
 ];
+
+/** ส่วนของคนที่เลือกได้ (Select People ของ Lightroom — DECISIONS ข้อ 43) */
+const PARTS: PersonPart[] = ['hair', 'faceSkin', 'bodySkin', 'clothes'];
 
 interface MaskPanelProps {
   masks: EditMask[];
@@ -44,7 +48,11 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
   const subjectState = subject.status?.state;
   // กด "ตัวคน (AI)" ตอนที่ยังไม่มีตัวแยก: ถามดาวน์โหลด แล้วเพิ่ม Mask ให้เองเมื่อพร้อม
   const [wantSubject, setWantSubject] = useState(false);
-  // Mask ตัวคนที่เพิ่งเพิ่ม: แสดงบริเวณเป็นสีแดงสักครู่หลังหาตัวคนเสร็จ
+  // กดส่วนของคนตอนที่ยังไม่มีตัวแยกส่วนของคน: ถามดาวน์โหลด แล้วเพิ่ม Mask ส่วนนั้นให้เองเมื่อพร้อม
+  const [wantPart, setWantPart] = useState<PersonPart | null>(null);
+  const partsOk = partsReady(subject.status);
+  const partsUnsupported = subject.status?.state === 'unsupported' ? subject.status : subject.status?.parts.state === 'unsupported' ? subject.status.parts : null;
+  // Mask ตัวคน/ส่วนของคนที่เพิ่งเพิ่ม: แสดงบริเวณเป็นสีแดงสักครู่หลังหาตัวคนเสร็จ
   const [flashSubject, setFlashSubject] = useState<string | null>(null);
 
   const update = (id: string, patch: Partial<EditMask>) => onChange(masks.map((m) => (m.id === id ? { ...m, ...patch } : m)));
@@ -71,11 +79,21 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
     showBriefly(add({ kind: 'faces', boxes: faces.map((f) => [f.sourceBbox.x, f.sourceBbox.y, f.sourceBbox.w, f.sourceBbox.h]), skin: true }));
   };
 
-  const addSubject = () => {
-    const id = add({ kind: 'subject' });
+  const addAi = (area: EditMask['area']) => {
+    const id = add(area);
     // บริเวณขึ้นเมื่อหาตัวคนเสร็จ (ครั้งแรกของรูปราว 7 วินาที)
     onShowArea(id);
     setFlashSubject(id);
+  };
+  const addSubject = () => addAi({ kind: 'subject' });
+  const addPart = (part: PersonPart) => addAi({ kind: 'people', parts: [part] });
+
+  /** เพิ่ม/เอาส่วนออกจาก Mask ส่วนของคนที่เลือก — ต้องเหลืออย่างน้อยหนึ่งส่วน */
+  const togglePart = (m: EditMask, part: PersonPart) => {
+    if (m.area.kind !== 'people') return;
+    const has = m.area.parts.includes(part);
+    const parts = has ? m.area.parts.filter((p) => p !== part) : PARTS.filter((p) => p === part || (m.area.kind === 'people' && m.area.parts.includes(p)));
+    if (parts.length > 0) update(m.id, { area: { kind: 'people', parts } });
   };
 
   useEffect(() => {
@@ -86,6 +104,15 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
     // showBriefly ใช้แค่ ref กับ onShowArea
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flashSubject, subject.phase]);
+
+  useEffect(() => {
+    if (wantPart && partsOk) {
+      setWantPart(null);
+      if (masks.length < MAX_MASKS) addPart(wantPart);
+    }
+    // เพิ่มครั้งเดียวเมื่อตัวแยกส่วนของคนพร้อม
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantPart, partsOk]);
 
   useEffect(() => {
     if (wantSubject && subjectState === 'ready') {
@@ -136,6 +163,47 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
         {wantSubject && subjectState !== 'ready' && subjectState !== 'unsupported' && (
           <SubjectInstall subject={subject} onCancel={() => setWantSubject(false)} />
         )}
+        <div className="space-y-1.5 pt-1" data-testid="mask-parts">
+          <p className="flex items-center gap-1.5 text-[13px] font-semibold text-ink">
+            <Shirt className="size-4 text-muted" aria-hidden /> ส่วนของคน (AI)
+          </p>
+          <div className="grid grid-cols-2 gap-1.5">
+            {PARTS.map((part) => (
+              <Button
+                key={part}
+                size="sm"
+                variant={wantPart === part ? 'primary' : undefined}
+                onClick={() => (partsOk ? addPart(part) : setWantPart(part))}
+                disabled={masks.length >= MAX_MASKS || !!partsUnsupported || !subject.status}
+                data-testid={`mask-add-part-${part}`}
+              >
+                {PART_LABELS[part]}
+              </Button>
+            ))}
+          </div>
+          {partsUnsupported ? (
+            // ตัวแยกตัวคนใช้ไม่ได้: เหตุขึ้นใต้ปุ่ม "ตัวคน (AI)" แล้ว ไม่ซ้ำ
+            subjectState !== 'unsupported' && (
+              <p className="text-[12.5px] text-muted" data-testid="parts-unsupported">
+                {partsUnsupported.reason}
+              </p>
+            )
+          ) : (
+            !wantPart && (
+              <p className="text-[12.5px] text-muted">แอปแยกผม ผิว เสื้อผ้าของทุกคนในรูปให้เอง แบบ Select People ของ Lightroom · รวมหลายส่วนในบริเวณเดียวได้</p>
+            )
+          )}
+          {wantPart && !partsOk && !partsUnsupported && (
+            <FillModelsInstall
+              subject={subject}
+              kind="parts"
+              onCancel={() => setWantPart(null)}
+              title="ส่วนของคนต้องดาวน์โหลดก่อน (ครั้งเดียว)"
+              after={`เสร็จแล้วแอปเพิ่ม Mask ${PART_LABELS[wantPart]}ให้เอง`}
+              testId="parts"
+            />
+          )}
+        </div>
       </section>
 
       {masks.length > 0 && (
@@ -187,6 +255,35 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
               </button>
             ))}
           </div>
+          {current.area.kind === 'people' && (
+            <div className="space-y-1.5">
+              <p className="text-[13px] font-semibold text-ink">ส่วนที่รวมในบริเวณนี้</p>
+              <div className="flex flex-wrap gap-1.5" role="group" aria-label="ส่วนของคนที่รวม">
+                {PARTS.map((part) => {
+                  const on = current.area.kind === 'people' && current.area.parts.includes(part);
+                  const last = on && current.area.kind === 'people' && current.area.parts.length === 1;
+                  return (
+                    <button
+                      key={part}
+                      type="button"
+                      onClick={() => togglePart(current, part)}
+                      disabled={last}
+                      aria-pressed={on}
+                      title={last ? 'ต้องมีอย่างน้อยหนึ่งส่วน' : undefined}
+                      className={cn(
+                        'h-8 rounded-full border px-3 text-[12.5px] font-semibold transition-colors disabled:cursor-not-allowed',
+                        on ? 'border-action bg-action text-white' : 'border-line-strong bg-surface text-ink hover:border-action hover:text-action',
+                      )}
+                      data-testid="mask-part"
+                    >
+                      {PART_LABELS[part]}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[12px] text-muted">ทุกคนในรูป · ตา ปาก ฟัน คิ้ว ยังแยกไม่ได้ในรุ่นนี้</p>
+            </div>
+          )}
           {current.area.kind === 'faces' && (
             <Switch
               checked={current.area.skin}
@@ -230,7 +327,7 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
           <SliderGroup title="รายละเอียด" icon={<Sparkle className="size-4 text-muted" aria-hidden />} specs={PRESENCE} adjust={current.adjust} onChange={(p) => setAdjust(current.id, p)} idPrefix="mask" />
           <SliderGroup title="สี" icon={<Palette className="size-4 text-muted" aria-hidden />} specs={MASK_COLOR} adjust={current.adjust} onChange={(p) => setAdjust(current.id, p)} idPrefix="mask" />
           {current.area.kind === 'faces' && current.area.skin && current.area.boxes.length > 0 && (
-            <InlineNotice tone="info">ผิวที่อยู่นอกบริเวณใบหน้า (แขน มือ) ยังไม่รวม — รุ่นนี้ปรับเฉพาะใบหน้าที่แอปพบ</InlineNotice>
+            <InlineNotice tone="info">ผิวที่อยู่นอกบริเวณใบหน้า (แขน มือ) ไม่รวม — ใช้ "ผิวตัว" ในส่วนของคน (AI) แทน</InlineNotice>
           )}
         </div>
       )}
@@ -277,14 +374,15 @@ export function SubjectProgress({ subject }: { subject: SubjectMapState }) {
       return (
         <InlineNotice tone="info" icon={<Spinner className="size-4" />}>
           <span data-testid="subject-preparing">
-            {subject.body ? 'กำลังหาตัวคนและเตรียมฉากหลังของรูปนี้…' : 'กำลังหาตัวคนในรูปนี้…'} ครั้งแรกของแต่ละรูปราว 10 วินาที
+            {subject.body ? 'กำลังหาตัวคนและเตรียมฉากหลังของรูปนี้…' : subject.parts ? 'กำลังหาตัวคนและแยกส่วนของคนในรูปนี้…' : 'กำลังหาตัวคนในรูปนี้…'}{' '}
+            ครั้งแรกของแต่ละรูปราว 10 วินาที
           </span>
         </InlineNotice>
       );
     case 'ready':
       return subject.found === false ? (
         <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />}>
-          <span data-testid="subject-none">ไม่พบตัวคนในรูปนี้ {subject.body ? 'ตัวผอม' : 'Mask ตัวคน'}จึงยังไม่มีผล</span>
+          <span data-testid="subject-none">ไม่พบตัวคนในรูปนี้ {subject.body ? 'ตัวผอม' : subject.parts ? 'Mask ส่วนของคน' : 'Mask ตัวคน'}จึงยังไม่มีผล</span>
         </InlineNotice>
       ) : null;
     case 'failed':
@@ -302,15 +400,23 @@ export function SubjectProgress({ subject }: { subject: SubjectMapState }) {
         </InlineNotice>
       );
     case 'needs_model': {
-      const unsupported = status?.state === 'unsupported' ? status : subject.body && status?.fill.state === 'unsupported' ? status.fill : null;
-      const size = subject.body ? missingForBody(status).reduce((sum, m) => sum + m.downloadSizeMb, 0) : (status?.downloadSizeMb ?? 0);
+      const unsupported =
+        status?.state === 'unsupported'
+          ? status
+          : subject.body && status?.fill.state === 'unsupported'
+            ? status.fill
+            : subject.parts && status?.parts.state === 'unsupported'
+              ? status.parts
+              : null;
+      const size = missingFor(status, subject).reduce((sum, m) => sum + m.downloadSizeMb, 0);
+      const what = ['ตัวแยกตัวคน', ...(subject.body ? ['ตัวเติมฉากหลัง'] : []), ...(subject.parts ? ['ตัวแยกส่วนของคน'] : [])].join('และ');
       return unsupported ? (
         <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />}>
           {unsupported.reason}
         </InlineNotice>
       ) : subject.installing ? (
         <InlineNotice tone="info" icon={<Spinner className="size-4" />}>
-          {subject.body ? 'กำลังดาวน์โหลดตัวแยกตัวคนและตัวเติมฉากหลัง' : 'กำลังดาวน์โหลดตัวแยกตัวคน'} — เห็นผลเมื่อดาวน์โหลดเสร็จ
+          กำลังดาวน์โหลด{what} — เห็นผลเมื่อดาวน์โหลดเสร็จ
         </InlineNotice>
       ) : (
         <InlineNotice
@@ -323,9 +429,7 @@ export function SubjectProgress({ subject }: { subject: SubjectMapState }) {
           }
         >
           <span data-testid="subject-needs-model">
-            {subject.body
-              ? 'รูปนี้ใช้ตัวผอม ต้องดาวน์โหลดตัวแยกตัวคนและตัวเติมฉากหลังก่อนจึงจะเห็นผล (ครั้งเดียว)'
-              : 'รูปนี้มี Mask ตัวคน ต้องดาวน์โหลดตัวแยกตัวคนก่อนจึงจะเห็นผล (ครั้งเดียว)'}
+            {subject.body ? 'รูปนี้ใช้ตัวผอม' : subject.parts ? 'รูปนี้มี Mask ส่วนของคน' : 'รูปนี้มี Mask ตัวคน'} ต้องดาวน์โหลด{what}ก่อนจึงจะเห็นผล (ครั้งเดียว)
           </span>
         </InlineNotice>
       );

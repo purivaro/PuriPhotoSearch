@@ -15,7 +15,7 @@ import type { EditMask, EditPreset } from '@/lib/ipc/types';
 import { isNeutral, sameAdjust, type Adjust } from './adjust';
 import { describeEdit } from './editSummary';
 import { IDENTITY } from './editGeometry';
-import { isSubjectMask, maskIsActive } from './masks';
+import { isPortableMask, maskIsActive } from './masks';
 
 const PRESETS_KEY = ['edit-presets'] as const;
 const collator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
@@ -32,7 +32,7 @@ export function usePresets() {
 /** สรุปค่าใน preset (แสง · สี · Mask ตัวคน) */
 export function presetSummary(adjust: Adjust, masks: EditMask[] = []): string {
   const d = describeEdit({ ...IDENTITY, adjust });
-  const subject = masks.length > 0 ? `Mask ตัวคน${masks.length > 1 ? ` ${masks.length} อัน` : ''}` : null;
+  const subject = masks.length > 0 ? `Mask ตัวคน/ส่วนของคน${masks.length > 1 ? ` ${masks.length} อัน` : ''}` : null;
   return [d.light, d.color, subject].filter(Boolean).join(' · ');
 }
 
@@ -49,7 +49,7 @@ interface EditPresetsProps {
 /** preset ของแสงและสี: บันทึกค่าที่ปรับไว้ ใช้ซ้ำ และนำเข้า .xmp จาก Lightroom (DECISIONS ข้อ 20) */
 export function EditPresets({ adjust, masks, onApply, onPreview }: EditPresetsProps) {
   // Mask ตัวคนไปกับ preset ได้ (ไม่ผูกกับรูป) · Mask ใบหน้าผูกกับใบหน้าของรูปนี้ จึงไม่เก็บ
-  const subjectMasks = masks.filter((m) => isSubjectMask(m) && maskIsActive(m));
+  const subjectMasks = masks.filter((m) => isPortableMask(m) && maskIsActive(m));
   const qc = useQueryClient();
   const choose = useFolderChooser();
   const presets = usePresets();

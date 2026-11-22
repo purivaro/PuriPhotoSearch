@@ -1,14 +1,18 @@
 import { formatCount } from '@/lib/format';
-import type { EditMask, EditSettings } from '@/lib/ipc/types';
+import type { PersonPart, EditMask, EditSettings } from '@/lib/ipc/types';
 import { gradingIsActive, hasCurves, hasHsl, hasLevels, hasSharpen, hasVignette, type SliderKey } from './adjust';
 import { isGeometryIdentity } from './editGeometry';
 import { maskIsActive } from './masks';
 import { describeRetouch } from './retouch';
 
 /** ชื่อของบริเวณที่ปรับ (แผงปรับเฉพาะส่วน · สรุปการแต่ง) */
+/** ชื่อส่วนของคน (Mask ส่วนของคน — DECISIONS ข้อ 43) */
+export const PART_LABELS: Record<PersonPart, string> = { hair: 'ผม', faceSkin: 'ผิวหน้า', bodySkin: 'ผิวตัว', clothes: 'เสื้อผ้า' };
+
 export function maskName(m: EditMask): string {
   const invert = m.invert ? ' · กลับด้าน' : '';
   if (m.area.kind === 'subject') return `ตัวคน (AI)${invert}`;
+  if (m.area.kind === 'people') return `${m.area.parts.map((p) => PART_LABELS[p]).join(' + ')} (AI)${invert}`;
   return `ใบหน้า ${formatCount(m.area.boxes.length)} คน${m.area.skin ? ' · เฉพาะผิว' : ''}${invert}`;
 }
 
@@ -47,7 +51,20 @@ export function describeEdit(s: EditSettings) {
   const masks = (s.masks ?? []).filter(maskIsActive);
   return {
     geometry: geometry.length > 0 ? geometry.join(' · ') : null,
-    masks: masks.length > 0 ? `${formatCount(masks.length)} บริเวณ (${masks.map((m) => (m.area.kind === 'subject' ? 'ตัวคน' : m.area.skin ? 'ผิวหน้า' : 'ใบหน้า')).join(', ')})` : null,
+    masks:
+      masks.length > 0
+        ? `${formatCount(masks.length)} บริเวณ (${masks
+            .map((m) =>
+              m.area.kind === 'subject'
+                ? 'ตัวคน'
+                : m.area.kind === 'people'
+                  ? m.area.parts.map((p) => PART_LABELS[p]).join('+')
+                  : m.area.skin
+                    ? 'ผิวหน้า'
+                    : 'ใบหน้า',
+            )
+            .join(', ')})`
+        : null,
     retouch: describeRetouch(s.retouch),
     light: list(s, LIGHT, [hasLevels(s.adjust) && 'Levels', hasCurves(s.adjust) && 'เส้นโค้งโทน', hasVignette(s.adjust) && 'Vignette', hasSharpen(s.adjust) && 'ความคม']),
     color: list(s, COLOR, [hasHsl(s.adjust) && 'สีแยกช่วง (HSL)', gradingIsActive(s.adjust.grading) && 'Color Grading']),

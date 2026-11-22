@@ -64,6 +64,33 @@ fn fake_subject(base: &Path) -> puri_core::subject::SubjectProvider {
             },
             factory: Arc::new(|_| Ok(Arc::new(FakeInpainter) as Arc<dyn puri_core::subject::Inpainter>)),
         }),
+        parts: Some(puri_core::parts::PartsProvider {
+            model: puri_core::subject::SubjectModel {
+                id: "fake-parts",
+                display_name: "ตัวแยกส่วนทดสอบ",
+                file: "parts.onnx",
+                sha256: sha(FAKE_PARTS_MODEL),
+                download_url: file_url(&base.join("model-source/parts.onnx")),
+                download_bytes: 1_000_000,
+                download_source: "โฟลเดอร์ทดสอบ",
+                license_note: "ใช้ในเทสต์เท่านั้น",
+            },
+            factory: Arc::new(|_| Ok(Arc::new(FakeParts) as Arc<dyn puri_core::parts::PartSegmenter>)),
+        }),
+    }
+}
+
+pub const FAKE_PARTS_MODEL: &[u8] = b"fake parts weights";
+
+/// ตัวแยกส่วนจำลอง: ครึ่งบนของภาพ = ผม · ครึ่งล่าง = เสื้อผ้า (ผิวไม่มี)
+pub struct FakeParts;
+
+impl puri_core::parts::PartSegmenter for FakeParts {
+    fn segment(&self, image: &image::RgbImage) -> Result<[image::GrayImage; 4], AppError> {
+        let (w, h) = image.dimensions();
+        let half =
+            |top: bool| image::GrayImage::from_fn(w, h, |_, y| image::Luma([if (y < h / 2) == top { 255 } else { 0 }]));
+        Ok([half(true), image::GrayImage::new(w, h), image::GrayImage::new(w, h), half(false)])
     }
 }
 
@@ -229,6 +256,7 @@ impl Lib {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("subject.onnx"), FAKE_SUBJECT_MODEL).unwrap();
             std::fs::write(dir.join("fill.onnx"), FAKE_FILL_MODEL).unwrap();
+            std::fs::write(dir.join("parts.onnx"), FAKE_PARTS_MODEL).unwrap();
         }
         let app = open(tmp.path(), false, true);
         Lib { tmp, app, ai: false, subject: true }

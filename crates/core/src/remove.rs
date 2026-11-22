@@ -370,6 +370,21 @@ pub fn clear_map(map: &crate::subject::SubjectMap, removals: &[Removal]) -> crat
     crate::subject::SubjectMap::new(cleared)
 }
 
+/// ภาพน้ำหนักของส่วนของคนที่ไม่นับส่วนที่ลบแล้ว (แบบ [`clear_map`])
+pub fn clear_parts(parts: &crate::parts::PartsMap, removals: &[Removal]) -> crate::parts::PartsMap {
+    let img = parts.image();
+    let (w, h) = img.dimensions();
+    let cleared = image::RgbaImage::from_fn(w, h, |x, y| {
+        let (u, v) = ((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+        let keep = removals
+            .iter()
+            .filter_map(|r| r.patch.0.as_ref().and_then(|p| p.at(u, v)).map(|(_, a)| 1.0 - a))
+            .product::<f64>();
+        image::Rgba(img.get_pixel(x, y).0.map(|c| (c as f64 * keep).round() as u8))
+    });
+    crate::parts::PartsMap::new(cleared)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

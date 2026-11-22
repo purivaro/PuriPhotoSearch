@@ -139,6 +139,8 @@ pub struct SubjectProvider {
     pub factory: SegmenterFactory,
     /// ตัวเติมฉากหลังของตัวผอม — None = build นี้ทำตัวผอมไม่ได้ (Mask ตัวคนยังใช้ได้)
     pub fill: Option<FillProvider>,
+    /// ตัวแยกส่วนของคน (ผม ผิว เสื้อผ้า — DECISIONS ข้อ 43) — None = build นี้ไม่มี
+    pub parts: Option<crate::parts::PartsProvider>,
 }
 
 /// ตัวโหลดโมเดลจากโฟลเดอร์ของมัน
@@ -204,6 +206,7 @@ impl<T: ?Sized> Slot<T> {
 pub struct SubjectState {
     segment: Slot<dyn Segmenter>,
     fill: Slot<dyn Inpainter>,
+    parts: Slot<dyn crate::parts::PartSegmenter>,
     unsupported_reason: String,
     /// คิดทีละรูป (โมเดลใหญ่ทั้งสองตัวใช้ CPU ทุกแกน)
     busy: Mutex<()>,
@@ -212,22 +215,30 @@ pub struct SubjectState {
     fills: Mutex<Vec<(String, crate::body::Fill)>>,
     /// ภาพที่เติมของส่วนที่ลบ (ลบคน/สิ่งของ) ตาม revision ภาพตั้งต้น และกรอบ — (key, ภาพ, พบสิ่งที่เด่นในกรอบ)
     patches: Mutex<Vec<(String, crate::remove::Patch, bool)>>,
+    /// ภาพน้ำหนักของส่วนของคน ตาม revision
+    part_maps: Mutex<Vec<(String, crate::parts::PartsMap)>>,
 }
 
 impl SubjectState {
     pub fn new(provider: Option<SubjectProvider>, unsupported_reason: &str, models_root: &Path) -> SubjectState {
-        let (segment, fill) = match provider {
-            Some(p) => (Some((p.model, p.factory)), p.fill.map(|f| (f.model, f.factory))),
-            None => (None, None),
+        let (segment, fill, parts) = match provider {
+            Some(p) => (
+                Some((p.model, p.factory)),
+                p.fill.map(|f| (f.model, f.factory)),
+                p.parts.map(|f| (f.model, f.factory)),
+            ),
+            None => (None, None, None),
         };
         SubjectState {
             segment: Slot::new(segment, "subject", "ตัวแยกตัวคน", models_root),
             fill: Slot::new(fill, "fill", "ตัวเติมฉากหลัง", models_root),
+            parts: Slot::new(parts, "parts", "ตัวแยกส่วนของคน", models_root),
             unsupported_reason: unsupported_reason.to_string(),
             busy: Mutex::new(()),
             recent: Mutex::new(Vec::new()),
             fills: Mutex::new(Vec::new()),
             patches: Mutex::new(Vec::new()),
+            part_maps: Mutex::new(Vec::new()),
         }
     }
 
@@ -248,6 +259,11 @@ impl SubjectState {
     /// ตัวเติมฉากหลังที่พร้อมใช้
     pub fn inpainter(&self) -> Option<Arc<dyn Inpainter>> {
         self.fill.get()
+    }
+
+    /// ตัวแยกส่วนของคนที่พร้อมใช้
+    pub fn part_segmenter(&self) -> Option<Arc<dyn crate::parts::PartSegmenter>> {
+        self.parts.get()
     }
 
     fn remember(&self, revision_id: &str, map: &SubjectMap) {
@@ -284,11 +300,13 @@ pub struct SubjectStatus {
     pub segment: ModelStatus,
     /// ตัวเติมฉากหลัง (ตัวผอมใช้ร่วมกับตัวแยกตัวคน)
     pub fill: ModelStatus,
+    /// ตัวแยกส่วนของคน (Mask ส่วนของคนใช้ร่วมกับตัวแยกตัวคน)
+    pub parts: ModelStatus,
 }
 
 /// งานติดตั้งของตัวแยกตัวคน/ตัวเติมฉากหลัง (คนละงานกับตัววิเคราะห์ใบหน้า — ชนิดงาน `model` เหมือนกัน แยกด้วย dedup_key)
 pub(crate) fn is_install_job(dedup_key: Option<&str>) -> bool {
-    dedup_key.is_some_and(|k| k.starts_with("model:subject:") || k.starts_with("model:fill:"))
+    dedup_key.is_some_and(|k| ["model:subject:", "model:fill:", "model:parts:"].iter().any(|p| k.starts_with(p)))
 }
 
 fn install_job(app: &App, key: &str) -> Result<Option<String>> {
@@ -369,8 +387,17 @@ pub fn status(app: &App) -> Result<SubjectStatus> {
             "พร้อมเติมฉากหลังบนเครื่องนี้",
             "ใช้กับตัวผอม: เติมฉากหลังตรงที่ตัวคนหดเข้าไป",
         )?,
+        parts: slot_status(
+            app,
+            &state.parts,
+            PARTS_UNSUPPORTED.to_string(),
+            "พร้อมแยกผม ผิว และเสื้อผ้าบนเครื่องนี้",
+            "ใช้กับ Mask ส่วนของคน: ผม ผิวหน้า ผิวตัว เสื้อผ้า",
+        )?,
     })
 }
+
+const PARTS_UNSUPPORTED: &str = "build นี้ยังไม่มีตัวแยกส่วนของคน Mask ส่วนของคนจึงยังใช้ไม่ได้";
 
 /// เริ่มงานดาวน์โหลดของโมเดลหนึ่งตัว (หรือคืนงานเดิมที่ยังทำอยู่)
 fn start_install<T: ?Sized>(app: &App, slot: &Slot<T>, unsupported: &str) -> Result<String> {
@@ -409,9 +436,17 @@ fn start_install<T: ?Sized>(app: &App, slot: &Slot<T>, unsupported: &str) -> Res
 
 /// เริ่มงานดาวน์โหลดตัวแยกตัวคน (หรือคืนงานเดิมที่ยังทำอยู่) · `fill` = ตัวเติมฉากหลังของตัวผอมด้วย
 /// (เริ่มดาวน์โหลดตัวแยกตัวคนถ้ายังไม่มี แล้วคืนงานของตัวเติมฉากหลัง)
-pub fn install(app: &App, fill: bool) -> Result<JobSnapshot> {
+pub fn install(app: &App, fill: bool, parts: bool) -> Result<JobSnapshot> {
     let state = &app.ai.subject;
-    let id = if fill {
+    let id = if parts {
+        if state.parts.model.is_none() {
+            return Err(AppError::new("MODEL_NOT_READY", PARTS_UNSUPPORTED));
+        }
+        if !state.segment.installed() {
+            start_install(app, &state.segment, &state.unsupported_reason)?;
+        }
+        start_install(app, &state.parts, PARTS_UNSUPPORTED)?
+    } else if fill {
         let fill_unsupported = "build นี้ยังไม่มีตัวเติมฉากหลัง ตัวผอมจึงยังใช้ไม่ได้";
         if state.fill.model.is_none() {
             return Err(AppError::new("MODEL_NOT_READY", fill_unsupported));
@@ -433,6 +468,8 @@ pub(crate) fn run_install(ctx: &JobCtx, dedup_key: Option<&str>) -> Result<Outco
     let state = &ctx.ai().subject;
     if dedup_key.is_some_and(|k| k.starts_with("model:fill:")) {
         install_slot(ctx, &state.fill, "install_subject_model", "build นี้ยังไม่มีตัวเติมฉากหลัง")
+    } else if dedup_key.is_some_and(|k| k.starts_with("model:parts:")) {
+        install_slot(ctx, &state.parts, "install_subject_model", PARTS_UNSUPPORTED)
     } else {
         install_slot(ctx, &state.segment, "install_subject_model", &state.unsupported_reason)
     }
@@ -640,6 +677,71 @@ fn app_base<'a>(
     }
 }
 
+// ───────────────────────── ส่วนของคน (DECISIONS ข้อ 43) ─────────────────────────
+
+/// ที่เก็บภาพน้ำหนักของส่วนของคนของ revision
+pub fn parts_path(cache_dir: &Path, revision_id: &str) -> PathBuf {
+    map_path(cache_dir, revision_id).with_file_name(format!("{revision_id}-parts.png"))
+}
+
+pub(crate) fn cached_parts(
+    state: &SubjectState,
+    cache_dir: &Path,
+    revision_id: &str,
+) -> Option<crate::parts::PartsMap> {
+    if let Some((_, m)) = lock(&state.part_maps).iter().find(|(r, _)| r == revision_id) {
+        return Some(m.clone());
+    }
+    let bytes = std::fs::read(parts_path(cache_dir, revision_id)).ok()?;
+    let parts = crate::parts::PartsMap::new(image::load_from_memory(&bytes).ok()?.into_rgba8());
+    remember_parts(state, revision_id, &parts);
+    Some(parts)
+}
+
+fn remember_parts(state: &SubjectState, revision_id: &str, parts: &crate::parts::PartsMap) {
+    let mut maps = lock(&state.part_maps);
+    maps.retain(|(r, _)| r != revision_id);
+    maps.insert(0, (revision_id.to_string(), parts.clone()));
+    maps.truncate(RECENT);
+}
+
+/// ภาพน้ำหนักของส่วนของคน: ที่คิดไว้แล้ว หรือคิดตอนนี้ (เร็ว — โมเดลเล็ก) · ต้องมีภาพน้ำหนักตัวคนก่อน
+pub(crate) fn compute_parts(
+    state: &SubjectState,
+    cache_dir: &Path,
+    revision_id: &str,
+    source: &Path,
+    map: &SubjectMap,
+) -> Result<crate::parts::PartsMap> {
+    if let Some(parts) = cached_parts(state, cache_dir, revision_id) {
+        return Ok(parts);
+    }
+    let segmenter = state.part_segmenter().ok_or_else(|| {
+        let message = if state.parts.model.is_none() {
+            PARTS_UNSUPPORTED.to_string()
+        } else {
+            "รูปนี้มี Mask ส่วนของคน ต้องติดตั้งตัวแยกส่วนของคนก่อน".to_string()
+        };
+        AppError::new("MODEL_NOT_READY", message).next("install_subject_model")
+    })?;
+    let _turn = lock(&state.busy);
+    if let Some(parts) = cached_parts(state, cache_dir, revision_id) {
+        return Ok(parts);
+    }
+    // ภาพเดียวกับที่ใช้หาตัวคน
+    let bytes = media::read_file(source).map_err(|_| AppError::source_unavailable())?;
+    let img = media::decode_upright(&bytes, MAP_EDGE)?;
+    let img = if img.width().max(img.height()) > MAP_EDGE { img.thumbnail(MAP_EDGE, MAP_EDGE) } else { img };
+    let parts = crate::parts::compute(&img.into_rgb8(), map, segmenter.as_ref())?;
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(parts.image().clone())
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(AppError::internal)?;
+    let _ = media::write_cache_file(&parts_path(cache_dir, revision_id), &png);
+    remember_parts(state, revision_id, &parts);
+    Ok(parts)
+}
+
 // ───────────────────────── ลบคน/สิ่งของ (DECISIONS ข้อ 42) ─────────────────────────
 
 fn removal_name(revision_id: &str, from_raw: bool, r: &crate::remove::Removal) -> String {
@@ -798,6 +900,15 @@ pub fn attach(settings: &mut EditSettings, map: &SubjectMap) {
     }
 }
 
+/// แนบภาพน้ำหนักให้ Mask ส่วนของคนทุกอันในค่าที่แต่ง
+pub fn attach_parts(settings: &mut EditSettings, parts: &crate::parts::PartsMap) {
+    for mask in &mut settings.masks {
+        if let Area::People { map: slot, .. } = &mut mask.area {
+            *slot = Some(parts.clone());
+        }
+    }
+}
+
 /// แนบสิ่งที่ตัวผอมใช้ (ภาพน้ำหนัก + ฉากหลังที่เติม) ให้รีทัชในค่าที่แต่ง
 pub fn attach_body(settings: &mut EditSettings, map: &SubjectMap, fill: &Fill) {
     if let Some(r) = settings.retouch.as_mut() {
@@ -837,7 +948,8 @@ pub(crate) fn attach_all(
         }
     }
     let body = settings.has_body();
-    if settings.has_subject() || body {
+    let people = settings.has_people();
+    if settings.has_subject() || body || people {
         let map = if compute {
             Some(compute_map(state, cache_dir, revision_id, source)?)
         } else {
@@ -845,12 +957,23 @@ pub(crate) fn attach_all(
         };
         let Some(map) = map else { return Ok(false) };
         // คนที่ลบไปแล้วไม่อยู่ในภาพน้ำหนัก (ไม่งั้นเห็นเงาของคนที่ลบสว่าง/หดตามขึ้นมา)
-        let people = if crate::remove::active(&settings.removals) {
-            crate::remove::clear_map(&map, &settings.removals)
-        } else {
-            map.clone()
-        };
-        attach(settings, &people);
+        let removed = crate::remove::active(&settings.removals);
+        let cleared = if removed { crate::remove::clear_map(&map, &settings.removals) } else { map.clone() };
+        attach(settings, &cleared);
+        if people {
+            let parts = if compute {
+                Some(compute_parts(state, cache_dir, revision_id, source, &map)?)
+            } else {
+                cached_parts(state, cache_dir, revision_id)
+            };
+            match parts {
+                Some(parts) => {
+                    let parts = if removed { crate::remove::clear_parts(&parts, &settings.removals) } else { parts };
+                    attach_parts(settings, &parts);
+                }
+                None => complete = false,
+            }
+        }
         if body {
             let fill = if compute {
                 Some(compute_fill(state, cache_dir, revision_id, from_raw, &map, || base(MAP_EDGE))?)
@@ -858,7 +981,7 @@ pub(crate) fn attach_all(
                 cached_fill(state, cache_dir, revision_id, from_raw)
             };
             match fill {
-                Some(fill) => attach_body(settings, &people, &fill),
+                Some(fill) => attach_body(settings, &cleared, &fill),
                 None => complete = false,
             }
         }
@@ -869,7 +992,7 @@ pub(crate) fn attach_all(
 /// เตรียมค่าที่แต่งของรูปให้พร้อมสร้างภาพ ([`attach_all`]) · `compute` = คิดใหม่ได้ถ้ายังไม่เคยคิด ·
 /// คืน false เมื่อยังขาดบางส่วน (ภาพที่ได้ยังไม่มีผลของส่วนนั้น — อย่าเก็บลง cache)
 pub(crate) fn prepare(app: &App, photo_id: &str, settings: &mut EditSettings, compute: bool) -> bool {
-    if !settings.has_subject() && !settings.has_body() && settings.removals.is_empty() {
+    if !settings.has_subject() && !settings.has_body() && !settings.has_people() && settings.removals.is_empty() {
         return true;
     }
     let Ok((revision_id, source)) = revision_of(app, photo_id) else { return false };
@@ -886,8 +1009,12 @@ pub struct Prepared {
 
 /// คิดภาพน้ำหนักของรูปไว้ก่อน (หน้าแต่งภาพเรียกตอนเพิ่ม Mask ตัวคน หรือเปิดรูปที่มี Mask นี้) · `fill` = เติมฉากหลังของตัวผอมด้วย
 /// จากภาพตั้งต้นของการแต่ง (`from_raw` = ภาพจาก RAW คู่)
-pub fn prepare_photo(app: &App, photo_id: &str, fill: bool, from_raw: bool) -> Result<Prepared> {
+pub fn prepare_photo(app: &App, photo_id: &str, fill: bool, from_raw: bool, parts: bool) -> Result<Prepared> {
     let map = if fill { ensure_fill(app, photo_id, from_raw)?.0 } else { ensure(app, photo_id)? };
+    if parts {
+        let (revision_id, source) = revision_of(app, photo_id)?;
+        compute_parts(&app.ai.subject, &app.cache_dir, &revision_id, &source, &map)?;
+    }
     Ok(Prepared { found: map.bounds().is_some() })
 }
 

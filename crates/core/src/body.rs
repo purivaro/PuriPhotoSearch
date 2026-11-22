@@ -70,6 +70,11 @@ impl Person {
     fn rows(&self) -> usize {
         self.centre.len()
     }
+
+    /// กรอบของคนนี้ (พิกเซลของภาพน้ำหนัก): x0, y0, x1, y1
+    pub(crate) fn bounds(&self) -> (f64, f64, f64, f64) {
+        (self.x0, self.top as f64, self.x1, (self.top + self.rows()) as f64)
+    }
 }
 
 /// แบ่งภาพน้ำหนักเป็นรายคน แล้วหาลำตัวของแต่ละแถว

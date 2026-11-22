@@ -246,7 +246,11 @@ pub fn render(app: &App, req: &Request) -> Result<Vec<u8>> {
     check_view(&req.view)?;
     req.settings.validate()?;
     let src = source(app, &req.photo_id, req.source)?;
-    if req.settings.has_subject() || req.settings.has_body() || !req.settings.removals.is_empty() {
+    if req.settings.has_subject()
+        || req.settings.has_body()
+        || req.settings.has_people()
+        || !req.settings.removals.is_empty()
+    {
         // Mask ตัวคน / ตัวผอม / ลบคน: ใช้ภาพน้ำหนักและฉากที่เติมไว้แล้ว (หน้าแต่งภาพสั่งคิดก่อนด้วย prepare_subject / prepare_removals)
         // — ยังไม่มี = ยังไม่เห็นผลของส่วนนั้น · ฉากหลังที่เติมเป็นของภาพต้นทางที่ใช้อยู่ (ไฟล์ของรูป หรือภาพจาก RAW คู่)
         let mut req = req.clone();

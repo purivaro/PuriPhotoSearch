@@ -68,11 +68,11 @@ fn insert(
     unsupported: &[String],
 ) -> Result<Preset> {
     adjust.validate()?;
-    // preset เก็บเฉพาะ Mask ตัวคน: Mask ใบหน้าผูกกับใบหน้าของรูปนั้น
+    // preset เก็บเฉพาะ Mask ตัวคนและส่วนของคน: Mask ใบหน้าผูกกับใบหน้าของรูปนั้น
     let masks: Vec<Mask> = masks
         .iter()
-        .filter(|m| matches!(m.area, Area::Subject { .. }) && m.is_active())
-        .map(|m| Mask { area: Area::Subject { map: None }, ..m.clone() })
+        .filter(|m| matches!(m.area, Area::Subject { .. } | Area::People { .. }) && m.is_active())
+        .map(|m| m.on_faces(&[]))
         .collect();
     crate::masks::validate(&masks)?;
     if adjust.is_neutral() && masks.is_empty() {
@@ -385,20 +385,10 @@ pub(crate) fn lightroom_masks(text: &str) -> (Vec<crate::masks::Mask>, Vec<Strin
             continue;
         }
         let name = attr(head, "CorrectionName").unwrap_or("Mask").to_string();
-        let subject = match areas.as_slice() {
-            [area] => {
-                attr(area, "What") == Some("Mask/Image")
-                    && attr(area, "MaskSubType") == Some("1")
-                    && attr(area, "MaskActive") != Some("false")
-                    && num(area, "MaskValue").is_none_or(|v| v == 1.0)
-                    && num(area, "MaskBlendMode").is_none_or(|v| v == 0.0)
-            }
-            _ => false,
-        };
-        if !subject {
+        let Some((area, invert)) = lightroom_area(&areas) else {
             skipped.push(format!("Mask “{name}”"));
             continue;
-        }
+        };
         let mut adjust = Adjust::default();
         for (key, scale) in LOCAL_SLIDERS {
             let value = num(head, key).unwrap_or(0.0) * scale;
@@ -432,14 +422,62 @@ pub(crate) fn lightroom_masks(text: &str) -> (Vec<crate::masks::Mask>, Vec<Strin
         let id = attr(head, "CorrectionSyncID").map_or_else(|| format!("lr-{i}"), |sync| format!("lr-{sync}"));
         masks.push(crate::masks::Mask {
             id: id.chars().take(64).collect(),
-            area: crate::masks::Area::Subject { map: None },
+            area,
             adjust,
             amount: (num(head, "CorrectionAmount").unwrap_or(1.0) * 100.0).clamp(0.0, 100.0),
-            invert: attr(areas[0], "MaskInverted") == Some("true"),
+            invert,
         });
     }
     masks.truncate(crate::masks::MAX_MASKS);
     (masks, skipped)
+}
+
+/// บริเวณของ Mask หนึ่งอันของ Lightroom ที่แอปทำได้ (บริเวณ, กลับด้าน) — None = ทำไม่ได้
+/// · Select Subject (`Mask/Image` ชนิดย่อย 1) · Select Background (ชนิดย่อย 0 หมวด 22 = ตัวคนกลับด้าน) ·
+/// Select People เฉพาะผม ผิวหน้า ผิวตัว เสื้อผ้า (ชนิดย่อย 3 หมวด 5 2 4 11 — หลายส่วนในอันเดียว = รวมกัน · ทุกคนในรูป) ·
+/// ส่วนที่ปิดไว้ ไม่เต็มแรง หรือหักลบกัน = ทำไม่ได้
+fn lightroom_area(areas: &[&str]) -> Option<(crate::masks::Area, bool)> {
+    use crate::masks::Area;
+    use crate::parts::Part;
+    let plain = |a: &&str| {
+        attr(a, "What") == Some("Mask/Image")
+            && attr(a, "MaskActive") != Some("false")
+            && num(a, "MaskValue").is_none_or(|v| v == 1.0)
+            && num(a, "MaskBlendMode").is_none_or(|v| v == 0.0)
+    };
+    if areas.is_empty() || !areas.iter().all(plain) {
+        return None;
+    }
+    let inverted = |a: &str| attr(a, "MaskInverted") == Some("true");
+    fn sub(a: &str) -> Option<&str> {
+        attr(a, "MaskSubType")
+    }
+    fn cat(a: &str) -> Option<&str> {
+        attr(a, "MaskSubCategoryID")
+    }
+    match areas {
+        [a] if sub(a) == Some("1") => return Some((Area::Subject { map: None }, inverted(a))),
+        [a] if sub(a) == Some("0") && cat(a) == Some("22") => return Some((Area::Subject { map: None }, !inverted(a))),
+        _ => {}
+    }
+    // ส่วนของคน: ทุกส่วนต้องเป็นส่วนที่ทำได้และไม่กลับด้าน
+    let mut parts = Vec::new();
+    for a in areas {
+        let part = match (sub(a), cat(a)) {
+            (Some("3"), Some("5")) => Part::Hair,
+            (Some("3"), Some("2")) => Part::FaceSkin,
+            (Some("3"), Some("4")) => Part::BodySkin,
+            (Some("3"), Some("11")) => Part::Clothes,
+            _ => return None,
+        };
+        if inverted(a) {
+            return None;
+        }
+        if !parts.contains(&part) {
+            parts.push(part);
+        }
+    }
+    Some((Area::People { parts, map: None }, false))
 }
 
 #[cfg(test)]
@@ -605,6 +643,39 @@ mod tests {
             p.unsupported,
             ["Mask “Sky”", "Mask “Brush”", "Mask “Subject and sky”", "Mask “Lit subject”: ลดนอยส์"]
         );
+    }
+
+    #[test]
+    fn people_parts_and_background_masks_are_imported() {
+        use crate::masks::Area;
+        use crate::parts::Part;
+        let part = |cat: &str, name: &str| {
+            area("Mask/Image", &format!(r#"crs:MaskName="{name}" crs:MaskSubType="3" crs:MaskSubCategoryID="{cat}""#))
+        };
+        let background =
+            area("Mask/Image", r#"crs:MaskName="Background 1" crs:MaskSubType="0" crs:MaskSubCategoryID="22""#);
+        let xmp = format!(
+            r#"<x crs:Exposure2012="0"><crs:MaskGroupBasedCorrections><rdf:Seq>{}{}{}{}</rdf:Seq></crs:MaskGroupBasedCorrections></x>"#,
+            correction("Clothes", r#"crs:LocalSaturation="0.25" crs:LocalContrast2012="0.3""#, &part("11", "Clothes")),
+            correction(
+                "Skin",
+                r#"crs:LocalTexture="-0.4""#,
+                &format!("{}{}", part("2", "Facial Skin"), part("4", "Body Skin"))
+            ),
+            correction("Background", r#"crs:LocalExposure2012="-0.125""#, &background),
+            correction(
+                "Eyes",
+                r#"crs:LocalExposure2012="0.1""#,
+                &format!("{}{}", part("8", "Eye Sclera"), part("3", "Iris"))
+            ),
+        );
+        let p = parse_lightroom(&xmp).unwrap();
+        assert_eq!(p.masks.len(), 3, "{:?}", p.masks);
+        assert!(matches!(&p.masks[0].area, Area::People { parts, .. } if parts == &[Part::Clothes]));
+        assert!((p.masks[0].adjust.saturation - 25.0).abs() < 1e-9 && (p.masks[0].adjust.contrast - 30.0).abs() < 1e-9);
+        assert!(matches!(&p.masks[1].area, Area::People { parts, .. } if parts == &[Part::FaceSkin, Part::BodySkin]));
+        assert!(matches!(p.masks[2].area, Area::Subject { .. }) && p.masks[2].invert, "ฉากหลัง = ตัวคนกลับด้าน");
+        assert_eq!(p.unsupported, ["Mask “Eyes”"], "ตาแยกไม่ได้");
     }
 
     #[test]

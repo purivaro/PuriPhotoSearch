@@ -535,7 +535,24 @@ pub mod subject {
         }
     }
 
-    /// ตัวแยกตัวคน (+ ตัวเติมฉากหลัง) ของ build นี้; None บนแพลตฟอร์มที่ไม่มี ONNX Runtime สำเร็จรูป
+    /// ตัวแยกส่วนของคน (Mask ส่วนของคน — DECISIONS ข้อ 43): MediaPipe Selfie Multiclass 256×256 ของ Google (Apache-2.0)
+    /// แบบ ONNX ที่แปลงจาก TFLite ต้นฉบับ (ตรวจแล้วว่าผลเท่ากับ TFLite ของ Google ทุกพิกเซล — ตรึงรุ่นด้วย commit ของ repo)
+    pub fn parts_model() -> SubjectModel {
+        SubjectModel {
+            id: "selfie-multiclass",
+            display_name: "MediaPipe Selfie Multiclass",
+            file: "selfie_multiclass_256x256.onnx",
+            sha256: "35ec1ecd9ee7f85073c99c00020b7f6751b69506eeacf683bc8665f6117f85b0",
+            download_url: std::env::var("PURI_PARTS_MODEL_URL").unwrap_or_else(|_| {
+                "https://huggingface.co/senty-au/selfie_multiclass_256x256-ONNX/resolve/6db8421a7150ac20558f2c24675078eb3a1a04d0/onnx/model.onnx".into()
+            }),
+            download_bytes: 16_454_560,
+            download_source: "huggingface.co/senty-au/selfie_multiclass_256x256-ONNX (โมเดลของ Google MediaPipe)",
+            license_note: "โมเดลของ Google เผยแพร่ด้วยสัญญาอนุญาต Apache-2.0 ใช้ได้ทั้งงานทั่วไปและเชิงพาณิชย์",
+        }
+    }
+
+    /// ตัวแยกตัวคน (+ ตัวเติมฉากหลัง + ตัวแยกส่วนของคน) ของ build นี้; None บนแพลตฟอร์มที่ไม่มี ONNX Runtime สำเร็จรูป
     pub fn provider() -> Option<SubjectProvider> {
         #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
         {
@@ -543,6 +560,10 @@ pub mod subject {
                 model: model(),
                 factory: std::sync::Arc::new(super::segmenter::load),
                 fill: Some(FillProvider { model: fill_model(), factory: std::sync::Arc::new(super::inpainter::load) }),
+                parts: Some(puri_core::parts::PartsProvider {
+                    model: parts_model(),
+                    factory: std::sync::Arc::new(super::part_segmenter::load),
+                }),
             })
         }
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
@@ -625,6 +646,83 @@ mod segmenter {
                 image::Luma([((1.0 / (1.0 + (-v).exp())) * 255.0).round() as u8])
             });
             Ok(imageops::resize(&mask, w, h, imageops::FilterType::Triangle))
+        }
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+mod part_segmenter {
+    use image::{imageops, GrayImage, RgbImage};
+    use ort::{environment::Environment, session::Session, value::Tensor};
+    use puri_core::parts::PartSegmenter;
+    use puri_core::AppError;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    /// ขนาดภาพที่โมเดลรับ (ตายตัว)
+    const SIDE: u32 = 256;
+    /// ช่องผลของโมเดล: 0 ฉากหลัง 1 ผม 2 ผิวตัว 3 ผิวหน้า 4 เสื้อผ้า 5 อื่น ๆ (เครื่องประดับ)
+    const CLASSES: usize = 6;
+
+    struct Selfie {
+        session: Mutex<Session>,
+        _env: Environment,
+    }
+
+    fn failed(e: impl std::fmt::Display) -> AppError {
+        AppError::new("DECODE_FAILED", format!("แยกส่วนของคนในรูปนี้ไม่สำเร็จ ({e})"))
+    }
+
+    pub fn load(model_dir: &Path) -> Result<Arc<dyn PartSegmenter>, AppError> {
+        let path = model_dir.join(super::subject::parts_model().file);
+        if !path.is_file() {
+            return Err(AppError::new("MODEL_NOT_READY", "ไม่พบไฟล์ตัวแยกส่วนของคน"));
+        }
+        let env = crate::environment().map_err(failed)?;
+        // CPU (โมเดลเล็ก เร็วพออยู่แล้ว · ไม่ใช้ CoreML — ข้อ 40)
+        let threads = std::thread::available_parallelism().map(|n| n.get().saturating_sub(2)).unwrap_or(2).max(1);
+        let mut builder = Session::builder(&env)
+            .map_err(failed)?
+            .with_intra_threads(threads)
+            .map_err(failed)?
+            .with_auto_device(ort::session::builder::AutoDevicePolicy::PreferCPU)
+            .map_err(failed)?;
+        let session = builder
+            .commit_from_file(&path)
+            .map_err(|e| AppError::new("MODEL_NOT_READY", format!("โหลดตัวแยกส่วนของคนไม่ได้ ({e})")))?;
+        Ok(Arc::new(Selfie { session: Mutex::new(session), _env: env }))
+    }
+
+    impl PartSegmenter for Selfie {
+        fn segment(&self, image: &RgbImage) -> Result<[GrayImage; 4], AppError> {
+            let (w, h) = image.dimensions();
+            if w == 0 || h == 0 {
+                return Err(failed("ภาพว่าง"));
+            }
+            // ยืดเป็น 256×256 (ไม่เติมขอบ) ค่า 0–1 แบบ NHWC
+            let small = imageops::resize(image, SIDE, SIDE, imageops::FilterType::Triangle);
+            let input: Vec<f32> = small.as_raw().iter().map(|&v| f32::from(v) / 255.0).collect();
+            let side = SIDE as usize;
+            let tensor = Tensor::from_array(([1usize, side, side, 3], input)).map_err(failed)?;
+            let mut session = self.session.lock().unwrap_or_else(|e| e.into_inner());
+            let outputs = session.run(ort::inputs![tensor]).map_err(failed)?;
+            // ค่าก่อน softmax 1×256×256×6
+            let (_, data) = outputs[0].try_extract_tensor::<f32>().map_err(failed)?;
+            if data.len() != side * side * CLASSES {
+                return Err(failed(format!("โมเดลคืนผล {} ค่า", data.len())));
+            }
+            let mut maps: [GrayImage; 4] = std::array::from_fn(|_| GrayImage::new(SIDE, SIDE));
+            for i in 0..side * side {
+                let logits = &data[i * CLASSES..(i + 1) * CLASSES];
+                let top = logits.iter().copied().fold(f32::MIN, f32::max);
+                let e: Vec<f32> = logits.iter().map(|v| (v - top).exp()).collect();
+                let sum: f32 = e.iter().sum();
+                let (x, y) = ((i % side) as u32, (i / side) as u32);
+                for (k, map) in maps.iter_mut().enumerate() {
+                    map.put_pixel(x, y, image::Luma([(e[k + 1] / sum * 255.0).round() as u8]));
+                }
+            }
+            Ok(maps.map(|m| imageops::resize(&m, w, h, imageops::FilterType::Triangle)))
         }
     }
 }
