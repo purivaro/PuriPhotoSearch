@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EditSettings } from '@/lib/ipc/types';
 import { NEUTRAL } from './adjust';
-import { faceRemoved, personRect, sourceToView, viewToSource } from './removals';
+import { brushToSource, faceRemoved, personRect, sourceToView, viewToSource } from './removals';
 
 const plain: EditSettings = { rotate: 0, straighten: 0, crop: null, adjust: NEUTRAL };
 const FULL = { x: 0, y: 0, w: 1, h: 1 };
@@ -19,6 +19,19 @@ describe('ลบคน/สิ่งของ: แปลงกรอบ (DECISION
     const rect = viewToSource(600, 400, turned, FULL, { x: 0.1, y: 0.2, w: 0.3, h: 0.2 });
     const back = sourceToView(600, 400, turned, FULL, rect);
     near([back.x, back.y, back.w, back.h], [0.1, 0.2, 0.3, 0.2]);
+  });
+
+  it('เส้นที่ระบาย: จุดและรัศมีบนภาพเดิม (รัศมีเป็นสัดส่วนของด้านยาว) และกรอบที่ครอบ', () => {
+    // ภาพ 600×400 ไม่ได้ตัด · รัศมี 0.05 ของความกว้างที่แสดง = 30 พิกเซล = 0.05 ของด้านยาว
+    const out = brushToSource(600, 400, plain, FULL, [{ x: 0.5, y: 0.5 }, { x: 0.6, y: 0.5 }], 0.05);
+    expect(out?.brush).toHaveLength(2);
+    near(out?.brush?.[0] ?? [], [0.5, 0.5, 0.05]);
+    near(out?.rect ?? [], [0.45, 0.425, 0.2, 0.15]);
+    // ตัดภาพแล้ว (เห็นครึ่งซ้ายบน): จุดกลางที่แสดง = จุด 0.25 บนภาพเดิม และรัศมีเล็กลงครึ่งหนึ่ง
+    const crop = { x: 0, y: 0, w: 0.5, h: 0.5 };
+    const cut = brushToSource(600, 400, { ...plain, crop }, crop, [{ x: 0.5, y: 0.5 }], 0.05);
+    near(cut?.brush?.[0] ?? [], [0.25, 0.25, 0.025]);
+    expect(brushToSource(600, 400, plain, FULL, [], 0.05)).toBeNull();
   });
 
   it('กรอบของคนจากใบหน้า และใบหน้าที่ลบไปแล้ว', () => {

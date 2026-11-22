@@ -649,6 +649,9 @@ fn removal_name(revision_id: &str, from_raw: bool, r: &crate::remove::Removal) -
     if let Some([x, y]) = r.anchor {
         key.push_str(&format!("@{x:.6},{y:.6}"));
     }
+    for [x, y, radius] in &r.brush {
+        key.push_str(&format!("~{x:.5},{y:.5},{radius:.5}"));
+    }
     let hash = util::hex(&sha2::Sha256::digest(key.as_bytes()));
     format!("{revision_id}-rm-{}{}", &hash[..16], if from_raw { "-raw" } else { "" })
 }
@@ -725,7 +728,7 @@ pub(crate) fn compute_removals(
             image = Some((base.take().expect("โหลดครั้งเดียว"))()?);
         }
         let image = image.as_ref().expect("โหลดแล้ว");
-        let (patch, found) = crate::remove::compute(image, r.rect, r.anchor, segmenter.as_ref(), inpainter.as_ref())?;
+        let (patch, found) = crate::remove::compute(image, r, segmenter.as_ref(), inpainter.as_ref())?;
         let path = removal_path(cache_dir, revision_id, from_raw, r);
         let mut png = Vec::new();
         image::DynamicImage::ImageRgba8(patch.image().clone())

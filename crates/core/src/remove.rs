@@ -17,6 +17,8 @@ use std::sync::Arc;
 pub const REMOVE_EDGE: u32 = 2048;
 /// ลบได้มากสุดต่อรูป
 pub const MAX_REMOVALS: usize = 20;
+/// จุดของเส้นที่ระบายได้มากสุดต่อส่วน
+pub const MAX_BRUSH_POINTS: usize = 2000;
 /// ฉากรอบกรอบที่ส่งไปด้วย (สัดส่วนของด้านยาวของกรอบ) — ตัวเติมต้องเห็นฉากรอบ ๆ
 const CONTEXT: f64 = 0.6;
 /// หาสิ่งที่เด่นในกรอบที่ขยายออกเท่านี้ (คนที่ล้นกรอบที่ลากไว้เล็กน้อยยังถูกลบครบ)
@@ -40,6 +42,10 @@ pub struct Removal {
     /// (กรอบของคนที่คิดจากใบหน้ามักกินถึงของบนโต๊ะด้านหน้า — ลองกับรูปจริงแล้ว) · ไม่มี = ทุกสิ่งที่เด่นในกรอบ
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor: Option<[f64; 2]>,
+    /// ระบายด้วยแปรง: จุดตามเส้นที่ลาก [x, y, รัศมี] (x, y สัดส่วนบนภาพเดิม · รัศมีเป็นสัดส่วนของด้านยาว) — ลบตรงที่ระบายทั้งหมด
+    /// ไม่หาสิ่งที่เด่น (ของเล็ก ๆ สายไฟ ขยะบนพื้น) · ว่าง = ใช้กรอบ
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub brush: Vec<[f64; 3]>,
     /// ภาพที่เติมแล้ว แนบตอนสร้างภาพ — ไม่ใช่ส่วนของค่าที่แต่ง ไม่ถูกเก็บ
     #[serde(skip)]
     pub patch: Attached,
@@ -123,6 +129,10 @@ pub fn validate(removals: &[Removal]) -> Result<()> {
                 && (-0.05..=1.05).contains(&x)
                 && (-0.05..=1.05).contains(&y)
                 && r.anchor.is_none_or(|[ax, ay]| (0.0..=1.0).contains(&ax) && (0.0..=1.0).contains(&ay))
+                && r.brush.len() <= MAX_BRUSH_POINTS
+                && r.brush.iter().all(|&[bx, by, br]| {
+                    (-0.1..=1.1).contains(&bx) && (-0.1..=1.1).contains(&by) && br > 0.0 && br <= 0.3
+                })
         });
     if ok {
         Ok(())
@@ -154,16 +164,27 @@ pub fn apply<const N: usize>(
     here
 }
 
-/// ภาพที่เติมของกรอบ `rect` จากภาพตั้งต้น `base` — คืนภาพที่เติม และพบสิ่งที่เด่นในกรอบไหม (ไม่พบ = ลบทั้งกรอบ)
-/// · `anchor` = ลบเฉพาะสิ่งที่ติดกับจุดนี้
+/// ภาพที่เติมของส่วนที่จะลบ จากภาพตั้งต้น `base` — คืนภาพที่เติม และพบสิ่งที่เด่นในกรอบไหม (ไม่พบ = ลบทั้งกรอบ · ระบาย = true)
+/// · กรอบ: หาสิ่งที่เด่นในกรอบ (`anchor` = เฉพาะสิ่งที่ติดกับจุดนี้) · แปรง: ตรงที่ระบายทั้งหมด
 pub fn compute(
     base: &RgbImage,
-    rect: [f64; 4],
-    anchor: Option<[f64; 2]>,
+    r: &Removal,
     segmenter: &dyn Segmenter,
     inpainter: &dyn Inpainter,
 ) -> Result<(Patch, bool)> {
     let (w, h) = (base.width() as f64, base.height() as f64);
+    let (anchor, long_side) = (r.anchor, w.max(h));
+    // แปรง: กรอบคือส่วนที่ระบาย (รวมรัศมี)
+    let rect = if r.brush.is_empty() {
+        r.rect
+    } else {
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for &[bx, by, br] in &r.brush {
+            let (rx, ry) = (br * long_side / w, br * long_side / h);
+            (x0, y0, x1, y1) = (x0.min(bx - rx), y0.min(by - ry), x1.max(bx + rx), y1.max(by + ry));
+        }
+        [x0, y0, x1 - x0, y1 - y0]
+    };
     let px = |v: f64, size: f64| (v * size).round().clamp(0.0, size) as u32;
     // กรอบเป็นพิกเซล (อย่างน้อย 4×4)
     let (bx0, by0) = (px(rect[0], w), px(rect[1], h));
@@ -182,6 +203,41 @@ pub fn compute(
     let (sx0, sy0, sx1, sy1) = around(SEARCH * long);
     let region = imageops::crop_imm(base, rx0, ry0, rx1 - rx0, ry1 - ry0).to_image();
     let (rw, rh) = region.dimensions();
+    if !r.brush.is_empty() {
+        // ตรงที่ระบาย: ระยะถึงเส้นที่ลากไม่เกินรัศมี (พิกเซลของภาพตั้งต้น)
+        let mut target = vec![false; (rw * rh) as usize];
+        let pts: Vec<(f64, f64, f64)> = r.brush.iter().map(|&[bx, by, br]| (bx * w, by * h, br * long_side)).collect();
+        let segments = pts.windows(2).map(|p| (p[0], p[1])).chain(pts.first().map(|&p| (p, p)));
+        let mut widest = 0.0f64;
+        for ((ax, ay, ar), (bx, by, br)) in segments {
+            let rad = ar.max(br);
+            widest = widest.max(rad);
+            let (minx, maxx) = ((ax.min(bx) - rad).floor().max(rx0 as f64), (ax.max(bx) + rad).ceil().min(rx1 as f64));
+            let (miny, maxy) = ((ay.min(by) - rad).floor().max(ry0 as f64), (ay.max(by) + rad).ceil().min(ry1 as f64));
+            let (dx, dy) = (bx - ax, by - ay);
+            let len2 = dx * dx + dy * dy;
+            let mut y = miny;
+            while y < maxy {
+                let mut x = minx;
+                while x < maxx {
+                    let (px, py) = (x + 0.5, y + 0.5);
+                    let t = if len2 > 0.0 { (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                    let (cx, cy) = (ax + t * dx, ay + t * dy);
+                    if (px - cx).powi(2) + (py - cy).powi(2) <= rad * rad {
+                        target[((y as u32 - ry0) * rw + (x as u32 - rx0)) as usize] = true;
+                    }
+                    x += 1.0;
+                }
+                y += 1.0;
+            }
+        }
+        let grow_px = ((0.25 * widest).round() as usize).max(2);
+        let filled = crate::body::fill_holes(&region, &target, grow_px, inpainter)?
+            .ok_or_else(|| AppError::invalid("ไม่มีส่วนที่ระบายอยู่ในภาพ"))?;
+        let feathered = feather(&filled, (grow_px / 2).max(1));
+        let region = [rx0 as f64 / w, ry0 as f64 / h, (rx1 - rx0) as f64 / w, (ry1 - ry0) as f64 / h];
+        return Ok((Patch::new(region, feathered), true));
+    }
     let search = imageops::crop_imm(base, sx0, sy0, sx1 - sx0, sy1 - sy0).to_image();
     let mut found_map = segmenter.segment(&search)?;
     if let Some([ax, ay]) = anchor {
@@ -350,8 +406,12 @@ mod tests {
         }
     }
 
+    fn spec(rect: [f64; 4], anchor: Option<[f64; 2]>) -> Removal {
+        Removal { id: "r".into(), rect, anchor, brush: vec![], patch: Attached::default() }
+    }
+
     fn removal(rect: [f64; 4], patch: Patch) -> Removal {
-        Removal { id: "r".into(), rect, anchor: None, patch: Attached(Some(patch)) }
+        Removal { patch: Attached(Some(patch)), ..spec(rect, None) }
     }
 
     fn render(img: &RgbImage, removals: &[Removal]) -> RgbImage {
@@ -367,7 +427,7 @@ mod tests {
         let img = scene();
         // กรอบรอบคนขวา (ล้นตัวคนเล็กน้อย)
         let rect = [125.0 / 200.0, 35.0 / 200.0, 40.0 / 200.0, 150.0 / 200.0];
-        let (patch, found) = compute(&img, rect, None, &Red, &Flat).unwrap();
+        let (patch, found) = compute(&img, &spec(rect, None), &Red, &Flat).unwrap();
         assert!(found, "พบคนในกรอบ");
         let out = render(&img, &[removal(rect, patch)]);
         let red = |x: u32, y: u32| out.get_pixel(x, y)[0] > 150;
@@ -386,7 +446,7 @@ mod tests {
         // กรอบกว้างครอบทั้งสองคน แต่ยึดที่คนขวา: คนซ้ายไม่ถูกลบ
         let img = scene();
         let rect = [30.0 / 200.0, 30.0 / 200.0, 140.0 / 200.0, 160.0 / 200.0];
-        let (patch, found) = compute(&img, rect, Some([145.0 / 200.0, 60.0 / 200.0]), &Red, &Flat).unwrap();
+        let (patch, found) = compute(&img, &spec(rect, Some([145.0 / 200.0, 60.0 / 200.0])), &Red, &Flat).unwrap();
         assert!(found);
         let out = render(&img, &[removal(rect, patch)]);
         let red = |x: u32| out.get_pixel(x, 100)[0] > 150;
@@ -395,11 +455,29 @@ mod tests {
     }
 
     #[test]
+    fn a_brush_removes_exactly_what_was_painted() {
+        // ระบายเส้นตั้งผ่านคนซ้ายครึ่งตัวบน (รัศมี 20 พิกเซล = 0.1 ของด้านยาว): ส่วนนั้นหาย ส่วนล่างของคนซ้ายและคนขวาอยู่ครบ
+        let img = scene();
+        let brush = vec![[55.0 / 200.0, 50.0 / 200.0, 0.1], [55.0 / 200.0, 100.0 / 200.0, 0.1]];
+        let r = Removal { brush, ..spec([0.0, 0.0, 0.01, 0.01], None) };
+        assert!(validate(std::slice::from_ref(&r)).is_ok());
+        let (patch, found) = compute(&img, &r, &Red, &Flat).unwrap();
+        assert!(found);
+        let out = render(&img, &[Removal { patch: Attached(Some(patch)), ..r }]);
+        let red = |x: u32, y: u32| out.get_pixel(x, y)[0] > 150;
+        assert!((40..70).all(|x| !red(x, 75)), "ตรงที่ระบายหายไป");
+        assert!((40..70).all(|x| red(x, 170)), "ส่วนที่ไม่ได้ระบายอยู่ครบ");
+        assert!((130..160).all(|x| red(x, 75)), "คนขวาอยู่ครบ");
+        let bad = Removal { brush: vec![[0.5, 0.5, 0.0]], ..spec([0.1, 0.1, 0.1, 0.1], None) };
+        assert!(validate(&[bad]).is_err(), "รัศมีศูนย์");
+    }
+
+    #[test]
     fn a_box_without_anything_standing_out_is_removed_whole() {
         let img = scene();
         // กรอบบนฉากหลังล้วน: ลบวงรีในกรอบ
         let rect = [80.0 / 200.0, 60.0 / 200.0, 30.0 / 200.0, 30.0 / 200.0];
-        let (patch, found) = compute(&img, rect, None, &Red, &Flat).unwrap();
+        let (patch, found) = compute(&img, &spec(rect, None), &Red, &Flat).unwrap();
         assert!(!found);
         let r = removal(rect, patch);
         assert!(r.patch.0.as_ref().unwrap().at(95.0 / 200.0, 75.0 / 200.0).is_some_and(|(_, a)| a > 0.99), "กลางกรอบ");
@@ -410,7 +488,7 @@ mod tests {
     fn removed_people_leave_the_subject_map() {
         let img = scene();
         let rect = [125.0 / 200.0, 35.0 / 200.0, 40.0 / 200.0, 150.0 / 200.0];
-        let (patch, _) = compute(&img, rect, None, &Red, &Flat).unwrap();
+        let (patch, _) = compute(&img, &spec(rect, None), &Red, &Flat).unwrap();
         let map = crate::subject::SubjectMap::new(Red.segment(&img).unwrap());
         let cleared = clear_map(&map, &[removal(rect, patch)]);
         assert_eq!(cleared.weight(145.0 / 200.0, 0.5), 0.0, "คนที่ลบไม่อยู่ในภาพน้ำหนัก");
@@ -420,7 +498,13 @@ mod tests {
 
     #[test]
     fn validation_and_equality() {
-        let ok = Removal { id: "a".into(), rect: [0.1, 0.1, 0.2, 0.3], anchor: None, patch: Attached::default() };
+        let ok = Removal {
+            id: "a".into(),
+            rect: [0.1, 0.1, 0.2, 0.3],
+            anchor: None,
+            brush: vec![],
+            patch: Attached::default(),
+        };
         assert!(validate(std::slice::from_ref(&ok)).is_ok());
         assert!(validate(&[Removal { rect: [0.1, 0.1, 0.0, 0.3], ..ok.clone() }]).is_err());
         assert!(validate(&vec![ok.clone(); MAX_REMOVALS + 1]).is_err());
