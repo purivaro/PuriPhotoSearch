@@ -8,7 +8,7 @@ use super::mcp::{ToolHost, ToolOutput, ToolSpec};
 use super::{reference_image, Event, Reference, Turn};
 use crate::catalog::{self, DateFilter, SearchParams};
 use crate::edit::{self, EditSettings};
-use crate::{people, App};
+use crate::{people, util, App};
 use serde_json::{json, Value};
 use std::sync::{Arc, OnceLock};
 
@@ -202,6 +202,42 @@ impl PhotoTools {
                 read_only: false,
             },
             ToolSpec {
+                name: "remove_people",
+                description: "Remove unwanted people (passers-by, people in the background) or things from one photo, non-destructively: the \
+                    app finds them and fills in the background (about 8 seconds per part the first time). `face_ids` = people from get_photo's \
+                    face list (only that person goes; things next to them stay). `boxes` = [x, y, w, h] fractions of the ORIGINAL photo \
+                    (view_photo version \"original\") around things to remove; the app removes what stands out in the box, or the whole box if \
+                    nothing does. Never remove someone the user has named unless the user asked for exactly that. Check with view_photo; \
+                    revert_photos undoes.",
+                input_schema: schema(
+                    json!({
+                        "photo_id": { "type": "string" },
+                        "face_ids": { "type": "array", "items": { "type": "string" }, "maxItems": crate::remove::MAX_REMOVALS },
+                        "boxes": {
+                            "type": "array",
+                            "items": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+                            "maxItems": crate::remove::MAX_REMOVALS,
+                        },
+                    }),
+                    &["photo_id"],
+                ),
+                read_only: false,
+            },
+            ToolSpec {
+                name: "slim_body",
+                description: "Slim the bodies of everyone in the photos (narrower torso; heads, arms reaching out and the background stay; the \
+                    app fills in the background — about 10 seconds per photo the first time). `amount` 0..100: 25 light, 50 medium, 80 strong, \
+                    0 removes it. Keep it subtle unless asked.",
+                input_schema: schema(
+                    json!({
+                        "photo_ids": { "type": "array", "items": { "type": "string" }, "maxItems": MAX_EDIT_PHOTOS },
+                        "amount": { "type": "number", "minimum": 0, "maximum": 100 },
+                    }),
+                    &["photo_ids", "amount"],
+                ),
+                read_only: false,
+            },
+            ToolSpec {
                 name: "revert_photos",
                 description: "Remove all edits from photos so they show the original again.",
                 input_schema: schema(json!({ "photo_ids": { "type": "array", "items": { "type": "string" }, "maxItems": MAX_EDIT_PHOTOS } }), &["photo_ids"]),
@@ -253,6 +289,8 @@ impl PhotoTools {
             "edit_photo" => self.edit_photo(&args),
             "edit_photos" => self.edit_photos(&args),
             "add_mask" => self.add_mask(&args),
+            "remove_people" => self.remove_people(&args),
+            "slim_body" => self.slim_body(&args),
             "remove_masks" => self.remove_masks(&args),
             "revert_photos" => self.revert_photos(&args),
             "list_presets" => self.list_presets(),
@@ -318,6 +356,13 @@ fn summarize(name: &str, args: &Value) -> String {
         "edit_photos" | "revert_photos" | "show_photos" => format!("{} รูป", ids("photo_ids")),
         "apply_preset" => format!("“{}” กับ {} รูป", s("preset"), ids("photo_ids")),
         "edit_photo" => cut(&args.get("adjust").map(|a| a.to_string()).unwrap_or_default(), 200),
+        "remove_people" => {
+            let n = |k: &str| args.get(k).and_then(Value::as_array).map_or(0, Vec::len);
+            format!("ลบ {} ส่วน", n("face_ids") + n("boxes"))
+        }
+        "slim_body" => {
+            format!("ตัวผอม {} · {} รูป", args.get("amount").and_then(Value::as_f64).unwrap_or(0.0), ids("photo_ids"))
+        }
         "add_mask" | "remove_masks" => {
             let area = match s("area").as_str() {
                 "skin" => "ผิวหน้า",
@@ -481,8 +526,21 @@ impl PhotoTools {
             .as_ref()
             .map(|e| serde_json::to_string(&e.settings).unwrap_or_default())
             .unwrap_or_else(|| "none (original)".into());
+        // ใบหน้าในรูป (ให้ AI เลือกคนที่จะลบ) — กรอบเป็นสัดส่วนบนภาพเดิม
+        let faces = if d.faces.is_empty() {
+            "none found".to_string()
+        } else {
+            d.faces
+                .iter()
+                .map(|f| {
+                    let b = &f.source_bbox;
+                    let who = f.person.as_ref().map_or("unknown", |p| p.display_name.as_str());
+                    format!("\n- {}: {who} [{:.3}, {:.3}, {:.3}, {:.3}]", f.id, b.x, b.y, b.w, b.h)
+                })
+                .collect()
+        };
         Ok(ToolOutput::text(format!(
-            "{}\nfile: {}\nsize: {}×{} px\ntaken: {}\nevent: {}\npeople: {}\ncurrent edit: {}",
+            "{}\nfile: {}\nsize: {}×{} px\ntaken: {}\nevent: {}\npeople: {}\nfaces (box = x, y, w, h fractions of the original photo): {faces}\ncurrent edit: {}",
             d.photo.id,
             d.photo.filename,
             d.photo.width,
@@ -693,6 +751,97 @@ impl PhotoTools {
         if no_faces > 0 {
             text.push_str(&format!(" Skipped {no_faces} photos without faces."));
         }
+        if !failed.is_empty() {
+            text.push_str(&format!(" Failed: {}", failed.join("; ")));
+        }
+        Ok(ToolOutput::text(text))
+    }
+
+    /// ตัวแยกตัวคนและตัวเติมฉากหลังพร้อมใช้ (ตัวผอม ลบคน/สิ่งของ) — ยังไม่มี = บอก AI ให้บอกผู้ใช้ดาวน์โหลดเอง
+    fn fill_models_ready(&self) -> Result<(), String> {
+        let state = &self.app.ai.subject;
+        if state.segmenter().is_some() && state.inpainter().is_some() {
+            return Ok(());
+        }
+        Err("The people model and the background-fill model are not installed on this computer. Ask the user to download them once: \
+            open a photo, press แต่งภาพ, tab เฉพาะส่วน, then รูปร่าง › ตัวผอม or ลบคนหรือสิ่งของ."
+            .into())
+    }
+
+    fn remove_people(&self, args: &Value) -> Result<ToolOutput, String> {
+        use crate::remove::{person_rect, Removal, MAX_REMOVALS};
+        let photo = str_arg(args, "photo_id").ok_or("photo_id is required")?;
+        self.fill_models_ready()?;
+        let details = catalog::get_photo_details(&self.app, photo).map_err(|e| e.message)?;
+        let mut added = Vec::new();
+        for id in args.get("face_ids").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
+            let face = details
+                .faces
+                .iter()
+                .find(|f| f.id == id)
+                .ok_or_else(|| format!("No face {id} on this photo (see get_photo)"))?;
+            let b = &face.source_bbox;
+            let (rect, anchor) = person_rect([b.x, b.y, b.w, b.h]);
+            added.push(Removal {
+                id: util::new_id(),
+                rect,
+                anchor: Some(anchor),
+                brush: vec![],
+                patch: Default::default(),
+            });
+        }
+        for b in args.get("boxes").and_then(Value::as_array).into_iter().flatten() {
+            let v: Vec<f64> = b.as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+            let [x, y, w, h] = v[..] else {
+                return Err("Each box is [x, y, w, h] fractions of the original photo".into());
+            };
+            let rect =
+                [x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), w.min(1.0 - x.clamp(0.0, 1.0)), h.min(1.0 - y.clamp(0.0, 1.0))];
+            added.push(Removal { id: util::new_id(), rect, anchor: None, brush: vec![], patch: Default::default() });
+        }
+        if added.is_empty() {
+            return Err("Give face_ids or boxes".into());
+        }
+        let current = edit::state(&self.app, photo).map_err(|e| e.message)?.current;
+        let removals: Vec<Removal> = current.removals.iter().cloned().chain(added.iter().cloned()).collect();
+        if removals.len() > MAX_REMOVALS {
+            return Err(format!("A photo can have at most {MAX_REMOVALS} removed parts"));
+        }
+        crate::remove::validate(&removals).map_err(|e| e.message)?;
+        let patch = json!({ "removals": serde_json::to_value(&removals).map_err(|e| e.to_string())? });
+        self.apply_edit(photo, &patch, false)?;
+        self.turn.push(Event::Changed { photo_ids: vec![photo.to_string()] });
+        Ok(ToolOutput::text(format!(
+            "Removed {} part(s) from the photo ({} in total). Look at it with view_photo (the first look takes a few seconds per part).",
+            added.len(),
+            removals.len()
+        )))
+    }
+
+    fn slim_body(&self, args: &Value) -> Result<ToolOutput, String> {
+        let ids = ids_arg(args, "photo_ids")?;
+        let amount = args.get("amount").and_then(Value::as_f64).ok_or("amount is required")?;
+        if !(0.0..=100.0).contains(&amount) {
+            return Err("amount must be 0..100".into());
+        }
+        if amount > 0.0 {
+            self.fill_models_ready()?;
+        }
+        let (mut done, mut failed) = (vec![], vec![]);
+        for photo in &ids {
+            let current = edit::state(&self.app, photo).map_err(|e| e.message)?.current;
+            // ใบหน้าของรูปตอนนี้ (หาคอของแต่ละคน) · รีทัชอื่นเท่าเดิม
+            let mut retouch = current.retouch.clone().unwrap_or_default();
+            retouch.faces = self.faces_of(photo)?;
+            retouch.body = amount;
+            let patch = json!({ "retouch": serde_json::to_value(&retouch).map_err(|e| e.to_string())? });
+            match self.apply_edit(photo, &patch, false) {
+                Ok(_) => done.push(photo.clone()),
+                Err(e) => failed.push(format!("{photo}: {e}")),
+            }
+        }
+        self.turn.push(Event::Changed { photo_ids: done.clone() });
+        let mut text = format!("Set body slimming {amount} on {} photos.", done.len());
         if !failed.is_empty() {
             text.push_str(&format!(" Failed: {}", failed.join("; ")));
         }
