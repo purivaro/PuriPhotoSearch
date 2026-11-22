@@ -340,6 +340,10 @@
       return sum.map((v) => v / (d.length / 4));
     };
     await click(tid('editor-tab-masks'), 'แท็บเฉพาะส่วน');
+    // Mask ตัวคน (DECISIONS ข้อ 40): เทสต์นี้ปิดตัวแยกตัวคน (PURI_DISABLE_FACE_ENGINE) → ปุ่มกดไม่ได้พร้อมเหตุผล ไม่ค้างหรือหายไป
+    const addSubject = await see('mask-add-subject');
+    expect(addSubject.disabled, 'ปุ่ม “ตัวคน (AI)” กดไม่ได้เมื่อไม่มีตัวแยกตัวคน');
+    expect(text(tid('mask-panel')).includes('ยังไม่มีตัวแยกตัวคน'), 'บอกเหตุที่ใช้ Mask ตัวคนไม่ได้');
     const addFaces = await see('mask-add-faces');
     expect(text(addFaces).includes('2 คน'), `ปุ่มบอกจำนวนใบหน้า (ได้ "${text(addFaces)}")`);
     // แก้มของใบหน้าซ้าย (ใต้ตา) และฉากหลังมุมซ้ายบน

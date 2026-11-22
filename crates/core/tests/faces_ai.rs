@@ -559,6 +559,7 @@ fn library_from_v1_upgrades_in_place() {
         start_worker: false,
         face_engine: None,
         face_engine_unavailable: "",
+        subject_engine: None,
     })
     .unwrap();
     let call = |cmd: &str, args: Value| puri_core::api::dispatch(&app, cmd, args).unwrap();

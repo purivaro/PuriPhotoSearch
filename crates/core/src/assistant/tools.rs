@@ -581,7 +581,7 @@ impl PhotoTools {
         let settings = { edit::load(&self.app.db(), id).map_err(|e| e.message)? }
             .ok_or("That photo has no edits to save")?
             .settings;
-        let preset = crate::preset::save(&self.app, name, &settings.adjust).map_err(|e| e.message)?;
+        let preset = crate::preset::save(&self.app, name, &settings.adjust, &settings.masks).map_err(|e| e.message)?;
         self.turn.push(Event::Changed { photo_ids: vec![] });
         Ok(ToolOutput::text(format!("Saved preset “{}” ({}).", preset.name, preset.id)))
     }

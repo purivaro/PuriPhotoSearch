@@ -40,6 +40,7 @@ export interface AppError {
     | 'relink'
     | 'free_space'
     | 'install_model'
+    | 'install_subject_model'
     | 'refresh_preview'
     | 'retry'
     | 'open_help';
@@ -496,6 +497,8 @@ export interface EditPreset {
   id: Id;
   name: string;
   adjust: EditAdjust;
+  /** Mask ตัวคนของ preset (DECISIONS ข้อ 40) — ใช้ preset = เพิ่มให้รูป แทนอันที่รหัสเดียวกัน */
+  masks: EditMask[];
   source: 'user' | 'lightroom';
   /** ส่วนของ preset ที่นำเข้าไม่ได้ (แสดงตามจริง) */
   unsupported: string[];
@@ -520,13 +523,27 @@ export interface EditSettings {
 }
 
 /** บริเวณของการปรับเฉพาะส่วน — พิกัดเป็นสัดส่วนบนภาพเดิม (ก่อนตัด/หมุน) */
-export type MaskArea = {
-  kind: 'faces';
-  /** กรอบใบหน้า [x, y, w, h] */
-  boxes: [number, number, number, number][];
-  /** เฉพาะสีผิวในบริเวณนั้น */
-  skin: boolean;
-};
+export type MaskArea =
+  | {
+      kind: 'faces';
+      /** กรอบใบหน้า [x, y, w, h] */
+      boxes: [number, number, number, number][];
+      /** เฉพาะสีผิวในบริเวณนั้น */
+      skin: boolean;
+    }
+  /** ตัวคนในรูป (AI — DECISIONS ข้อ 40): แอปหาเองจากรูป ค่าที่แต่งเก็บแค่ชนิด */
+  | { kind: 'subject' };
+
+/** สถานะของตัวแยกตัวคน (Mask ตัวคน) */
+export interface SubjectStatus {
+  state: 'unsupported' | 'not_installed' | 'installing' | 'ready' | 'failed';
+  reason: string;
+  modelName: string;
+  downloadSizeMb: number;
+  downloadSource: string;
+  licenseNote: string;
+  installJobId: Id | null;
+}
 
 export interface EditMask {
   id: string;
@@ -611,6 +628,8 @@ export interface EditParts {
   masks: boolean;
   /** รีทัชใบหน้า — ใช้ใบหน้าของแต่ละรูปเอง */
   retouch: boolean;
+  /** เพิ่ม Mask ของค่าที่วาง (แทนอันที่รหัสเดียวกัน) โดยไม่ลบ Mask อื่นของรูป — ใช้ preset ที่มี Mask ตัวคน */
+  addMasks?: boolean;
 }
 
 export interface ApplyEditsResult {
@@ -1225,7 +1244,8 @@ export interface Commands {
   reset_photo_edit: [{ photoId: Id }, PhotoDetails];
   apply_photo_edits: [{ selection: SelectionSpec; settings: EditSettings; parts: EditParts }, ApplyEditsResult];
   list_edit_presets: [Record<string, never>, EditPreset[]];
-  save_edit_preset: [{ name: string; adjust: EditAdjust }, EditPreset];
+  /** masks: เก็บเฉพาะ Mask ตัวคนที่มีผล */
+  save_edit_preset: [{ name: string; adjust: EditAdjust; masks?: EditMask[] }, EditPreset];
   /** คืนรายการทั้งหมดหลังเปลี่ยน */
   rename_edit_preset: [{ id: Id; name: string }, EditPreset[]];
   delete_edit_preset: [{ id: Id }, EditPreset[]];
@@ -1281,6 +1301,11 @@ export interface Commands {
   apply_cull: [{ eventId: Id; level: number }, { picked: number; rejected: number; updated: number }];
   clear_ai_picks: [{ eventId: Id }, { cleared: number }];
   suggest_composition: [{ photoId: Id; source: PreviewSource; settings: EditSettings; ratio?: number | null }, Composition];
+  /** Mask ตัวคน (DECISIONS ข้อ 40): สถานะของตัวแยกตัวคน */
+  get_subject_status: [Record<string, never>, SubjectStatus];
+  install_subject_model: [Record<string, never>, JobSnapshot];
+  /** คิดภาพน้ำหนักตัวคนของรูปไว้ก่อน (ราว 7 วินาทีครั้งแรก) — ยังไม่ติดตั้ง = MODEL_NOT_READY */
+  prepare_subject: [{ photoId: Id }, { found: boolean }];
   /** ย้อน "ไม่ใช่บุคคลนี้": ใบหน้ากลับไปให้ AI จัดได้ตามเดิม */
   restore_suggestions: [{ faceIds: Id[]; personId: Id }, { dataRevision: number }];
 }

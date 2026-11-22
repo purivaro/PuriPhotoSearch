@@ -243,6 +243,9 @@ pub struct Lightroom {
     /// Lightroom เปิดแก้เลนส์ (Enable Profile Corrections) — แก้ความโค้งตามข้อมูลของกล้องให้ภาพจาก RAW ตรงกรอบเดียวกัน
     #[serde(default)]
     pub lens: bool,
+    /// Mask ที่ทำตามได้ (ตัวคน — DECISIONS ข้อ 40) — ภาพน้ำหนักคิดจาก JPEG ของรูป (กรอบเดียวกับที่แต่ง)
+    #[serde(default)]
+    pub masks: Vec<crate::masks::Mask>,
 }
 
 impl Lightroom {
@@ -261,7 +264,7 @@ impl Lightroom {
         }
         let unsupported = parsed.unsupported.into_iter().filter(|u| !u.starts_with("อุณหภูมิสี")).collect();
         let lens = attr(xmp, "LensProfileEnable") == Some("1");
-        Some(Lightroom { frame: Frame::from_xmp(xmp), adjust, white_balance, unsupported, lens })
+        Some(Lightroom { frame: Frame::from_xmp(xmp), adjust, white_balance, unsupported, lens, masks: parsed.masks })
     }
 }
 
@@ -410,7 +413,8 @@ pub struct Pair {
 /// รุ่นของวิธีคิดค่าเริ่มต้น — เปลี่ยนวิธีคิดเมื่อไร (เช่นทำตามค่าของ Lightroom ได้เพิ่ม) เพิ่มเลขนี้ ค่าที่เก็บไว้จะถูกคิดใหม่
 /// · 3 = อ่านค่าของ Lightroom ใหม่จาก JPEG และทำตาม Texture/Clarity/Dehaze ได้ (DECISIONS ข้อ 27)
 /// · 4 = แก้เลนส์ตามข้อมูลของกล้อง กรอบภาพจาก RAW จึงตรงกับ JPEG + หน้าตาพื้นฐานแบบ Adobe Portrait (DECISIONS ข้อ 34–35)
-const START_VERSION: u32 = 4;
+/// · 5 = ค่าเริ่มต้นรวม Mask ตัวคนของ Lightroom (DECISIONS ข้อ 40)
+const START_VERSION: u32 = 5;
 
 /// ค่าเริ่มต้นเมื่อแต่งจาก RAW (คิดจากไฟล์ RAW ครั้งแรกที่ต้องใช้ แล้วเก็บไว้)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -649,7 +653,8 @@ fn compute_start(
         }
     }
     // ค่าที่อยู่นอกช่วงของเรา (เช่นค่าแสงเกิน ±3) ถูกหนีบไว้แล้วตอนอ่าน — ตรวจซ้ำเผื่อไว้
-    let settings = EditSettings { adjust, from_raw: true, ..Default::default() };
+    let masks = lightroom.map(|l| l.masks.clone()).unwrap_or_default();
+    let settings = EditSettings { adjust, masks, from_raw: true, ..Default::default() };
     match settings.validate() {
         Ok(()) => Start {
             settings: Some(settings),

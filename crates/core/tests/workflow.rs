@@ -2374,6 +2374,7 @@ fn library_open_rules() {
             start_worker: false,
             face_engine: None,
             face_engine_unavailable: "",
+            subject_engine: None,
         })
     };
     assert_eq!(open(tmp.path()).err().unwrap().code, "DATABASE_CORRUPT");

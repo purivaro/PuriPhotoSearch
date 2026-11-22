@@ -15,6 +15,36 @@ pub struct Lib {
     pub tmp: TempDir,
     pub app: Arc<App>,
     ai: bool,
+    subject: bool,
+}
+
+/// ตัวแยกตัวคนจำลองสำหรับเทสต์เท่านั้น: "ตัวคน" คือครึ่งขวาของภาพ
+pub struct FakeSegmenter;
+
+impl puri_core::subject::Segmenter for FakeSegmenter {
+    fn segment(&self, image: &image::RgbImage) -> Result<image::GrayImage, AppError> {
+        let w = image.width();
+        Ok(image::GrayImage::from_fn(w, image.height(), |x, _| image::Luma([if x >= w / 2 { 255 } else { 0 }])))
+    }
+}
+
+pub const FAKE_SUBJECT_MODEL: &[u8] = b"fake subject weights";
+
+/// ตัวแยกตัวคนจำลอง: "ดาวน์โหลด" ไฟล์เดียวจากโฟลเดอร์ชั่วคราวผ่าน file:// ด้วยงานติดตั้งตัวจริง
+fn fake_subject(base: &Path) -> puri_core::subject::SubjectProvider {
+    puri_core::subject::SubjectProvider {
+        model: puri_core::subject::SubjectModel {
+            id: "fake-subject",
+            display_name: "ตัวแยกทดสอบ",
+            file: "subject.onnx",
+            sha256: sha(FAKE_SUBJECT_MODEL),
+            download_url: file_url(&base.join("model-source/subject.onnx")),
+            download_bytes: 1_000_000,
+            download_source: "โฟลเดอร์ทดสอบ",
+            license_note: "ใช้ในเทสต์เท่านั้น",
+        },
+        factory: Arc::new(|_| Ok(Arc::new(FakeSegmenter) as Arc<dyn puri_core::subject::Segmenter>)),
+    }
 }
 
 /// ตัววิเคราะห์จำลองสำหรับเทสต์เท่านั้น (ไม่มีในแอป): "บุคคล" ของรูปคือค่าสีแดงของภาพ ÷ 20
@@ -116,7 +146,7 @@ pub fn publish_fake_model(base: &Path, corrupt: bool) {
     assert!(ok, "zip");
 }
 
-fn open(base: &Path, ai: bool) -> Arc<App> {
+fn open(base: &Path, ai: bool, subject: bool) -> Arc<App> {
     std::env::set_var("PURI_DISABLE_OPEN", "1");
     // เทสต์รันขนานใน process เดียว: ช่วงที่เทสต์อื่นกำลัง fork ตัว zip/curl/unzip ลูกที่ยังไม่ exec ถือสำเนา fd ของ
     // library.lock อยู่ชั่วครู่ การเปิดคลังซ้ำทันที (`reopen`) จึงเจอ LIBRARY_LOCKED ได้เป็นบางครั้ง
@@ -131,6 +161,7 @@ fn open(base: &Path, ai: bool) -> Arc<App> {
             start_worker: false,
             face_engine: ai.then(|| fake_provider(base)),
             face_engine_unavailable: "build ทดสอบนี้ไม่มีตัววิเคราะห์ใบหน้า",
+            subject_engine: subject.then(|| fake_subject(base)),
         });
         match opened {
             Ok(app) => return app,
@@ -145,16 +176,34 @@ fn open(base: &Path, ai: bool) -> Arc<App> {
 impl Lib {
     pub fn new() -> Self {
         let tmp = TempDir::new().unwrap();
-        let app = open(tmp.path(), false);
-        Lib { tmp, app, ai: false }
+        let app = open(tmp.path(), false, false);
+        Lib { tmp, app, ai: false, subject: false }
+    }
+
+    /// คลังที่ build มีตัวแยกตัวคน (ยังไม่ติดตั้งจนกว่าจะเรียก `install_subject_model`) — `published` = มีไฟล์ให้ดาวน์โหลด
+    pub fn with_subject(published: bool) -> Self {
+        let tmp = TempDir::new().unwrap();
+        if published {
+            let dir = tmp.path().join("model-source");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("subject.onnx"), FAKE_SUBJECT_MODEL).unwrap();
+        }
+        let app = open(tmp.path(), false, true);
+        Lib { tmp, app, ai: false, subject: true }
+    }
+
+    pub fn install_subject_model(&self) -> Value {
+        let job = self.call("install_subject_model", json!({}));
+        self.run_jobs();
+        self.call("get_job", json!({ "jobId": job["id"] }))
     }
 
     /// คลังที่ build มีตัววิเคราะห์ใบหน้า (ยังไม่ติดตั้งโมเดลจนกว่าจะเรียก `install_model`)
     pub fn with_ai() -> Self {
         let tmp = TempDir::new().unwrap();
         publish_fake_model(tmp.path(), false);
-        let app = open(tmp.path(), true);
-        Lib { tmp, app, ai: true }
+        let app = open(tmp.path(), true, false);
+        Lib { tmp, app, ai: true, subject: false }
     }
 
     pub fn install_model(&self) -> Value {
@@ -165,11 +214,11 @@ impl Lib {
 
     /// ปิดแล้วเปิดคลังเดิมใหม่ (จำลอง restart)
     pub fn reopen(self) -> Self {
-        let Lib { tmp, app, ai } = self;
+        let Lib { tmp, app, ai, subject } = self;
         app.shutdown();
         drop(app);
-        let app = open(tmp.path(), ai);
-        Lib { tmp, app, ai }
+        let app = open(tmp.path(), ai, subject);
+        Lib { tmp, app, ai, subject }
     }
 
     /// โฟลเดอร์สำหรับวางรูปทดสอบ (canonical path เหมือนที่แอปเห็น)

@@ -95,6 +95,11 @@ impl EditSettings {
         self.masks.iter().any(crate::masks::Mask::is_active)
     }
 
+    /// มี Mask ตัวคน (AI) — ต้องแนบภาพน้ำหนักของรูปก่อนสร้างภาพ ([`crate::subject::prepare`])
+    pub fn has_subject(&self) -> bool {
+        self.masks.iter().any(|m| matches!(m.area, crate::masks::Area::Subject { .. }))
+    }
+
     /// ไม่ได้ตัด หมุน หรือปรับเอียง (ขนาดและตำแหน่งของภาพเท่าเดิม)
     pub fn is_geometry_identity(&self) -> bool {
         self.rotate == 0 && self.straighten == 0.0 && self.crop.is_none_or(|c| c == FULL)
@@ -521,6 +526,9 @@ pub struct EditParts {
     /// รีทัชใบหน้า (DECISIONS ข้อ 31) — ใช้ใบหน้าของแต่ละรูปเอง
     #[serde(default)]
     pub retouch: bool,
+    /// เพิ่ม Mask ของ `from` ให้รูป (แทนอันที่รหัสเดียวกัน) โดยไม่ลบ Mask อื่นของรูป — ใช้ preset ที่มี Mask ตัวคน
+    #[serde(default)]
+    pub add_masks: bool,
 }
 
 impl EditParts {
@@ -528,6 +536,12 @@ impl EditParts {
     pub fn merge(self, mut base: EditSettings, from: &EditSettings, faces: &[[f64; 4]]) -> EditSettings {
         if self.masks {
             base.masks = from.masks.iter().map(|m| m.on_faces(faces)).collect();
+        } else if self.add_masks && !from.masks.is_empty() {
+            base.masks.retain(|m| from.masks.iter().all(|f| f.id != m.id));
+            base.masks.extend(from.masks.iter().map(|m| m.on_faces(faces)));
+            // เกินจำนวนที่รับได้: เก็บของ preset ไว้ ตัดของเดิมที่เก่าที่สุด
+            let extra = base.masks.len().saturating_sub(crate::masks::MAX_MASKS);
+            base.masks.drain(..extra);
         }
         if self.retouch {
             base.retouch = from.retouch.as_ref().map(|r| r.on_faces(faces));
@@ -576,7 +590,7 @@ pub fn apply_many(
     parts: EditParts,
 ) -> Result<ApplyResult> {
     settings.validate()?;
-    if !(parts.geometry || parts.light || parts.color || parts.masks || parts.retouch) {
+    if !(parts.geometry || parts.light || parts.color || parts.masks || parts.retouch || parts.add_masks) {
         return Err(AppError::invalid("เลือกอย่างน้อยหนึ่งส่วนที่จะวาง"));
     }
     let mut result = ApplyResult { updated: 0, unchanged: 0, not_ready: 0 };
@@ -601,7 +615,7 @@ pub fn apply_many(
             let stored = old.as_ref().map(|o| &o.settings);
             let origin = origin(&tx, &row.photo_id, stored)?;
             let base = origin.current(stored);
-            let faces: Vec<[f64; 4]> = if parts.masks || parts.retouch {
+            let faces: Vec<[f64; 4]> = if parts.masks || parts.retouch || parts.add_masks {
                 crate::faces::for_revision(&tx, &row.revision_id)?
                     .iter()
                     .map(|f| [f.bbox.x, f.bbox.y, f.bbox.w, f.bbox.h])

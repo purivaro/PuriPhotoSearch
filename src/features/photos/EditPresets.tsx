@@ -11,10 +11,11 @@ import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/Overla
 import { cn } from '@/lib/cn';
 import { errorMessage } from '@/lib/format';
 import { call } from '@/lib/ipc/client';
-import type { EditPreset } from '@/lib/ipc/types';
+import type { EditMask, EditPreset } from '@/lib/ipc/types';
 import { isNeutral, sameAdjust, type Adjust } from './adjust';
 import { describeEdit } from './editSummary';
 import { IDENTITY } from './editGeometry';
+import { isSubjectMask, maskIsActive } from './masks';
 
 const PRESETS_KEY = ['edit-presets'] as const;
 const collator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
@@ -28,22 +29,27 @@ export function usePresets() {
   });
 }
 
-/** สรุปค่าใน preset (แสง · สี) */
-export function presetSummary(adjust: Adjust): string {
+/** สรุปค่าใน preset (แสง · สี · Mask ตัวคน) */
+export function presetSummary(adjust: Adjust, masks: EditMask[] = []): string {
   const d = describeEdit({ ...IDENTITY, adjust });
-  return [d.light, d.color].filter(Boolean).join(' · ');
+  const subject = masks.length > 0 ? `Mask ตัวคน${masks.length > 1 ? ` ${masks.length} อัน` : ''}` : null;
+  return [d.light, d.color, subject].filter(Boolean).join(' · ');
 }
 
 interface EditPresetsProps {
   adjust: Adjust;
-  /** ใช้ preset: แทนค่าแสงและสีทั้งหมด */
-  onApply: (adjust: Adjust) => void;
+  /** Mask ของรูปนี้ — บันทึก preset เก็บ Mask ตัวคนที่มีผลไปด้วย */
+  masks: EditMask[];
+  /** ใช้ preset: แทนค่าแสงและสีทั้งหมด และเพิ่ม Mask ตัวคนของ preset */
+  onApply: (preset: { adjust: Adjust; masks: EditMask[] }) => void;
   /** ชี้ค้างที่ preset: ดูตัวอย่างบนภาพก่อนใช้ (null = เลิกดู) */
   onPreview: (adjust: Adjust | null) => void;
 }
 
 /** preset ของแสงและสี: บันทึกค่าที่ปรับไว้ ใช้ซ้ำ และนำเข้า .xmp จาก Lightroom (DECISIONS ข้อ 20) */
-export function EditPresets({ adjust, onApply, onPreview }: EditPresetsProps) {
+export function EditPresets({ adjust, masks, onApply, onPreview }: EditPresetsProps) {
+  // Mask ตัวคนไปกับ preset ได้ (ไม่ผูกกับรูป) · Mask ใบหน้าผูกกับใบหน้าของรูปนี้ จึงไม่เก็บ
+  const subjectMasks = masks.filter((m) => isSubjectMask(m) && maskIsActive(m));
   const qc = useQueryClient();
   const choose = useFolderChooser();
   const presets = usePresets();
@@ -54,7 +60,7 @@ export function EditPresets({ adjust, onApply, onPreview }: EditPresetsProps) {
   const setList = (list: EditPreset[]) => qc.setQueryData(PRESETS_KEY, list);
 
   const save = useMutation({
-    mutationFn: (name: string) => call('save_edit_preset', { name, adjust }),
+    mutationFn: (name: string) => call('save_edit_preset', { name, adjust, masks: subjectMasks }),
     onSuccess: (preset) => {
       void qc.invalidateQueries({ queryKey: PRESETS_KEY });
       setNaming(null);
@@ -102,7 +108,7 @@ export function EditPresets({ adjust, onApply, onPreview }: EditPresetsProps) {
   };
 
   const list = presets.data ?? [];
-  const canSave = !isNeutral(adjust);
+  const canSave = !isNeutral(adjust) || subjectMasks.length > 0;
 
   return (
     <div className="space-y-4" data-testid="editor-presets">
@@ -141,7 +147,7 @@ export function EditPresets({ adjust, onApply, onPreview }: EditPresetsProps) {
                   onBlur={() => onPreview(null)}
                   onClick={() => {
                     onPreview(null);
-                    onApply(preset.adjust);
+                    onApply(preset);
                   }}
                   className="min-w-0 flex-1 rounded-l-xl px-3 py-2 text-left"
                   data-testid="preset-item"
@@ -184,7 +190,7 @@ export function EditPresets({ adjust, onApply, onPreview }: EditPresetsProps) {
       {list.length > 0 && (
         <p className="flex items-start gap-1.5 text-[13px] text-muted">
           <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
-          ชี้ที่ preset เพื่อดูตัวอย่างบนภาพ คลิกเพื่อใช้ · ใช้ preset จะแทนค่าแสงและสีทั้งหมดของรูปนี้ ไม่แตะการตัดและหมุน
+          ชี้ที่ preset เพื่อดูตัวอย่างบนภาพ คลิกเพื่อใช้ · ใช้ preset จะแทนค่าแสงและสีทั้งหมดของรูปนี้ ไม่แตะการตัดและหมุน (Mask ตัวคนของ preset ถูกเพิ่มเข้าไป)
         </p>
       )}
 
@@ -192,7 +198,7 @@ export function EditPresets({ adjust, onApply, onPreview }: EditPresetsProps) {
         key={naming ? (naming.mode === 'rename' ? naming.preset.id : 'save') : 'closed'}
         open={naming !== null}
         title={naming?.mode === 'rename' ? 'เปลี่ยนชื่อ preset' : 'บันทึกเป็น preset'}
-        description={naming?.mode === 'save' ? presetSummary(adjust) || undefined : undefined}
+        description={naming?.mode === 'save' ? presetSummary(adjust, subjectMasks) || undefined : undefined}
         initial={naming?.mode === 'rename' ? naming.preset.name : ''}
         confirmLabel={naming?.mode === 'rename' ? 'เปลี่ยนชื่อ' : 'บันทึก preset'}
         busy={save.isPending || rename.isPending}
@@ -222,7 +228,7 @@ export function EditPresets({ adjust, onApply, onPreview }: EditPresetsProps) {
             <Button
               variant="primary"
               onClick={() => {
-                if (imported) onApply(imported.adjust);
+                if (imported) onApply(imported);
                 setImported(null);
               }}
               data-testid="preset-imported-apply"
@@ -236,7 +242,7 @@ export function EditPresets({ adjust, onApply, onPreview }: EditPresetsProps) {
           <div className="space-y-3" data-testid="preset-imported">
             <div>
               <p className="text-sm font-semibold text-ink">นำเข้าได้</p>
-              <p className="mt-0.5 text-[13px] text-muted">{presetSummary(imported.adjust)}</p>
+              <p className="mt-0.5 text-[13px] text-muted">{presetSummary(imported.adjust, imported.masks)}</p>
             </div>
             {imported.unsupported.length > 0 && (
               <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />}>

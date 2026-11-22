@@ -1,7 +1,7 @@
-import { useEffect, useRef } from 'react';
-import { Eye, Palette, ScanFace, Sparkle, Sun, Trash2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Download, Eye, Palette, PersonStanding, RotateCcw, ScanFace, Sparkle, Sun, Trash2, TriangleAlert } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
-import { InlineNotice } from '@/components/ui/Feedback';
+import { InlineNotice, Spinner } from '@/components/ui/Feedback';
 import { Switch } from '@/components/ui/Form';
 import { cn } from '@/lib/cn';
 import { formatCount, newRequestId } from '@/lib/format';
@@ -11,6 +11,7 @@ import { SliderRow } from './AdjustControls';
 import { maskName } from './editSummary';
 import { MAX_MASKS } from './masks';
 import { COLOR, LIGHT, PRESENCE, SliderGroup } from './SliderGroup';
+import type { SubjectMapState } from './useSubjectMap';
 
 // แถบของการปรับเฉพาะส่วน: เฉพาะค่าที่มีความหมายกับบริเวณเล็ก ๆ (จุดขาว/ดำ ความสด เส้นโค้ง ฯลฯ ปรับที่ทั้งภาพ)
 const MASK_LIGHT = LIGHT.filter((s) => ['exposure', 'contrast', 'highlights', 'shadows'].includes(s.key));
@@ -31,13 +32,20 @@ interface MaskPanelProps {
   onChange: (masks: EditMask[]) => void;
   /** แสดงบริเวณของ Mask นี้บนภาพ (null = ไม่แสดง) */
   onShowArea: (id: string | null) => void;
+  /** ตัวแยกตัวคนและภาพน้ำหนักของรูปนี้ (Mask ตัวคน — DECISIONS ข้อ 40) */
+  subject: SubjectMapState;
 }
 
 /** ปรับเฉพาะส่วน (DECISIONS ข้อ 28): เพิ่ม/เลือก/ลบบริเวณ และค่าแสงสีของบริเวณที่เลือก */
-export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowArea }: MaskPanelProps) {
+export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowArea, subject }: MaskPanelProps) {
   const current = masks.find((m) => m.id === selected) ?? null;
   const flash = useRef(0);
   useEffect(() => () => window.clearTimeout(flash.current), []);
+  const subjectState = subject.status?.state;
+  // กด "ตัวคน (AI)" ตอนที่ยังไม่มีตัวแยก: ถามดาวน์โหลด แล้วเพิ่ม Mask ให้เองเมื่อพร้อม
+  const [wantSubject, setWantSubject] = useState(false);
+  // Mask ตัวคนที่เพิ่งเพิ่ม: แสดงบริเวณเป็นสีแดงสักครู่หลังหาตัวคนเสร็จ
+  const [flashSubject, setFlashSubject] = useState<string | null>(null);
 
   const update = (id: string, patch: Partial<EditMask>) => onChange(masks.map((m) => (m.id === id ? { ...m, ...patch } : m)));
   const setAdjust = (id: string, patch: Partial<Adjust>) => {
@@ -45,21 +53,48 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
     if (m) update(id, { adjust: { ...m.adjust, ...patch } });
   };
 
-  const addFaces = () => {
-    const mask: EditMask = {
-      id: newRequestId(),
-      area: { kind: 'faces', boxes: faces.map((f) => [f.sourceBbox.x, f.sourceBbox.y, f.sourceBbox.w, f.sourceBbox.h]), skin: true },
-      adjust: NEUTRAL,
-      amount: 100,
-      invert: false,
-    };
-    onChange([...masks, mask]);
-    onSelect(mask.id);
-    // ให้เห็นทันทีว่าเลือกตรงไหน
-    onShowArea(mask.id);
+  const showBriefly = (id: string) => {
+    onShowArea(id);
     window.clearTimeout(flash.current);
     flash.current = window.setTimeout(() => onShowArea(null), 1400);
   };
+
+  const add = (area: EditMask['area']) => {
+    const mask: EditMask = { id: newRequestId(), area, adjust: NEUTRAL, amount: 100, invert: false };
+    onChange([...masks, mask]);
+    onSelect(mask.id);
+    return mask.id;
+  };
+
+  const addFaces = () => {
+    // ให้เห็นทันทีว่าเลือกตรงไหน
+    showBriefly(add({ kind: 'faces', boxes: faces.map((f) => [f.sourceBbox.x, f.sourceBbox.y, f.sourceBbox.w, f.sourceBbox.h]), skin: true }));
+  };
+
+  const addSubject = () => {
+    const id = add({ kind: 'subject' });
+    // บริเวณขึ้นเมื่อหาตัวคนเสร็จ (ครั้งแรกของรูปราว 7 วินาที)
+    onShowArea(id);
+    setFlashSubject(id);
+  };
+
+  useEffect(() => {
+    if (flashSubject && subject.phase !== 'preparing' && subject.phase !== 'idle') {
+      setFlashSubject(null);
+      showBriefly(flashSubject);
+    }
+    // showBriefly ใช้แค่ ref กับ onShowArea
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flashSubject, subject.phase]);
+
+  useEffect(() => {
+    if (wantSubject && subjectState === 'ready') {
+      setWantSubject(false);
+      if (masks.length < MAX_MASKS) addSubject();
+    }
+    // เพิ่มครั้งเดียวเมื่อตัวแยกพร้อม
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantSubject, subjectState]);
 
   return (
     <div className="space-y-4" data-testid="mask-panel">
@@ -82,6 +117,24 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
         </Button>
         {faces.length === 0 && (
           <p className="text-[12.5px] text-muted">ยังไม่มีใบหน้าในรูปนี้ — ให้แอปวิเคราะห์ใบหน้า หรือเพิ่มกรอบใบหน้าเองในตัวดูภาพก่อน</p>
+        )}
+        <Button
+          size="sm"
+          icon={<PersonStanding className="size-4" aria-hidden />}
+          onClick={() => (subjectState === 'ready' ? addSubject() : setWantSubject(true))}
+          disabled={masks.length >= MAX_MASKS || subjectState === 'unsupported' || !subject.status}
+          className="w-full"
+          data-testid="mask-add-subject"
+        >
+          ตัวคน (AI)
+        </Button>
+        {subjectState === 'unsupported' ? (
+          <p className="text-[12.5px] text-muted">{subject.status?.reason}</p>
+        ) : (
+          !wantSubject && <p className="text-[12.5px] text-muted">แอปเลือกตัวคนในรูปให้เอง แบบ Select Subject ของ Lightroom — ฉากหลังไม่โดน</p>
+        )}
+        {wantSubject && subjectState !== 'ready' && subjectState !== 'unsupported' && (
+          <SubjectInstall subject={subject} onCancel={() => setWantSubject(false)} />
         )}
       </section>
 
@@ -134,13 +187,15 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
               </button>
             ))}
           </div>
-          <Switch
-            checked={current.area.skin}
-            onCheckedChange={(skin) => update(current.id, { area: { ...current.area, skin } })}
-            label="เฉพาะผิว"
-            description="จีวร ผม เสื้อผ้า และฉากหลังในบริเวณใบหน้าไม่โดน"
-            testId="mask-skin"
-          />
+          {current.area.kind === 'faces' && (
+            <Switch
+              checked={current.area.skin}
+              onCheckedChange={(skin) => update(current.id, { area: { kind: 'faces', boxes: current.area.kind === 'faces' ? current.area.boxes : [], skin } })}
+              label="เฉพาะผิว"
+              description="จีวร ผม เสื้อผ้า และฉากหลังในบริเวณใบหน้าไม่โดน"
+              testId="mask-skin"
+            />
+          )}
           <Switch
             checked={current.invert}
             onCheckedChange={(invert) => update(current.id, { invert })}
@@ -174,11 +229,98 @@ export function MaskPanel({ masks, faces, selected, onSelect, onChange, onShowAr
           <SliderGroup title="แสง" icon={<Sun className="size-4 text-muted" aria-hidden />} specs={MASK_LIGHT} adjust={current.adjust} onChange={(p) => setAdjust(current.id, p)} idPrefix="mask" />
           <SliderGroup title="รายละเอียด" icon={<Sparkle className="size-4 text-muted" aria-hidden />} specs={PRESENCE} adjust={current.adjust} onChange={(p) => setAdjust(current.id, p)} idPrefix="mask" />
           <SliderGroup title="สี" icon={<Palette className="size-4 text-muted" aria-hidden />} specs={MASK_COLOR} adjust={current.adjust} onChange={(p) => setAdjust(current.id, p)} idPrefix="mask" />
-          {current.area.skin && current.area.boxes.length > 0 && (
+          {current.area.kind === 'faces' && current.area.skin && current.area.boxes.length > 0 && (
             <InlineNotice tone="info">ผิวที่อยู่นอกบริเวณใบหน้า (แขน มือ) ยังไม่รวม — รุ่นนี้ปรับเฉพาะใบหน้าที่แอปพบ</InlineNotice>
           )}
         </div>
       )}
     </div>
   );
+}
+
+/** ถามดาวน์โหลดตัวแยกตัวคน (ครั้งเดียว) — ระหว่างดาวน์โหลดแต่งส่วนอื่นได้ เสร็จแล้วเพิ่ม Mask ให้เอง */
+function SubjectInstall({ subject, onCancel }: { subject: SubjectMapState; onCancel: () => void }) {
+  const status = subject.status;
+  if (!status) return null;
+  if (subject.installing) {
+    return (
+      <div className="flex items-start gap-2 rounded-xl border border-line bg-sunken/60 p-3 text-[13px] text-ink" data-testid="subject-installing">
+        <Spinner className="mt-0.5 size-4 shrink-0" />
+        <span>กำลังดาวน์โหลดตัวแยกตัวคน ({formatCount(status.downloadSizeMb)} MB) — แต่งส่วนอื่นได้ระหว่างรอ เสร็จแล้วแอปเพิ่ม Mask ตัวคนให้เอง</span>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2 rounded-xl border border-line bg-sunken/60 p-3" data-testid="subject-install">
+      <p className="text-sm font-semibold text-ink">ดาวน์โหลดตัวแยกตัวคน</p>
+      <p className="text-[13px] text-muted">{status.reason}</p>
+      <p className="text-[12px] text-muted">
+        {status.modelName} · {status.licenseNote} · ที่มา {status.downloadSource}
+      </p>
+      <div className="flex gap-1.5">
+        <Button size="sm" variant="primary" icon={<Download className="size-4" aria-hidden />} onClick={subject.install} data-testid="subject-install-start">
+          ดาวน์โหลด ({formatCount(status.downloadSizeMb)} MB)
+        </Button>
+        <Button size="sm" onClick={onCancel}>
+          ไว้ทีหลัง
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** สถานะของ Mask ตัวคนที่เลือก: กำลังหาตัวคน / ไม่พบ / ต้องดาวน์โหลด / ผิดพลาด */
+export function SubjectProgress({ subject }: { subject: SubjectMapState }) {
+  switch (subject.phase) {
+    case 'preparing':
+      return (
+        <InlineNotice tone="info" icon={<Spinner className="size-4" />}>
+          <span data-testid="subject-preparing">กำลังหาตัวคนในรูปนี้… ครั้งแรกของแต่ละรูปราว 10 วินาที</span>
+        </InlineNotice>
+      );
+    case 'ready':
+      return subject.found === false ? (
+        <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />}>
+          <span data-testid="subject-none">ไม่พบตัวคนในรูปนี้ Mask นี้จึงยังไม่มีผล</span>
+        </InlineNotice>
+      ) : null;
+    case 'failed':
+      return (
+        <InlineNotice
+          tone="danger"
+          icon={<TriangleAlert aria-hidden />}
+          action={
+            <Button size="sm" icon={<RotateCcw className="size-4" aria-hidden />} onClick={subject.retry}>
+              ลองใหม่
+            </Button>
+          }
+        >
+          <span data-testid="subject-failed">{subject.error}</span>
+        </InlineNotice>
+      );
+    case 'needs_model':
+      return subject.status?.state === 'unsupported' ? (
+        <InlineNotice tone="warn" icon={<TriangleAlert aria-hidden />}>
+          {subject.status.reason}
+        </InlineNotice>
+      ) : subject.installing ? (
+        <InlineNotice tone="info" icon={<Spinner className="size-4" />}>
+          กำลังดาวน์โหลดตัวแยกตัวคน — เห็นผลเมื่อดาวน์โหลดเสร็จ
+        </InlineNotice>
+      ) : (
+        <InlineNotice
+          tone="warn"
+          icon={<TriangleAlert aria-hidden />}
+          action={
+            <Button size="sm" icon={<Download className="size-4" aria-hidden />} onClick={subject.install} data-testid="subject-needs-install">
+              ดาวน์โหลด ({formatCount(subject.status?.downloadSizeMb ?? 0)} MB)
+            </Button>
+          }
+        >
+          <span data-testid="subject-needs-model">รูปนี้มี Mask ตัวคน ต้องดาวน์โหลดตัวแยกตัวคนก่อนจึงจะเห็นผล (ครั้งเดียว)</span>
+        </InlineNotice>
+      );
+    default:
+      return null;
+  }
 }

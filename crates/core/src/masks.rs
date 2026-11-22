@@ -6,6 +6,8 @@
 //!
 //! - **ใบหน้า:** วงรีนุ่ม ๆ รอบกรอบใบหน้าที่แอปตรวจไว้ (ใหญ่กว่ากรอบให้คลุมหน้าผากและคาง) · "เฉพาะผิว" = คูณความเป็นสีผิวจากช่วง Cb/Cr
 //!   ของ YCbCr (สีจีวรส้มสดอยู่นอกช่วง) จึงทำหน้าขาวใส/ผิวเนียนได้โดยจีวรและฉากหลังไม่โดน
+//! - **ตัวคน (AI):** ภาพน้ำหนักจากตัวแยกตัวคน ([`crate::subject`] — DECISIONS ข้อ 40) แบบ "Select Subject" ของ Lightroom
+//!   ภาพน้ำหนักเป็นของรูป แนบตอนสร้างภาพ ([`crate::subject::attach`]) — ไม่ได้แนบ = บริเวณว่าง (ไม่มีผล)
 
 use crate::adjust::{Adjust, Profile};
 use crate::edit::Geometry;
@@ -55,12 +57,28 @@ fn full() -> f64 {
 }
 
 /// บริเวณ — พิกัดเป็นสัดส่วนบนภาพเดิม (หลังหมุนตาม EXIF ก่อนตัด/หมุนของการแต่ง)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Area {
     /// ใบหน้า: กรอบ [x, y, w, h] ของแต่ละหน้า · `skin` = เฉพาะสีผิวในบริเวณนั้น
     #[serde(rename_all = "camelCase")]
     Faces { boxes: Vec<[f64; 4]>, skin: bool },
+    /// ตัวคน/สิ่งที่เป็นจุดสนใจของรูป (AI) — ค่าที่แต่งเก็บแค่ชนิด ภาพน้ำหนักแนบตอนสร้างภาพ
+    Subject {
+        #[serde(skip)]
+        map: Option<crate::subject::SubjectMap>,
+    },
+}
+
+/// ภาพน้ำหนักของตัวคนเป็นของรูป ไม่ใช่ของค่าที่แต่ง: แนบแล้วหรือยังไม่แนบก็นับว่าเป็นบริเวณเดียวกัน
+impl PartialEq for Area {
+    fn eq(&self, other: &Area) -> bool {
+        match (self, other) {
+            (Area::Faces { boxes: a, skin: s }, Area::Faces { boxes: b, skin: t }) => a == b && s == t,
+            (Area::Subject { .. }, Area::Subject { .. }) => true,
+            _ => false,
+        }
+    }
 }
 
 impl Mask {
@@ -73,6 +91,8 @@ impl Mask {
     pub fn on_faces(&self, faces: &[[f64; 4]]) -> Mask {
         let area = match &self.area {
             Area::Faces { skin, .. } => Area::Faces { boxes: faces.to_vec(), skin: *skin },
+            // ตัวคนของรูปนั้นแนบตอนสร้างภาพของรูปนั้นเอง
+            Area::Subject { .. } => Area::Subject { map: None },
         };
         Mask { area, ..self.clone() }
     }
@@ -94,6 +114,7 @@ impl Mask {
                             && (-1.0..=2.0).contains(&b[1])
                     })
             }
+            Area::Subject { .. } => true,
         };
         if ok_id && ok_amount && ok_area {
             Ok(())
@@ -182,6 +203,7 @@ pub fn area_weight(area: &Area, tones: &[Option<[f64; 2]>], u: f64, v: f64, rgb:
             }
             w
         }
+        Area::Subject { map } => map.as_ref().map_or(0.0, |m| m.weight(u, v)),
     }
 }
 
@@ -194,7 +216,7 @@ pub(crate) fn tone_match(tone: Option<[f64; 2]>, rgb: [u8; 3]) -> f64 {
 
 /// สีผิวของแต่ละหน้า: Cb/Cr เฉลี่ยของพิกเซลสีผิวกลางใบหน้า บนภาพที่กำลังปรับ — หาไม่พอ = None
 pub fn face_tones(px: &[u8], w: usize, h: usize, stride: usize, g: &Geometry, area: &Area) -> Vec<Option<[f64; 2]>> {
-    let Area::Faces { boxes, skin } = area;
+    let Area::Faces { boxes, skin } = area else { return vec![] };
     if !skin {
         return vec![None; boxes.len()];
     }
@@ -245,6 +267,13 @@ pub(crate) fn bounds(area: &Area, g: &Geometry, w: usize, h: usize, long: f64) -
                     let (a, b) = g.forward(u, v);
                     (x0, y0, x1, y1) = (x0.min(a), y0.min(b), x1.max(a), y1.max(b));
                 }
+            }
+        }
+        Area::Subject { map } => {
+            let [bx0, by0, bx1, by1] = map.as_ref()?.bounds()?;
+            for (u, v) in [(bx0, by0), (bx1, by0), (bx0, by1), (bx1, by1)] {
+                let (a, b) = g.forward(u, v);
+                (x0, y0, x1, y1) = (x0.min(a), y0.min(b), x1.max(a), y1.max(b));
             }
         }
     }

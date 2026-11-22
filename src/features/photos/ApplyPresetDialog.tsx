@@ -33,7 +33,13 @@ export function ApplyPresetDialog({ open, onOpenChange, selection, count }: Appl
   }, [open]);
 
   const apply = useMutation({
-    mutationFn: () => call('apply_photo_edits', { selection, settings: { ...IDENTITY, adjust: preset!.adjust }, parts: { geometry: false, light: true, color: true, masks: false, retouch: false } }),
+    mutationFn: () =>
+      call('apply_photo_edits', {
+        selection,
+        settings: { ...IDENTITY, adjust: preset!.adjust, masks: preset!.masks },
+        // Mask ตัวคนของ preset เพิ่มเข้าไป Mask อื่นของแต่ละรูปอยู่ครบ (DECISIONS ข้อ 40)
+        parts: { geometry: false, light: true, color: true, masks: false, retouch: false, addMasks: preset!.masks.length > 0 },
+      }),
     onSuccess: (result) => {
       void qc.invalidateQueries({ queryKey: ['photos'] });
       void qc.invalidateQueries({ queryKey: ['photo'] });
@@ -111,7 +117,7 @@ export function ApplyPresetDialog({ open, onOpenChange, selection, count }: Appl
                     <span className="truncate text-sm font-semibold text-ink">{p.name}</span>
                     <span className="shrink-0 rounded bg-sunken px-1.5 py-px text-[12px] font-semibold text-muted">{p.source === 'lightroom' ? 'Lightroom' : 'ของฉัน'}</span>
                   </span>
-                  <span className="mt-0.5 block text-[12.5px] text-muted">{presetSummary(p.adjust)}</span>
+                  <span className="mt-0.5 block text-[12.5px] text-muted">{presetSummary(p.adjust, p.masks)}</span>
                   {p.unsupported.length > 0 && (
                     <span className="mt-0.5 flex items-start gap-1 text-[12.5px] text-warn">
                       <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
@@ -124,7 +130,7 @@ export function ApplyPresetDialog({ open, onOpenChange, selection, count }: Appl
           </div>
           <p className="flex items-start gap-1.5 text-[13px] text-muted">
             <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
-            แทนค่าแสงและสีของทุกรูปที่เลือก การตัดและหมุนของแต่ละรูปคงเดิม · เก็บในแอป ไฟล์ต้นฉบับไม่ถูกแตะ ย้อนได้ด้วย “กลับเป็นภาพต้นฉบับ”
+            แทนค่าแสงและสีของทุกรูปที่เลือก การตัดและหมุนของแต่ละรูปคงเดิม (Mask ตัวคนของ preset ถูกเพิ่มเข้าไป) · เก็บในแอป ไฟล์ต้นฉบับไม่ถูกแตะ ย้อนได้ด้วย “กลับเป็นภาพต้นฉบับ”
           </p>
         </div>
       )}
